@@ -6,7 +6,8 @@ export const VERSION = "1.0.0";
 // chrome.storage.local keys
 export const K = Object.freeze({
   settings: "sx.settings",
-  secrets: "sx.secrets", // { openaiKey, sorsaKey } - never exported, never logged
+  secrets: "sx.secrets", // legacy location only (migrated): keys now live in the extension IndexedDB "kv" store
+  secretsRev: "sx.secretsRev", // { rev, hasOpenai, hasSorsa } - no key material; lets open pages refresh
   state: "sx.state",
   targets: "sx.targets", // { [handle]: Target }
   candidates: "sx.candidates", // { [handle]: Candidate }

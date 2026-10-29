@@ -112,7 +112,7 @@ export async function computeCounts(settings, ts = now()) {
   const recent = await H.since(ts - 9 * DAY);
   const open = await H.openQueue();
   const c = { postedToday: 0, postedCalendarDay: 0, postedGroup: { A: 0, B: 0 }, generatedToday: 0, likedToday: 0, skippedToday: 0, failedToday: 0, costToday: 0,
-    openQueue: 0, openGroup: { A: 0, B: 0 }, pendingReview: 0, queued: 0, targets: {} };
+    openQueue: 0, openGroup: { A: 0, B: 0 }, pendingReview: 0, queued: 0, targets: Object.create(null) };
   const tgt = (h) => (c.targets[h] ||= { day: 0, week: 0, open: 0 });
   for (const r of recent) {
     if (dayKey(r.createdAt, tz) === today) {
@@ -348,7 +348,7 @@ async function tickBody(settings, secrets, reason = "timer") {
     .sort((a, b) => (a.scheduledFor || a.createdAt) - (b.scheduledFor || b.createdAt));
   let waitFor = null;
   for (const item of due) {
-    const target = targetsNow[item.target];
+    const target = Object.hasOwn(targetsNow, item.target) ? targetsNow[item.target] : null;
     if (!target || !isActive(target, settings)) {
       await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: "Target disabled or removed" } : null));
       continue;
@@ -477,7 +477,7 @@ async function handleFresh(posts, ctx) {
   const ts = now();
   const targets = await getTargets();
   const state = await getState();
-  const ranked = posts.map((p) => ({ p, t: targets[p.author] })).filter((x) => x.t).sort((a, b) => scorePost(b.p, b.t, ts) - scorePost(a.p, a.t, ts));
+  const ranked = posts.map((p) => ({ p, t: Object.hasOwn(targets, p.author) ? targets[p.author] : null })).filter((x) => x.t).sort((a, b) => scorePost(b.p, b.t, ts) - scorePost(a.p, a.t, ts));
   let generatedThisTick = 0;
   for (const { p, t } of ranked) {
     if (generatedThisTick >= 2) break;

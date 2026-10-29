@@ -54,7 +54,8 @@ export function uid(prefix = "") {
 
 // Accepts "@name", "name", "https://x.com/name", "x.com/name/status/1", "twitter.com/name".
 // Returns the lowercase handle or "" when invalid.
-const RESERVED = new Set(["home", "explore", "notifications", "messages", "i", "search", "settings", "compose", "login", "logout", "signup", "tos", "privacy", "hashtag", "intent", "share"]);
+// Also never accept names that collide with Object prototype keys (handle-keyed maps are plain objects).
+const RESERVED = new Set(["home", "explore", "notifications", "messages", "i", "search", "settings", "compose", "login", "logout", "signup", "tos", "privacy", "hashtag", "intent", "share", "__proto__", "constructor", "prototype", "hasownproperty", "tostring", "valueof"]);
 export function normalizeHandle(raw) {
   if (raw == null) return "";
   let s = String(raw).trim();

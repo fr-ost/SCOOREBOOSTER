@@ -137,8 +137,8 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now()) {
   const visibleEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && !pageInfo.page.hidden && !realEmpty);
 
   // Update target caches (recent posts feed the prompt; profiles from rotation feed the ranking).
-  const byAuthor = {};
-  for (const p of posts) if (!p.isRepost && targetsMap[p.author]) (byAuthor[p.author] ||= []).push(p);
+  const byAuthor = Object.create(null);
+  for (const p of posts) if (!p.isRepost && Object.hasOwn(targetsMap, p.author)) (byAuthor[p.author] ||= []).push(p);
   if (Object.keys(byAuthor).length || Object.keys(profileUpdates).length) {
     await updateTargets((all) => {
       for (const [h, ps] of Object.entries(byAuthor)) if (all[h]) mergePosts(all[h], ps);
@@ -153,7 +153,7 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now()) {
   const minAge = settings.watch.minPostAgeMin * MIN, maxAge = settings.watch.maxPostAgeMin * MIN;
   for (const p of posts) {
     if (!p.id || seen[p.id]) continue;
-    const t = targetsMap[p.author];
+    const t = Object.hasOwn(targetsMap, p.author) ? targetsMap[p.author] : null;
     if (p.isRepost) continue; // the original may be another target's post: don't mark it seen
     if (!t || !isActive(t, settings, ts)) { seenNow.push(p.id); continue; }
     const age = p.createdAt ? ts - p.createdAt : null;

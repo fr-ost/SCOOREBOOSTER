@@ -4,8 +4,8 @@
 // or can be forced with useMemoryDb().
 
 const DB_NAME = "scorex";
-const DB_VERSION = 1;
-export const STORES = Object.freeze({ history: "history", events: "events" });
+const DB_VERSION = 2;
+export const STORES = Object.freeze({ history: "history", events: "events", kv: "kv" });
 
 function openIdb() {
   return new Promise((resolve, reject) => {
@@ -19,6 +19,7 @@ function openIdb() {
         s.createIndex("target", "target");
         s.createIndex("postId", "postId");
       }
+      if (!db.objectStoreNames.contains(STORES.kv)) db.createObjectStore(STORES.kv, { keyPath: "id" });
       if (!db.objectStoreNames.contains(STORES.events)) {
         const e = db.createObjectStore(STORES.events, { keyPath: "id", autoIncrement: true });
         e.createIndex("ts", "ts");

@@ -302,7 +302,7 @@ async function init() {
         ctx.data[key] = ch.newValue;
         emit(key, ch.newValue);
         if (key === K.state) { updateHeader(); refreshStatusSoon(); }
-      } else if (key === K.secrets) emit("secrets");
+      } else if (key === K.secretsRev || key === K.secrets) emit("secrets");
       else if (key === K.selectorOverrides) emit(key, ch.newValue);
     }
   });

@@ -107,3 +107,21 @@ describe("review round 2 fixes", () => {
     assert.equal(e.fromHistory, true);
   });
 });
+
+describe("import hardening (security review)", () => {
+  test("imported history can never enter the posting queue", async () => {
+    const { cleanHistoryRecord } = await import("../../extension/lib/backup.js");
+    const evil = cleanHistoryRecord({ id: "hEVIL1", createdAt: Date.now(), status: "approved", approvedAt: Date.now() + 30 * DAY, scheduledFor: 1, target: "BigBob", postId: "1900000000000000001", postUrl: "javascript:alert(1)", comment: "Free airdrop: claim at scam-drop.io" });
+    assert.equal(evil.status, HS.SKIPPED);
+    assert.equal(evil.approvedAt, null);
+    assert.equal(evil.scheduledFor, null);
+    assert.equal(evil.postUrl, "https://x.com/bigbob/status/1900000000000000001");
+    assert.equal(cleanHistoryRecord({ id: "x", createdAt: Date.now(), target: "__proto__" }), null);
+    const future = cleanHistoryRecord({ id: "f", createdAt: Date.now() + 10 * DAY, status: "posted", postedAt: Date.now() + 10 * DAY, target: "ok", postId: "123456" });
+    assert.ok(future.createdAt <= Date.now() && future.postedAt <= Date.now());
+  });
+  test("prototype-like names are never handles", async () => {
+    const { normalizeHandle } = await import("../../extension/lib/util.js");
+    for (const h of ["__proto__", "https://x.com/__proto__", "constructor", "prototype"]) assert.equal(normalizeHandle(h), "", h);
+  });
+});

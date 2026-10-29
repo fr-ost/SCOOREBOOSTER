@@ -8,19 +8,10 @@
   globalThis.__SX_CS = true;
   const D = globalThis.SXDom, S = globalThis.SXScrape, A = globalThis.SXActions, X = globalThis.SXDetect;
 
-  // Keep Chrome from freezing this tab while the engine uses it (pattern from GrowX).
-  let releaseLock = null;
-  function guard(on) {
-    if (on && !releaseLock && navigator.locks && navigator.locks.request) {
-      navigator.locks.request("scorex-worker", { mode: "shared" }, () => new Promise((r) => { releaseLock = r; })).catch(() => {});
-    } else if (!on && releaseLock) {
-      try { releaseLock(); } catch (_) {}
-      releaseLock = null;
-    }
-  }
-
   const handlers = {
-    async ping(m) { if (m.guard != null) guard(!!m.guard); return { ok: true, ready: document.readyState, me: X.myHandle() }; },
+    // No page-visible state (Web Locks, DOM markers, globals readable by x.com) is ever created here:
+    // the tab is kept alive by chrome.tabs autoDiscardable:false from the worker instead.
+    async ping() { return { ok: true, ready: document.readyState, me: X.myHandle() }; },
     async pageState() { return { ok: true }; },
     async waitFor(m) {
       const keys = [].concat(m.keys || []);

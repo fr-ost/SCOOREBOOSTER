@@ -10,6 +10,7 @@
 import { K, STATUS, MODE, HARD, SCHEMA_VERSION } from "./constants.js";
 import { deepMerge, deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact } from "./util.js";
 import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK } from "./models.js";
+import { db, STORES } from "./db.js";
 
 const area = () => globalThis.chrome.storage.local;
 
@@ -336,9 +337,32 @@ export function sanitizeSettings(raw) {
 export async function getSettings() { return sanitizeSettings(await load(K.settings, {})); }
 export async function saveSettings(s) { await save({ [K.settings]: s }); return sanitizeSettings(s); }
 
-export async function getSecrets() { return { ...DEFAULT_SECRETS, ...(await load(K.secrets, {})) }; }
-export async function setSecrets(patch) {
-  return update(K.secrets, {}, (cur) => ({ ...DEFAULT_SECRETS, ...cur, ...patch }));
+// API keys live in the extension's own IndexedDB, NOT in chrome.storage: content scripts running on x.com
+// can read chrome.storage.local (and receive its change events), but cannot open the extension's IndexedDB.
+const SECRETS_ID = "secrets";
+async function migrateSecrets() {
+  const legacy = await load(K.secrets, null);
+  if (!legacy) return null;
+  const cur = (await db().get(STORES.kv, SECRETS_ID)) || {};
+  const merged = { ...DEFAULT_SECRETS, ...legacy, ...stripId(cur) };
+  await db().put(STORES.kv, { id: SECRETS_ID, ...merged });
+  await remove([K.secrets]);
+  return merged;
+}
+const stripId = (o) => { const { id, ...rest } = o || {}; return rest; };
+export async function getSecrets() {
+  const migrated = await migrateSecrets();
+  if (migrated) return migrated;
+  return { ...DEFAULT_SECRETS, ...stripId(await db().get(STORES.kv, SECRETS_ID)) };
+}
+export function setSecrets(patch) {
+  return withLock("secrets", async () => {
+    const cur = await getSecrets();
+    const next = { ...DEFAULT_SECRETS, ...cur, ...patch };
+    await db().put(STORES.kv, { id: SECRETS_ID, ...next });
+    await save({ [K.secretsRev]: { rev: now(), hasOpenai: !!next.openaiKey, hasSorsa: !!next.sorsaKey } });
+    return next;
+  });
 }
 
 export async function getState() { return { ...DEFAULT_STATE, ...(await load(K.state, {})) }; }
@@ -393,4 +417,5 @@ export async function ensureDefaults() {
   const st = await load(K.state, null);
   if (!st) await save({ [K.state]: deepClone(DEFAULT_STATE) });
   if (v !== SCHEMA_VERSION) await save({ [K.schema]: SCHEMA_VERSION });
+  await migrateSecrets().catch(() => {});
 }

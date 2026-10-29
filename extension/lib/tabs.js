@@ -48,8 +48,8 @@ export async function send(tabId, cmd, args = {}, timeoutMs = 30000) {
 
 async function tabInfo(tabId) { try { return await chrome.tabs.get(tabId); } catch (_) { return null; } }
 
-async function ping(tabId, guard) {
-  const r = await send(tabId, CMD.PING, guard == null ? {} : { guard }, 4000);
+async function ping(tabId) {
+  const r = await send(tabId, CMD.PING, {}, 4000);
   return r && r.ok ? r : null;
 }
 
@@ -72,7 +72,6 @@ export async function waitReady(tabId, timeoutMs = 40000) {
 
 async function protect(tabId) {
   try { await chrome.tabs.update(tabId, { autoDiscardable: false }); } catch (_) {}
-  await send(tabId, CMD.PING, { guard: true }, 3000);
 }
 
 async function createTab(settings) {
@@ -103,7 +102,7 @@ export async function workerTab(settings, { create = true } = {}) {
       if (t.discarded) {
         try { await chrome.tabs.reload(t.id); } catch (_) {}
         if (await waitReady(t.id, 40000)) { await protect(t.id); return t.id; }
-      } else if (await ping(t.id, true)) {
+      } else if (await ping(t.id)) {
         return t.id;
       } else {
         // Tab exists but the content script is silent (extension reloaded, frozen): reload it.
@@ -152,7 +151,7 @@ export async function navigate(tabId, url, timeoutMs = 45000) {
     let samePath = false;
     try { samePath = new URL(t.url).pathname.toLowerCase() === wantPath; } catch (_) {}
     if (!ready && !(samePath && now() - started > 2500)) continue;
-    const p = await ping(tabId, true);
+    const p = await ping(tabId);
     if (p) return { ok: true, url: t.url, viaReady: ready };
   }
   return { ok: false, error: "load_timeout" };
@@ -175,7 +174,7 @@ export async function bringToFront(tabId) {
 
 export async function releaseGuard(tabId) {
   if (tabId == null) return;
-  await send(tabId, CMD.PING, { guard: false }, 3000);
+  try { await chrome.tabs.update(tabId, { autoDiscardable: true }); } catch (_) {}
 }
 
 export const _test = { isX, X_MATCH };

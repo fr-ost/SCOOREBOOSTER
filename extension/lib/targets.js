@@ -45,7 +45,7 @@ const EDITABLE = ["name", "group", "tier", "enabled", "tone", "preset", "notes",
 
 export function sanitizePatch(patch) {
   const out = {};
-  for (const k of EDITABLE) if (k in patch) out[k] = patch[k];
+  for (const k of EDITABLE) if (Object.hasOwn(patch, k)) out[k] = patch[k];
   if ("group" in out) out.group = String(out.group).toUpperCase() === GROUP.A ? GROUP.A : GROUP.B;
   if ("tier" in out) out.tier = Number(out.tier) === 1 ? 1 : 2;
   if ("enabled" in out) out.enabled = !!out.enabled;
@@ -122,7 +122,7 @@ export async function upsert(rows, defaults = {}, overwrite = false) {
       if (me && r.handle === me) continue;
       const group = rowGroup(r.group, defaults.group || GROUP.B);
       const tier = rowTier(r.tier, defaults.tier || 2);
-      const cur = all[r.handle];
+      const cur = Object.hasOwn(all, r.handle) ? all[r.handle] : null;
       if (!cur) {
         all[r.handle] = newTarget(r.handle, { group, tier, tone: r.tone || defaults.tone || "", notes: r.notes || "", name: r.name || "", source: defaults.source || "manual" });
         added++;
@@ -144,7 +144,7 @@ export async function patch(handle, p) {
   const clean = sanitizePatch(p || {});
   let out = null;
   await updateTargets((all) => {
-    if (all[h]) { Object.assign(all[h], clean); out = all[h]; }
+    if (Object.hasOwn(all, h)) { Object.assign(all[h], clean); out = all[h]; }
     return all;
   });
   return out;
@@ -153,14 +153,14 @@ export async function patch(handle, p) {
 export async function removeMany(handles) {
   const set = new Set((handles || []).map(normalizeHandle));
   let n = 0;
-  await updateTargets((all) => { for (const h of set) if (all[h]) { delete all[h]; n++; } return all; });
+  await updateTargets((all) => { for (const h of set) if (Object.hasOwn(all, h)) { delete all[h]; n++; } return all; });
   return n;
 }
 
 export async function bulk(handles, p) {
   const set = new Set((handles || []).map(normalizeHandle));
   const clean = sanitizePatch(p || {});
-  await updateTargets((all) => { for (const h of set) if (all[h]) Object.assign(all[h], clean); return all; });
+  await updateTargets((all) => { for (const h of set) if (Object.hasOwn(all, h)) Object.assign(all[h], clean); return all; });
 }
 
 // Merge a scraped profile (+ its recent posts) into a target and recompute its own score.
