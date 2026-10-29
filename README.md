@@ -105,16 +105,20 @@ The estimator in Models & Costs uses your own average token usage once you have 
 
 | Rule | Default | Hard cap |
 |---|---|---|
-| Daily comments: week 1 / week 2 / week 3+ | 10 / 20 / 30 | 30 |
-| Group daily limits | A 10, B 20 (inside the daily total) | 30 |
+| Comments per 24 hours (rolling): week 1 / week 2 / week 3+ | 10 / 20 / 30 | 30 |
+| Group limits per 24 hours | A 10, B 20 (inside the total) | 30 |
 | Gap between comments | random 3-12 min | never below 2 min |
 | Long breaks | after every 3-6 comments, 20-60 min | - |
 | Active hours | 10:00-00:00 Asia/Dhaka | - |
-| Same target | 1 per day, 3 per 7 days | 1 / 3 |
+| Same target | 1 per 24 hours, 3 per 7 days | 1 / 3 |
 | Likes (like + comment combo) | off, 20/day when on | 50 |
-| Generations per day | 2 x daily limit (protects your OpenAI spend) | - |
+| Generations per 24 hours | 2 x the comment limit (protects your OpenAI spend) | - |
 | Warm-up | first 3 days review only | 3 days |
 | Unfollow cleanup | off, 10/day when on, min 7 days | 30/day |
+
+Limits use rolling windows (the last 24 hours / 7 days), so an active-hours window that crosses midnight
+never gets two daily limits in one session. A reply whose confirmation was unclear ("probably sent") counts
+toward every limit. Watch pages are never loaded more often than every 90 seconds.
 
 **Human-like behaviour**: random check intervals, the post is opened and "read" for a few seconds (longer for
 longer posts), a small scroll, optional like, typing at 170-320 characters per minute in small chunks with
@@ -128,6 +132,9 @@ row), a locked or restricted account, the login page, a different logged-in acco
 row, a page whose posts can no longer be read (X changed its markup), a rejected OpenAI key, exhausted OpenAI
 quota, or the monthly budget. **Resume is always manual**: check your account on x.com first, then press
 "I checked my account - resume".
+
+**Pause / Stop** take effect immediately, also in the middle of typing a reply: nothing is submitted after
+you press them, and the half-typed text is cleared.
 
 **Never done**: no blind re-submit (if the confirmation is unclear ScoreX checks the thread for your reply
 instead of posting again), no replies to posts it already handled, no clicking through captchas or warnings,

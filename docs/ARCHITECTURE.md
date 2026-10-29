@@ -97,6 +97,16 @@ because background tabs throttle page timers.
 See the header of `lib/history.js`. One record per generated comment. Records with status
 `pending_review | approved | queued | posting` form the open queue; `posted | skipped | failed` are final.
 
+## Consistency rules
+
+* History status changes are compare-and-set inside one IndexedDB transaction (`history.patch(id, fn)`):
+  an item is only claimed for posting if it is still APPROVED/QUEUED, and review actions never overwrite an
+  item that started posting.
+* Safety limits count posted (and "probably posted") records in rolling 24 h / 7 day windows.
+* The job lease lasts 3 minutes and is renewed every minute while its holder runs; a new worker instance
+  drops any lease left by a killed one.
+* Pause/Stop are re-checked inside the posting flow up to the moment of submit.
+
 ## Engine tick
 
 One randomized one-shot alarm (`sx.tick`) plus a 1-minute watchdog alarm. Each tick, in order:
