@@ -106,10 +106,11 @@ export function usageStats(records) {
 }
 
 function expectedCall(stats, model, effort, kind) {
-  const key = `${model.id}|${effort || "none"}|${kind}`;
+  // Same effort key as recorded calls (non-reasoning models are recorded with effort "none").
+  const eff = model.reasoning ? effort || "low" : "none";
+  const key = `${model.id}|${eff}|${kind}`;
   const s = stats && stats[key];
   if (s && s.n >= 3) return { usage: { input: s.input, cached: s.cached, output: s.output, reasoning: s.reasoning }, fromHistory: true };
-  const eff = model.reasoning ? effort || "low" : "none";
   const reasoning = ASSUME.reasoning[eff] != null ? ASSUME.reasoning[eff] : 0;
   const visible = kind === "check" ? ASSUME.checkOutputVisible : ASSUME.genOutputVisible;
   return { usage: { input: kind === "check" ? ASSUME.checkInput : ASSUME.genInput, cached: 0, output: visible + reasoning, reasoning }, fromHistory: false };

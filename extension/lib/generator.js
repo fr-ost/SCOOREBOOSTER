@@ -152,7 +152,7 @@ async function runChain({ chain, apiKey, instructions, input, jsonSchema, kind, 
     };
     calls.push(call);
     if (onCall) await onCall(call, r.compat);
-    if (r.ok) return { ok: true, text: r.text, call, calls, model, effort, fallbackUsed: i > 0 };
+    if (r.ok) return { ok: true, text: r.text, call, calls, model, effort, fallbackUsed: i > 0, compat: r.compat || compat };
     last = { r, call };
     if (STOP_KINDS[r.error.kind]) return { ok: false, stop: STOP_KINDS[r.error.kind], error: r.error, call, calls };
     if (r.error.kind === "refusal") return { ok: false, refusal: true, error: r.error, call, calls };
@@ -194,7 +194,16 @@ export async function generate(opts) {
     }
     out.model = g.model; out.effort = g.effort; out.fallbackUsed = out.fallbackUsed || g.fallbackUsed;
     const parsed = parseJsonAnswer(g.text);
-    let text = parsed && typeof parsed === "object" ? parsed.comment : g.text;
+    const validJson = parsed && typeof parsed === "object" && typeof parsed.comment === "string";
+    // Raw text is only acceptable from a model that cannot do structured output, and never if it looks
+    // like a (broken) JSON fragment.
+    if (!validJson && !((g.compat || {}).noFormat && !/^\s*[{\[]/.test(g.text))) {
+      lastReasons = [{ code: "bad_format", text: "The model's answer was not valid JSON" }];
+      feedback = "Your previous answer was not valid JSON. Answer with the JSON object only.";
+      out.quality = { pass: false, reasons: lastReasons, stage: "format" };
+      continue;
+    }
+    let text = validJson ? parsed.comment : g.text;
     if (parsed && parsed.skip === true) {
       out.skipped = { code: "model_skip", text: "Model skipped: " + truncate(parsed.skip_reason || "not worth replying", 160) };
       return out;
@@ -212,8 +221,16 @@ export async function generate(opts) {
       const ck = buildCheck({ post, comment: text, avoid });
       const c = await runChain({ chain: checkChain, apiKey, instructions: ck.instructions, input: ck.input, jsonSchema: CHECK_SCHEMA, kind: "check", compatFor, onCall, fetchImpl, timeoutMs: 60000 });
       calls.push(...c.calls);
-      if (c.ok) {
-        const v = parseJsonAnswer(c.text) || {};
+      const v0 = c.ok ? parseJsonAnswer(c.text) : null;
+      const verdictOk = !!(v0 && typeof v0.pass === "boolean");
+      if (c.refusal) {
+        lastReasons = [{ code: "checker_refused", text: "Checker refused to approve the reply" }];
+        feedback = feedbackFor(lastReasons, null);
+        out.quality = { pass: false, reasons: lastReasons, stage: "model" };
+        continue;
+      }
+      if (c.ok && verdictOk) {
+        const v = v0;
         const failed = v.pass === false || v.generic === true || v.off_topic === true || v.adds_value === false || v.same_language === false;
         if (failed) {
           const reasons = [];
@@ -232,8 +249,8 @@ export async function generate(opts) {
       } else if (c.stop) {
         out.stop = c.stop; out.error = c.error; return out;
       } else {
-        // Checker unavailable: rules passed, keep the comment but note it.
-        out.quality = { pass: true, reasons: [{ code: "checker_unavailable", text: "Model check failed; rules passed" }], stage: "rules" };
+        // Checker unavailable or unreadable: rules passed, but a human must look at it (never auto-posted).
+        out.quality = { pass: true, needsReview: true, reasons: [{ code: "checker_unavailable", text: "Quality check unavailable - sent to the review queue" }], stage: "rules" };
       }
     } else {
       out.quality = { pass: true, reasons: [], stage: "rules" };

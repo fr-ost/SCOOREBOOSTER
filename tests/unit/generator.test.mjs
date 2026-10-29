@@ -225,11 +225,26 @@ describe("generator.js", () => {
       assert.equal(out.comment, "Fee drops only matter if wallets surface them, most users never see the gas line at all.");
     });
 
-    test("plain-text answer (no JSON) is still used", async () => {
-      const f = router({ gen: [{ status: 200, body: okBody(GOOD) }], check: [checkPass()] });
+    test("plain-text answer is rejected when JSON was requested (regenerated, then skipped)", async () => {
+      const f = router({ gen: [{ status: 200, body: okBody(GOOD) }, { status: 200, body: okBody(GOOD) }], check: [checkPass()] });
       const { out } = await run(f);
+      assert.equal(out.ok, false);
+      assert.equal(out.skipped.code, "quality");
+      assert.match(out.skipped.text, /not valid JSON/);
+    });
+
+    test("plain-text answer is used for a model that cannot do structured output", async () => {
+      const f = router({ gen: [{ status: 200, body: okBody(GOOD) }], check: [checkPass()] });
+      const { out } = await run(f, { compatFor: () => ({ noFormat: true }) });
       assert.equal(out.ok, true);
       assert.equal(out.comment, GOOD);
+    });
+
+    test("a truncated JSON fragment is never used as the comment", async () => {
+      const frag = '{"skip":false,"skip_reason":"","comment":"Blob fees falling this hard means the L2s that batch';
+      const f = router({ gen: [{ status: 200, body: okBody(frag) }, { status: 200, body: okBody(frag) }], check: [checkPass()] });
+      const { out } = await run(f, { compatFor: () => ({ noFormat: true }) });
+      assert.equal(out.ok, false);
     });
 
     test("429 rate limit on the primary -> fallback model used", async () => {

@@ -23,9 +23,26 @@ const GENERIC_OPENERS = [
 // Self-references that would reveal the reply was machine-written.
 // Only first-person self-references: talking ABOUT AI/OpenAI/ChatGPT as a topic is fine.
 const AI_SELF_RE = /\b(as an ai|i am an ai|i'm an ai|as an? (?:large )?language model|i am a (?:bot|language model)|i'm a (?:bot|language model)|ai[- ]generated (?:reply|comment|response)|(?:this|my) (?:reply|comment) (?:was|is) (?:ai[- ]generated|generated)|generated (?:by|with) (?:ai|chatgpt|gpt)|as an assistant|i cannot browse)\b/i;
-const LINK_RE = /(https?:\/\/|www\.)\S+|\b[a-z0-9-]{2,}\.(?:com|io|xyz|ai|org|net|co|app|gg|fi|me|so|dev|finance|exchange|link|ly|to)\b(?:\/\S*)?|\b(?:x\.com|t\.co|t\.me|bit\.ly|g\.co)\b/i;
-const HASHTAG_RE = /(^|\s)#[\p{L}\p{N}_]+/u;
-const MENTION_RE = /(^|\s)@[A-Za-z0-9_]{1,15}\b/;
+// X autolinks almost any "name.tld" (pump.fun, friend.tech, cfg.py...), so treat every host-like token as
+// a link, except a few file-extension style words that are not domains.
+const LINK_RE = /(https?:\/\/|www\.)\S+/i;
+const HOST_RE = /(?:^|[^\p{L}\p{N}_@.-])((?:[a-z0-9][a-z0-9-]{0,62}\.)+([a-z]{2,24}))(?=$|[^\p{L}\p{N}_-])/giu;
+const NOT_TLD = new Set(["js", "ts", "jsx", "tsx", "md", "txt", "json", "yml", "yaml", "exe", "html", "css", "rs", "sol", "toml", "lock", "sh", "pdf", "png", "jpg", "gif", "mp4", "csv"]);
+export function hasLink(text) {
+  const t = String(text || "");
+  if (LINK_RE.test(t)) return true;
+  for (const m of t.matchAll(HOST_RE)) {
+    const tld = m[2].toLowerCase();
+    const label = m[1].slice(0, -(tld.length + 1));
+    if (NOT_TLD.has(tld)) continue;
+    if (/^(?:e\.g|i\.e|etc|vs|mr|mrs|dr|no|st)$/i.test(label)) continue;
+    return true;
+  }
+  return false;
+}
+// twitter-text boundaries: "(@x", ".@x", fullwidth "＠x" / "＃tag" also count.
+const HASHTAG_RE = /(^|[^&\p{L}\p{M}\p{N}_])[#＃][\p{L}\p{N}_]*\p{L}[\p{L}\p{N}_]*/u;
+const MENTION_RE = /(^|[^A-Za-z0-9_!#$%&*@＠])[@＠][A-Za-z0-9_]{1,15}\b/;
 const DASH_RE = /—|―/; // em dash, horizontal bar
 
 // Length as X counts it (twitter-text v3): most Latin/Cyrillic/Arabic... characters weigh 1, CJK and
@@ -52,7 +69,8 @@ export function sanitizeComment(raw) {
   const q = t.match(/^["'“”‘’«»`](.*)["'“”‘’«»`]$/s);
   if (q && !/["“”«»]/.test(q[1])) t = q[1].trim(); // not when the text starts and ends with separate quoted words
   // leading @mentions the model may add ("@vitalik ...")
-  t = t.replace(/^(?:@[A-Za-z0-9_]{1,15}[\s,:]*)+/, "");
+  // Only when a separator follows ("@a, nice" -> "nice"); "@a's point" stays and fails the mention rule.
+  t = t.replace(/^(?:@[A-Za-z0-9_]{1,15}(?:[\s,:]+|$))+/, "");
   // em dash / horizontal bar -> comma or period
   t = t.replace(/\s*[—―]\s*(?=[A-Z])/g, ". ").replace(/\s*[—―]\s*/g, ", ");
   // spaced en dash used as a dash -> comma
@@ -128,7 +146,7 @@ export function ruleCheck(text, ctx = {}) {
   if (t.length < minChars) add("too_short", `Shorter than ${minChars} characters`);
   if (t.length > maxChars) add("too_long", `Longer than ${maxChars} characters`);
   else if (weightedLength(t) > HARD.maxCommentChars) add("too_long", `Longer than X's ${HARD.maxCommentChars}-character limit (CJK and emoji count double)`);
-  if (LINK_RE.test(t)) add("link", "Contains a link");
+  if (hasLink(t)) add("link", "Contains a link");
   if (HASHTAG_RE.test(t)) add("hashtag", "Contains a hashtag");
   if (MENTION_RE.test(t)) add("mention", "Contains an @mention");
   if (countEmoji(t) > 1) add("emoji", "More than one emoji");

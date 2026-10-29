@@ -10,11 +10,12 @@ const SENSITIVE_RE = /\b(rip|rest in peace|passed away|passing of|condolences|fu
 const UNTRANSLATABLE_LANGS = new Set(["", "und", "zxx", "qme", "qht", "qam", "qst", "art"]);
 
 export function textWithoutLinks(text) {
-  return String(text || "").replace(/https?:\/\/\S+/g, " ").replace(/\b\S+\.(?:com|io|xyz|ai|org|net|co|app|gg|fi|me|ly)\/\S*/gi, " ").replace(/(^|\s)@\w+/g, " ").replace(/\s+/g, " ").trim();
+  return String(text || "").replace(/https?:\/\/\S+/g, " ").replace(/\b(?:[a-z0-9-]+\.)+[a-z]{2,24}\/\S*/gi, " ").replace(/(^|\s)@\w+/g, " ").replace(/\s+/g, " ").trim();
 }
 
 function hasKeyword(text, list) {
-  const t = " " + String(text || "").toLowerCase().replace(/[^\p{L}\p{N}\s$#@']/gu, " ").replace(/\s+/g, " ") + " ";
+  // Possessives match their keyword ("Trump's", "Israel’s", "Republicans'"); apostrophes become spaces.
+  const t = " " + String(text || "").toLowerCase().replace(/['’]s\b/g, "").replace(/s['’](?=\s|$)/g, "s").replace(/[^\p{L}\p{N}\s$#@]/gu, " ").replace(/\s+/g, " ") + " ";
   for (const k of list || []) {
     const kw = String(k).toLowerCase().trim();
     if (!kw) continue;

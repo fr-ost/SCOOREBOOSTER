@@ -61,8 +61,8 @@ export function classifyError(status, body, headers) {
   if (ra && Number.isFinite(Number(ra))) retryAfterMs = Number(ra) * 1000;
   let kind = "bad_request";
   if (status === 401) kind = "auth";
+  else if (status === 404 || code === "model_not_found" || (status === 403 && /access to (?:the )?model/i.test(message))) kind = "model";
   else if (status === 403) kind = "forbidden";
-  else if (status === 404 || code === "model_not_found") kind = "model";
   else if (status === 429) {
     const quotaCodes = ["insufficient_quota", "credit_balance_exhausted", "organization_spend_limit_exceeded", "project_spend_limit_exceeded", "organization_usage_limit_exceeded", "billing_hard_limit_reached"];
     kind = quotaCodes.includes(code) || type === "insufficient_quota" ? "quota" : "rate";
@@ -130,9 +130,9 @@ export async function callModel({ apiKey, model, instructions, input, effort, js
     const { text, refusal } = extractText(json);
     const status = json.status || "completed";
     const incompleteReason = (json.incomplete_details && json.incomplete_details.reason) || null;
-    if (!text) {
-      const kind = refusal ? "refusal" : status === "incomplete" ? "incomplete" : "empty";
-      return { ok: false, error: { kind, message: refusal || (incompleteReason ? `Incomplete: ${incompleteReason}` : "Empty output") }, usage, status, incompleteReason, ms: now() - started, compat };
+    if (!text || status === "incomplete") {
+      const kind = refusal && !text ? "refusal" : status === "incomplete" ? "incomplete" : "empty";
+      return { ok: false, error: { kind, message: refusal || (incompleteReason ? `Incomplete answer: ${incompleteReason}` : "Empty output") }, usage, status, incompleteReason, ms: now() - started, compat };
     }
     return { ok: true, text, refusal, usage, status, incompleteReason, ms: now() - started, compat };
   }

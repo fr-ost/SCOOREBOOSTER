@@ -524,13 +524,17 @@ async function ensureContext(t, tabId, settings, post) {
   return all[t.handle] || t;
 }
 
+// Would one more comment on this preset (x2 for a possible regeneration) cross the monthly budget?
+function budgetBlocks(settings, spend, presetKey) {
+  const p = settings.presets[presetKey] || settings.presets.balanced;
+  const ck = settings.presets[settings.quality.checkerPreset] || p;
+  const est = estimate(settings, { modelId: p.modelId, effort: p.effort, perDay: 1, checkModelId: ck.modelId, checkEffort: ck.effort });
+  return budgetStatus(settings, spend).reached || !!(est && wouldExceed(settings, spend, est.perComment * 2));
+}
+
 // Generate one comment for a post and store it (pending review or queued). Returns "stopped" on a stop.
 export async function generateFor(post, target, { settings, secrets, mode, tabId, me, feedback }) {
-  const spend = await getSpend();
   const preset0 = effectivePreset(target, settings);
-  const p0 = settings.presets[preset0];
-  const est = estimate(settings, { modelId: p0.modelId, effort: p0.effort, perDay: 1, checkModelId: settings.presets[settings.quality.checkerPreset].modelId, checkEffort: settings.presets[settings.quality.checkerPreset].effort });
-  if (est && wouldExceed(settings, spend, est.perComment * 2)) { await stop(STOP.BUDGET, "The next comment would exceed your monthly budget"); return "stopped"; }
 
   let t = target;
   if (tabId != null) {
@@ -546,7 +550,9 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
   }
   const tone = arm.tone ? effectiveTone(t, settings, arm.tone) : effectiveTone(t, settings);
   const presetKey = arm.preset || preset0;
-  const previous = (await H.recentPosted(50)).map((r) => r.comment).filter(Boolean);
+  if (budgetBlocks(settings, await getSpend(), presetKey)) { await stop(STOP.BUDGET, "The next comment would exceed your monthly budget"); return "stopped"; }
+  // Repetition is checked against comments still waiting in the queue too, not only posted ones.
+  const previous = [...(await H.openQueue()).map((r) => r.comment), ...(await H.recentPosted(50)).map((r) => r.comment)].filter(Boolean);
   const g = await generate({
     settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey, previous,
     bestComments: await bestComments(), myHandle: me, compatFor: await compatLoader(), onCall: await onCallFactory(settings), feedback,
@@ -567,7 +573,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
 
   const st = await getState();
   const liveMode = effectiveMode(await getSettings(), st);
-  if (mode === MODE.AUTO && liveMode === MODE.AUTO) {
+  if (mode === MODE.AUTO && liveMode === MODE.AUTO && !(g.quality && g.quality.needsReview)) {
     const when = Math.max(now() + humanDelay(45 * 1000, 150 * 1000), st.nextCommentAt || 0, st.breakUntil || 0);
     await H.put({ ...base, comment: g.comment, originalComment: g.comment, status: HS.QUEUED, scheduledFor: when });
     log("info", `Queued a comment for @${post.author} (posts in ~${fmtDuration(when - now())})`);
@@ -703,10 +709,11 @@ export async function reviewAction({ id, action, text }) {
   if (action === "regenerate") {
     const [settings, secrets, targets] = await Promise.all([getSettings(), getSecrets(), getTargets()]);
     if (!secrets.openaiKey) return { ok: false, error: "Add your OpenAI API key first" };
+    if (budgetBlocks(settings, await getSpend(), rec.preset || "balanced")) return { ok: false, error: "Monthly OpenAI budget reached - raise it in Models & Costs to regenerate" };
     const t = targets[rec.target] || { handle: rec.target, group: rec.group, tier: rec.tier, name: rec.targetName, recentPosts: [], profile: null, tone: "", preset: "" };
     const post = { id: rec.postId, url: rec.postUrl, author: rec.target, authorName: rec.targetName, text: rec.postText, lang: rec.postLang, createdAt: rec.postCreatedAt, metrics: rec.postMetrics, hasMedia: rec.postHasMedia, isQuote: rec.postIsQuote };
     const tone = rec.tone ? effectiveTone(t, settings, rec.tone) : effectiveTone(t, settings);
-    const previous = [rec.comment, ...(await H.recentPosted(50)).map((r) => r.comment)].filter(Boolean);
+    const previous = [rec.comment, ...(await H.openQueue()).filter((r) => r.id !== rec.id).map((r) => r.comment), ...(await H.recentPosted(50)).map((r) => r.comment)].filter(Boolean);
     const g = await generate({
       settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey: rec.preset || effectivePreset(t, settings), previous,
       bestComments: await bestComments(), myHandle: settings.account.handle, compatFor: await compatLoader(), onCall: await onCallFactory(settings),

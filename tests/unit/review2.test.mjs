@@ -69,3 +69,41 @@ describe("review round 1 fixes", () => {
     assert.equal(countsAsPosted({ status: HS.FAILED, maybePosted: true }), true);
   });
 });
+
+describe("review round 2 fixes", () => {
+  test("host-like tokens are links, file extensions and abbreviations are not", async () => {
+    const { hasLink } = await import("../../extension/lib/quality.js");
+    for (const s of ["pump.fun basically turned launches into lotteries", "same as friend.tech last cycle", "check cfg.py", "see example.com/x"]) assert.equal(hasLink(s), true, s);
+    for (const s of ["Node.js and Next.js both", "e.g. retention first", "the README.md says", "3.5x growth", "U.S. markets"]) assert.equal(hasLink(s), false, s);
+  });
+  test("mentions and hashtags after punctuation or fullwidth signs are caught", () => {
+    for (const s of ["Same lesson (@uniswap) taught everyone in 2020 about incentives", "This is the thing .@vitalik keeps warning about", "Same playbook as ＠binance listings back then", "Retail is chasing (#memecoins) again this week"]) {
+      assert.equal(ruleCheck(s, { settings }).pass, false, s);
+    }
+    assert.equal(ruleCheck("Email me at test@example.org about the retention study results", { settings }).reasons.some((r) => r.code === "mention"), false);
+  });
+  test("a leading @mention with a possessive is not stripped into a broken sentence", async () => {
+    const { sanitizeComment } = await import("../../extension/lib/quality.js");
+    assert.equal(sanitizeComment("@vitalik, blob pricing only works if L2s pass savings on"), "blob pricing only works if L2s pass savings on");
+    assert.match(sanitizeComment("@VitalikButerin's point about blob pricing"), /^@VitalikButerin's/);
+  });
+  test("political keywords match possessives", async () => {
+    const { skipReason } = await import("../../extension/lib/filters.js");
+    const p = (text) => ({ id: "1", author: "a", text, lang: "en", createdAt: Date.now() - 5 * 60000 });
+    for (const t of ["Trump's new tariffs are going to wreck bitcoin miner margins this quarter", "Israel’s central bank is testing a digital shekel pilot", "Republicans' new bill on stablecoins passed committee today"]) {
+      assert.equal(skipReason(p(t), settings).code, "political", t);
+    }
+  });
+  test("403 'no access to model' falls back instead of stopping", async () => {
+    const { classifyError } = await import("../../extension/lib/openai.js");
+    assert.equal(classifyError(403, { error: { code: "model_not_found", message: "Project `proj_abc` does not have access to model `gpt-6.1-sol`" } }, {}).kind, "model");
+    assert.equal(classifyError(403, { error: { message: "Country, region, or territory not supported" } }, {}).kind, "forbidden");
+  });
+  test("estimates use real history for non-reasoning models", async () => {
+    const { estimate } = await import("../../extension/lib/costs.js");
+    const s = sanitizeSettings({ models: [{ id: "m41", name: "gpt-4.1-mini", reasoning: false, prices: { input: 0.4, output: 1.6 } }], presets: { balanced: { modelId: "m41", effort: "medium" } }, quality: { modelCheck: false } });
+    const stats = { "m41|none|gen": { n: 10, input: 4000, cached: 0, output: 300, reasoning: 0 } };
+    const e = estimate(s, { modelId: "m41", effort: "medium", perDay: 1, stats });
+    assert.equal(e.fromHistory, true);
+  });
+});

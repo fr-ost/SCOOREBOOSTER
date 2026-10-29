@@ -272,7 +272,7 @@ describe("openai.js", () => {
       const r = await callModel(args({ fetchImpl: fakeFetch(respond(200, body)) }));
       assert.equal(r.ok, false);
       assert.equal(r.error.kind, "incomplete");
-      assert.equal(r.error.message, "Incomplete: max_output_tokens");
+      assert.equal(r.error.message, "Incomplete answer: max_output_tokens");
       assert.equal(r.incompleteReason, "max_output_tokens");
       assert.equal(r.usage.output, 1500);
       assert.equal(r.usage.reasoning, 1500);
@@ -286,9 +286,10 @@ describe("openai.js", () => {
       assert.equal(refused.error.message, "No.");
     });
 
-    test("partial text from an incomplete response is still returned", async () => {
+    test("partial text from an incomplete response is not accepted (kind incomplete, usage kept)", async () => {
       const r = await callModel(args({ fetchImpl: fakeFetch(respond(200, okBody("partial", { status: "incomplete", incomplete_details: { reason: "max_output_tokens" } }))) }));
-      assert.equal(r.ok, true);
+      assert.equal(r.ok, false);
+      assert.equal(r.error.kind, "incomplete");
       assert.equal(r.status, "incomplete");
       assert.equal(r.incompleteReason, "max_output_tokens");
     });
