@@ -117,7 +117,12 @@ export async function workerTab(settings, { create = true } = {}) {
   if (st.workerTabPinned) {
     let pinned = [];
     try { pinned = await chrome.tabs.query({ pinned: true, url: X_MATCH }); } catch (_) {}
-    const cand = pinned.find((t) => t.index === st.workerTabIndex) || pinned[pinned.length - 1];
+    // Only the tab at our old position that still shows the last page ScoreX opened - nothing else, so the
+    // user's own pinned X tab is never taken over.
+    const sameUrl = (t) => st.workerLastUrl && (t.url || t.pendingUrl || "").split("#")[0] === st.workerLastUrl.split("#")[0];
+    const matches = pinned.filter((t) => t.index === st.workerTabIndex && sameUrl(t));
+    const cand = matches.length === 1 ? matches[0] : null;
+    if (!cand) await patchState({ workerTabPinned: false });
     if (cand && !cand.active) {
       if (cand.discarded) { try { await chrome.tabs.reload(cand.id); } catch (_) {} }
       if (await waitReady(cand.id, 40000)) {
@@ -152,7 +157,7 @@ export async function navigate(tabId, url, timeoutMs = 45000) {
     try { samePath = new URL(t.url).pathname.toLowerCase() === wantPath; } catch (_) {}
     if (!ready && !(samePath && now() - started > 2500)) continue;
     const p = await ping(tabId);
-    if (p) return { ok: true, url: t.url, viaReady: ready };
+    if (p) { await patchState({ workerLastUrl: t.url, workerTabIndex: t.index }).catch(() => {}); return { ok: true, url: t.url, viaReady: ready }; }
   }
   return { ok: false, error: "load_timeout" };
 }

@@ -258,8 +258,10 @@ try {
   check((await page.locator("#openaiKeyField .masked-key").innerText()).trim() === "sk-…WXYZ", "key shown masked as sk-…WXYZ");
   check(!(await page.content()).includes(FAKE_KEY), "full key is not in the page DOM");
   check((await page.locator("#openaiKeyField button:has-text('Replace')").count()) === 1 && (await page.locator("#openaiKeyField button:has-text('Remove')").count()) === 1, "Replace and Remove buttons shown");
-  const sec = await page.evaluate(async () => (await chrome.storage.local.get("sx.secrets"))["sx.secrets"]);
-  check(sec && sec.openaiKey === FAKE_KEY, "key stored in sx.secrets");
+  const sec = await page.evaluate(async () => (await import("/lib/store.js")).getSecrets());
+  check(sec && sec.openaiKey === FAKE_KEY, "key stored (extension IndexedDB)");
+  const leaked = await page.evaluate(async () => JSON.stringify(await chrome.storage.local.get(null)));
+  check(!leaked.includes(FAKE_KEY), "key is not in chrome.storage (content scripts on x.com cannot read it)");
   await page.reload();
   await page.waitForSelector('#view[data-ready="models"]');
   await page.waitForSelector("#openaiKeyField .masked-key", { timeout: 5000 });

@@ -7,7 +7,7 @@ import { getSettings, getSecrets, getState, patchState, getTargets, updateTarget
 import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
-import { warmup, effectiveMode, dailyLimit, groupLimit, generationLimit, likeLimit, activeHours, afterPost, nextCheckMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
+import { warmup, effectiveMode, dailyLimit, groupLimit, generationLimit, likeLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
 import { skipReason } from "./filters.js";
 import { effectiveTone, effectivePreset, isActive } from "./targets.js";
 import { generate } from "./generator.js";
@@ -50,6 +50,17 @@ export async function scheduleTick(ms, why = "") {
 export async function onWorkerStart() {
   const st = await getState();
   if (st.job) await patchState({ job: null });
+  // Nothing can be posting in a fresh worker: a POSTING record was interrupted (maybe already sent).
+  // It counts toward the limits and the gap starts from its attempt, so the next post waits properly.
+  let lastAttempt = 0;
+  for (const r of await H.byStatus(HS.POSTING).catch(() => [])) {
+    const done = await H.patch(r.id, (cur) => (cur.status === HS.POSTING ? { status: HS.FAILED, maybePosted: true, reason: "Interrupted while posting - check the post manually" } : null));
+    if (done) lastAttempt = Math.max(lastAttempt, r.attemptAt || r.updatedAt || 0);
+  }
+  if (lastAttempt) {
+    const settings = await getSettings();
+    await patchState((s) => ({ lastCommentAt: Math.max(s.lastCommentAt || 0, lastAttempt), nextCommentAt: Math.max(s.nextCommentAt || 0, lastAttempt + nextGapMs(settings)) }));
+  }
   const d = await load(K.discovery, null);
   if (d && ["running", "cancelling", "waiting", "queued"].includes(d.status)) {
     await save({ [K.discovery]: { ...d, status: "error", message: "Interrupted (browser or extension restarted)", finishedAt: now() } });
@@ -107,7 +118,7 @@ export async function withLease(kind, fn) {
 // Limits use ROLLING windows (last 24h / last 7 days), so an active-hours window that crosses midnight
 // can never get two daily limits in one session, and one target never gets 2 replies within 24h.
 // A reply that was probably sent (unclear confirmation, interrupted worker) counts as posted.
-export const countsAsPosted = (r) => r.status === HS.POSTED || !!r.maybePosted;
+export const countsAsPosted = (r) => r.status === HS.POSTED || r.status === HS.POSTING || !!r.maybePosted;
 const postedTime = (r) => r.postedAt || r.attemptAt || r.updatedAt || r.createdAt;
 
 export async function computeCounts(settings, ts = now()) {
@@ -411,7 +422,7 @@ async function tickBody(settings, secrets, reason = "timer") {
     // Revisit soon if a post is about to enter the comment window.
     if (w.waiting && w.waiting.length) {
       const soonest = Math.min(...w.waiting.map((p) => p.createdAt + settings.watch.minPostAgeMin * MIN));
-      const d = soonest - now();
+      const d = Math.max(soonest - now(), HARD.minCheckIntervalSec * 1000 - (now() - (await getState()).lastWatchAt || 0));
       if (d > 0 && d < nextCheckMs(settings)) return { delay: d + randInt(10, 60) * 1000, why: "fresh post entering window" };
     }
   }
@@ -618,7 +629,7 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   const r = await postReply(claimed, { tabId, settings, me, allowLike, shouldStop });
   const ts = now();
   if (r.aborted) {
-    await H.patch(rec.id, { status: prevStatus, reason: "Posting interrupted by Pause/Stop - not posted" });
+    await H.patch(rec.id, { status: prevStatus, reason: "Posting interrupted by Pause/Stop - not posted", ...(r.liked ? { liked: true, likedAt: ts } : {}) });
     log("info", `Posting to @${rec.target} interrupted by you before submitting`);
     return "aborted";
   }
