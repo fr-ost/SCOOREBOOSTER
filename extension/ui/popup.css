@@ -1,0 +1,43 @@
+/* ScoreX popup - layered on top of dashboard.css (shared tokens, buttons, pills, badges). */
+
+.popup-body { width: 360px; min-height: 200px; background: var(--bg); }
+.popup { display: flex; flex-direction: column; gap: 12px; padding: 14px; }
+.p-head { display: flex; align-items: center; gap: 8px; }
+.p-head img { border-radius: 6px; }
+.p-brand { font-weight: 700; font-size: 15px; letter-spacing: -0.01em; }
+.p-spacer { flex: 1; }
+.p-status {
+  display: flex; flex-direction: column; gap: 6px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 12px 14px;
+}
+.p-status .status-pill { align-self: flex-start; max-width: 100%; }
+.p-status .status-pill .status-reason { display: none; }
+.p-reason { font-size: 12.5px; color: var(--text-2); }
+.p-reason.is-danger { color: var(--red-text); font-weight: 600; }
+.p-sub { font-size: 12px; color: var(--text-3); }
+.p-alert {
+  background: linear-gradient(135deg, #dc2626, #b91c1c); color: #fff;
+  border-radius: var(--radius-sm); padding: 10px 12px; font-size: 12.5px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.p-alert strong { font-size: 13.5px; }
+.p-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.p-cell {
+  display: flex; flex-direction: column; gap: 2px; text-align: left;
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  padding: 10px 12px; color: var(--text); font: inherit; min-width: 0;
+}
+button.p-cell { cursor: pointer; }
+button.p-cell:hover { border-color: var(--accent); background: var(--accent-soft); }
+button.p-cell:focus-visible { outline: none; box-shadow: var(--focus); }
+.p-cell-label { font-size: 11px; font-weight: 650; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-2); }
+.p-cell-value { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.p-cell-value .stat-of { font-size: 13px; }
+.p-cell-sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.p-cell.is-amber { border-color: color-mix(in srgb, var(--amber) 45%, var(--border)); }
+.p-cell.is-red .p-cell-value { color: var(--red-text); }
+.p-controls { display: flex; gap: 8px; }
+.p-controls .btn { flex: 1; }
+.p-open { width: 100%; }
+.popup-body .toasts { right: 10px; left: 10px; bottom: 10px; max-width: none; }

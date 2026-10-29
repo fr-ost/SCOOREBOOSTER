@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ScoreX</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="dashboard.css">
+  <link rel="icon" type="image/png" href="../icons/icon32.png">
+</head>
+<body>
+  <a class="skip-link" href="#view">Skip to content</a>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar" aria-label="Main navigation">
+      <div class="brand">
+        <img src="../icons/icon48.png" alt="" width="28" height="28">
+        <div class="brand-text"><span class="brand-name">ScoreX</span><span class="brand-sub">AI comments on X</span></div>
+      </div>
+      <nav class="nav" id="nav"></nav>
+      <div class="sidebar-foot" id="sidebarFoot"></div>
+    </aside>
+    <div class="main">
+      <header class="topbar" id="topbar"></header>
+      <div id="alertSlot"></div>
+      <main id="view" class="view" tabindex="-1" aria-live="off"></main>
+    </div>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>

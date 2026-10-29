@@ -1,0 +1,206 @@
+// ScoreX service worker: wires Chrome events to the engine and answers dashboard/popup messages.
+// Everything is persisted (chrome.storage + IndexedDB), so this file is safe to be killed and restarted
+// at any time; on startup it re-arms the alarms and continues if the engine was running.
+
+import { ALARM, MSG, STATUS, STOP } from "../lib/constants.js";
+import { ensureDefaults, getSettings, getSecrets, getTargets, getState, patchState, updateCandidates, log } from "../lib/store.js";
+import * as engine from "../lib/engine.js";
+import * as T from "../lib/targets.js";
+import { onContentReady, onTabRemoved } from "../lib/tabs.js";
+import { runDiscovery, cancelDiscovery, candidatesToTargets } from "../lib/discovery.js";
+import { testModel, buildInstructions, buildInput, pickStyleExamples } from "../lib/generator.js";
+import { testSorsa, refreshScores } from "../lib/sorsa.js";
+import { summary as learningSummary, resetAb } from "../lib/learning.js";
+import { preview as cleanupPreview } from "../lib/cleanup.js";
+import { exportData, importData, clearHistory, resetAll } from "../lib/backup.js";
+import { normalizeHandle, now, sleep } from "../lib/util.js";
+import * as H from "../lib/history.js";
+import { refreshProfile } from "../lib/watcher.js";
+import { workerTab } from "../lib/tabs.js";
+import { recordSpend } from "../lib/costs.js";
+
+const EXT_ORIGIN = chrome.runtime.getURL("");
+
+// ---------- lifecycle ----------
+
+chrome.runtime.onInstalled.addListener(async (details) => {
+  await ensureDefaults();
+  await engine.ensureAlarms();
+  await engine.refreshBadge();
+  if (details.reason === "install") chrome.runtime.openOptionsPage().catch(() => {});
+});
+
+chrome.runtime.onStartup.addListener(async () => {
+  // Auto-resume after a Chrome restart: a running engine keeps running; safety stops stay stopped.
+  await ensureDefaults();
+  const st = await getState();
+  if (st.status === STATUS.RUNNING) log("info", "Chrome restarted - resuming");
+  await engine.ensureAlarms();
+  await engine.refreshBadge();
+});
+
+chrome.alarms.onAlarm.addListener((a) => {
+  if (a.name === ALARM.TICK) engine.tick("alarm");
+  else if (a.name === ALARM.WATCHDOG) engine.watchdog();
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => { onTabRemoved(tabId); });
+
+chrome.notifications.onClicked.addListener((id) => {
+  const hash = id === "sx-review" ? "#review" : "#overview";
+  chrome.tabs.create({ url: chrome.runtime.getURL("ui/dashboard.html" + hash) }).catch(() => {});
+  chrome.notifications.clear(id).catch(() => {});
+});
+
+// Every worker start: drop a lease left by a killed worker and re-arm alarms (cheap and idempotent).
+engine.onWorkerStart().catch(() => {});
+
+// ---------- discovery runner (needs the X tab, so it shares the engine lease) ----------
+
+async function startDiscovery(opts) {
+  const until = now() + 3 * 60 * 1000;
+  while (now() < until) {
+    const r = await engine.withLease("discovery", () => runDiscovery(opts, engine.stop), 60 * 60 * 1000);
+    if (!r || !r.busy) return r;
+    await sleep(5000);
+  }
+  log("warn", "Discovery could not start: ScoreX was busy for 3 minutes");
+  return { ok: false, error: "busy" };
+}
+
+async function refreshTargetsNow(handles) {
+  const st = await getState();
+  const list = handles.map(normalizeHandle).filter(Boolean);
+  if (st.status === STATUS.RUNNING) {
+    await patchState((s) => ({ pendingRefresh: [...new Set([...(s.pendingRefresh || []), ...list])] }));
+    return { ok: true, queued: list.length, when: "next idle check" };
+  }
+  // Not running: refresh now in the background (still through the same lease + page checks).
+  (async () => {
+    await engine.withLease("refresh", async () => {
+      const settings = await getSettings();
+      const tabId = await workerTab(settings);
+      if (tabId == null) return;
+      for (const h of list.slice(0, 20)) {
+        const r = await refreshProfile(tabId, h, settings);
+        if (r && r.stop) { await engine.stop(r.stop, r.detail); break; }
+        await sleep(3000 + Math.random() * 5000);
+      }
+    }, 20 * 60 * 1000);
+  })().catch((e) => log("error", "Refresh failed: " + e.message));
+  return { ok: true, queued: list.length, when: "now" };
+}
+
+async function previewPrompt(handle) {
+  const [settings, targets] = await Promise.all([getSettings(), getTargets()]);
+  const t = (handle && targets[normalizeHandle(handle)]) || Object.values(targets)[0] || T.newTarget("example", { group: "B", tier: 1 });
+  const post = (t.recentPosts && t.recentPosts[0] && { ...t.recentPosts[0], author: t.handle, authorName: t.name }) ||
+    { id: "1", author: t.handle, authorName: t.name || "Example", text: "Most teams ship features. The best teams ship distribution. Building is no longer the hard part.", lang: "en", createdAt: now() - 6 * 60 * 1000 };
+  const tone = T.effectiveTone(t, settings);
+  const previous = (await H.recentPosted(12)).map((r) => r.comment);
+  return {
+    ok: true,
+    instructions: buildInstructions({ settings, target: t, toneText: tone.text, angle: "(a random angle is chosen per comment)", myHandle: settings.account.handle }),
+    input: buildInput({ post, target: t, styleExamples: pickStyleExamples(settings, []), avoid: previous }),
+  };
+}
+
+// ---------- message router ----------
+
+const handlers = {
+  [MSG.GET_STATUS]: async () => ({ ok: true, status: await engine.getStatus() }),
+  start: () => engine.start(),
+  pause: () => engine.pause(),
+  resume: () => engine.resume(),
+  stop: () => engine.stop(STOP.USER),
+  runNow: () => engine.runNow(),
+  clearAlert: () => engine.clearAlert(),
+
+  targetsUpsert: async (m) => {
+    const settings = await getSettings();
+    const r = await T.upsert(m.rows || [], { ...(m.defaults || {}), myHandle: settings.account.handle }, !!m.overwrite);
+    return { ok: true, ...r };
+  },
+  targetsImport: async (m) => {
+    const settings = await getSettings();
+    const rows = T.parseImport(m.text || "");
+    if (!rows.length) return { ok: false, error: "No valid handles found in the file" };
+    const r = await T.upsert(rows, { ...(m.defaults || {}), source: "import", myHandle: settings.account.handle }, false);
+    return { ok: true, ...r, parsed: rows.length };
+  },
+  targetPatch: async (m) => {
+    const t = await T.patch(m.handle, m.patch || {});
+    return t ? { ok: true, target: t } : { ok: false, error: "Target not found" };
+  },
+  targetsBulk: async (m) => { await T.bulk(m.handles || [], m.patch || {}); return { ok: true }; },
+  targetsRemove: async (m) => ({ ok: true, removed: await T.removeMany(m.handles || []) }),
+  targetRefresh: (m) => refreshTargetsNow(m.handles || (m.handle ? [m.handle] : [])),
+
+  candidatesAdd: async (m) => {
+    const r = await candidatesToTargets(m.handles || [], m.group === "A" ? "A" : "B", Number(m.tier) === 1 ? 1 : 2, T.upsert);
+    return { ok: true, added: r.added, updated: r.updated };
+  },
+  candidatesRemove: async (m) => {
+    const set = new Set((m.handles || []).map(normalizeHandle));
+    await updateCandidates((all) => { for (const h of set) delete all[h]; return all; });
+    return { ok: true };
+  },
+  candidatesClear: async () => { await updateCandidates(() => ({})); return { ok: true }; },
+
+  discoveryStart: async (m) => {
+    startDiscovery({ source: m.source, handles: m.handles || [], query: m.query || "", maxUsers: m.maxUsers, enrich: !!m.enrich }).catch((e) => log("error", "Discovery failed: " + e.message));
+    return { ok: true };
+  },
+  discoveryCancel: async () => { await cancelDiscovery(); return { ok: true }; },
+
+  reviewAction: (m) => engine.reviewAction(m),
+  reviewApproveAll: () => engine.reviewBulk("approve"),
+  reviewSkipAll: () => engine.reviewBulk("skip"),
+
+  testOpenAI: async (m) => {
+    const [settings, secrets] = await Promise.all([getSettings(), getSecrets()]);
+    if (!secrets.openaiKey) return { ok: false, error: "Add your OpenAI API key first" };
+    const modelId = m.modelId || settings.presets.cheap.modelId;
+    const r = await testModel({ settings, apiKey: secrets.openaiKey, modelId, effort: m.effort });
+    if (r.ok) await recordSpend(r.cost, modelId, settings.timezone);
+    return r.ok ? { ok: true, text: r.text, usage: r.usage, cost: r.cost, ms: r.ms } : { ok: false, error: r.error ? `${r.error.kind}: ${r.error.message}` : "failed", usage: r.usage, ms: r.ms };
+  },
+  previewPrompt: (m) => previewPrompt(m.handle),
+
+  sorsaTest: () => testSorsa(),
+  sorsaRefresh: (m) => refreshScores(m.handles || []),
+
+  learningRun: async () => {
+    await patchState({ lastLearningAt: 0, learningForce: true });
+    const st = await getState();
+    if (st.status === STATUS.RUNNING) await engine.scheduleTick(5000, "learning check");
+    return { ok: true };
+  },
+  learningSummary: () => learningSummary(),
+  abReset: () => resetAb(),
+  cleanupPreview: () => cleanupPreview(),
+
+  exportData: (m) => exportData(m.parts),
+  importData: (m) => importData(m.data, m.parts),
+  historyClear: () => clearHistory(),
+  resetAll: async () => { await engine.stop(STOP.USER); return resetAll(); },
+};
+
+
+chrome.runtime.onMessage.addListener((msg, sender, reply) => {
+  if (!msg || typeof msg.sx !== "string") return false;
+  // Content scripts may only announce readiness; everything else must come from our own pages.
+  if (msg.sx === MSG.CONTENT_READY) {
+    if (sender.tab && sender.id === chrome.runtime.id) onContentReady(sender.tab.id, msg.url);
+    return false;
+  }
+  const fromExtensionPage = sender.id === chrome.runtime.id && (sender.url || "").startsWith(EXT_ORIGIN);
+  if (!fromExtensionPage) return false;
+  const h = handlers[msg.sx];
+  if (!h) { reply({ ok: false, error: "Unknown request: " + msg.sx }); return false; }
+  Promise.resolve()
+    .then(() => h(msg))
+    .then((r) => reply(r || { ok: true }))
+    .catch((e) => { log("error", `Request ${msg.sx} failed: ${e && e.message}`); reply({ ok: false, error: String((e && e.message) || e) }); });
+  return true;
+});

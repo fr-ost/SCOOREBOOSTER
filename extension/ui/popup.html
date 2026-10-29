@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>ScoreX</title>
+  <script src="theme.js"></script>
+  <link rel="stylesheet" href="dashboard.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body class="popup-body">
+  <div class="popup" id="popup">
+    <header class="p-head">
+      <img src="../icons/icon32.png" alt="" width="22" height="22">
+      <span class="p-brand">ScoreX</span>
+      <span class="p-spacer"></span>
+      <span id="pMode" class="mode-chip"></span>
+    </header>
+    <section class="p-status" id="pStatusBox" aria-live="polite"></section>
+    <div id="pAlert" class="p-alert" role="alert" hidden></div>
+    <div class="p-grid" id="pGrid"></div>
+    <div class="p-controls" id="pControls"></div>
+    <button type="button" class="btn p-open" id="pOpen">Open dashboard</button>
+  </div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
