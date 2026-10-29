@@ -663,6 +663,7 @@ async function postOne(rec, { tabId, settings, me, counts }) {
 // ---------- background work ----------
 
 async function backgroundStep({ tabId, settings, me }) {
+  const shouldStop = async () => !(await stillRunning());
   const st = await getState();
   if (st.pendingRefresh && st.pendingRefresh.length) {
     const [h, ...rest] = st.pendingRefresh;
@@ -672,12 +673,13 @@ async function backgroundStep({ tabId, settings, me }) {
     return { did: "refresh" };
   }
   if (settings.learning.enabled) {
-    const r = await learningStep({ tabId, settings, me });
+    const r = await learningStep({ tabId, settings, me, shouldStop });
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }
   if (settings.cleanup.enabled) {
-    const r = await cleanupStep({ tabId, settings, me });
+    if (await shouldStop()) return null;
+    const r = await cleanupStep({ tabId, settings, me, shouldStop });
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }

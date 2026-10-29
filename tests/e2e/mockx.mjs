@@ -144,6 +144,7 @@ ${likeBtn}
       const h = m[1].toLowerCase();
       const list = (m[2] === "following" ? M.following[h] : M.followers[h]) || [];
       const cells = list.map((x) => M.users[x] || M.addUser(x)).map(userCell);
+      if (!cells.length) return { html: shell(`<div data-testid="emptyState"><span data-testid="empty_state_header_text">Nobody here yet</span></div>`) };
       return { html: shell(`<div id="cells" data-total="${cells.length}">${cells.slice(0, 20).join("")}</div><template id="more">${cells.slice(20).join("")}</template>`) };
     }
     m = p.match(/^\/([A-Za-z0-9_]{1,15})\/?$/);

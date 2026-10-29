@@ -152,6 +152,7 @@ async function runDiscoveryInner(opts, stopFn) {
     const p = await profileOf(tabId, c.handle, settings);
     if (p.stop) { await setJob({ status: "error", message: "Stopped: " + p.detail, finishedAt: now() }); await stopFn(p.stop, p.detail); return { ok: false, error: p.detail }; }
     if (p.ok) {
+      p.posts = (p.posts || []).filter((x) => !x.isPinned && !x.isRepost && !x.isReply); // a pinned old post skews the rank
       const s = ownScore(p.profile, p.posts);
       c.profile = p.profile;
       c.name = p.profile.name || c.name;

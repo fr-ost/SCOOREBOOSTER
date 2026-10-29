@@ -46,8 +46,9 @@ const EDITABLE = ["name", "group", "tier", "enabled", "tone", "preset", "notes",
 export function sanitizePatch(patch) {
   const out = {};
   for (const k of EDITABLE) if (Object.hasOwn(patch, k)) out[k] = patch[k];
-  if ("group" in out) out.group = String(out.group).toUpperCase() === GROUP.A ? GROUP.A : GROUP.B;
-  if ("tier" in out) out.tier = Number(out.tier) === 1 ? 1 : 2;
+  // Group/tier chosen by the user are not changed by self-learning afterwards.
+  if ("group" in out) { out.group = String(out.group).toUpperCase() === GROUP.A ? GROUP.A : GROUP.B; out.groupManual = true; }
+  if ("tier" in out) { out.tier = Number(out.tier) === 1 ? 1 : 2; out.tierManual = true; }
   if ("enabled" in out) out.enabled = !!out.enabled;
   if ("priority" in out) { out.priority = clamp(Math.round(num(out.priority, 50)), 0, 100); out.priorityManual = true; }
   if ("tone" in out) out.tone = String(out.tone || "");
@@ -171,8 +172,19 @@ export function applyProfile(t, profile, posts, blend = 0.5) {
     if (profile.name) t.name = profile.name;
     t.rel = t.rel || {};
     if (profile.followsYou != null) {
-      if (profile.followsYou && t.rel.followsYou === false && !t.rel.followedBackAt) t.rel.followedBackAt = now();
-      t.rel.followsYou = profile.followsYou;
+      if (profile.followsYou) {
+        // A follow-back is only a real false -> true change (an unknown state that turns out true is not).
+        if (t.rel.followsYou === false && !t.rel.followedBackAt) t.rel.followedBackAt = now();
+        t.rel.followsYou = true;
+        t.rel.notFollowingSeen = 0;
+      } else if (t.rel.followsYou === true) {
+        // A missing "Follows you" badge could be a rendering/markup problem: downgrade only after two
+        // consecutive observations (cleanup acts only on followsYou === false).
+        t.rel.notFollowingSeen = (t.rel.notFollowingSeen || 0) + 1;
+        if (t.rel.notFollowingSeen >= 2) t.rel.followsYou = false;
+      } else {
+        t.rel.followsYou = false;
+      }
     }
     if (profile.youFollow != null) {
       if (profile.youFollow && !t.rel.youFollowSince) t.rel.youFollowSince = now();

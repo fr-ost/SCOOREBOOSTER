@@ -84,6 +84,9 @@ try {
   await H.msg("targetsUpsert", { rows: ["frank"], defaults: { group: "B", tier: 1 } });
   const rel8 = { youFollow: true, followsYou: false, youFollowSince: Date.now() - 8 * DAY, checkedAt: Date.now() };
   await patchTargets({ dave: { rel: rel8 }, erin: { rel: rel8 }, frank: { rel: rel8 } });
+  // your own followers list (cleanup's daily "Follows you" detection check reads it)
+  M.addUser("fan1", { followsMe: true }); M.addUser("fan2", { followsMe: true });
+  M.followers["0x_nation"] = ["fan1", "fan2"];
   let pv = await H.msg("cleanupPreview");
   assert(pv.ok && pv.enabled === false, "cleanup is OFF by default");
   await H.settings({ cleanup: { enabled: true, dailyLimit: 1, whitelist: ["erin"], protectTier1: true } });

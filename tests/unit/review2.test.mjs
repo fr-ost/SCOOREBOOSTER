@@ -125,3 +125,33 @@ describe("import hardening (security review)", () => {
     for (const h of ["__proto__", "https://x.com/__proto__", "constructor", "prototype"]) assert.equal(normalizeHandle(h), "", h);
   });
 });
+
+describe("learning/cleanup review fixes", () => {
+  test("whitelist accepts URLs, @handles and several per line", () => {
+    const s = sanitizeSettings({ cleanup: { whitelist: ["https://x.com/Cofounder", "@friend @brand", "x.com/investor/"] } });
+    assert.deepEqual(s.cleanup.whitelist.sort(), ["brand", "cofounder", "friend", "investor"]);
+    assert.deepEqual(sanitizeSettings({}).cleanup.whitelist, []);
+  });
+  test("discovery languages are normalized", () => {
+    assert.deepEqual(sanitizeSettings({ discovery: { languages: "EN, BN" } }).discovery.languages, ["en", "bn"]);
+  });
+  test("follows-you is only downgraded after two consecutive misses; unknown -> true is no follow-back", async () => {
+    const { applyProfile, newTarget } = await import("../../extension/lib/targets.js");
+    const t = newTarget("bob", { group: "B" });
+    applyProfile(t, { followsYou: true }, null);
+    assert.equal(t.rel.followsYou, true);
+    assert.equal(t.rel.followedBackAt, null, "unknown -> true is not a follow-back");
+    applyProfile(t, { followsYou: false }, null);
+    assert.equal(t.rel.followsYou, true, "one missing badge does not downgrade");
+    applyProfile(t, { followsYou: false }, null);
+    assert.equal(t.rel.followsYou, false);
+    applyProfile(t, { followsYou: true }, null);
+    assert.ok(t.rel.followedBackAt, "false -> true is a follow-back");
+  });
+  test("manual tier/group are marked", async () => {
+    const { sanitizePatch } = await import("../../extension/lib/targets.js");
+    const p = sanitizePatch({ tier: 2, group: "a" });
+    assert.equal(p.tierManual, true);
+    assert.equal(p.groupManual, true);
+  });
+});

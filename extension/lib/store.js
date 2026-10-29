@@ -8,7 +8,7 @@
 // async handlers never lose an update.
 
 import { K, STATUS, MODE, HARD, SCHEMA_VERSION } from "./constants.js";
-import { deepMerge, deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact } from "./util.js";
+import { deepMerge, deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact, parseHandleList } from "./util.js";
 import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK } from "./models.js";
 import { db, STORES } from "./db.js";
 
@@ -302,7 +302,17 @@ export function sanitizeSettings(raw) {
   const c = s.cleanup;
   c.afterDays = clamp(num(c.afterDays, 7), 7, 365);
   c.dailyLimit = clamp(Math.round(num(c.dailyLimit, 10)), 0, HARD.dailyUnfollows);
-  c.whitelist = (Array.isArray(c.whitelist) ? c.whitelist : []).map((h) => String(h).replace(/^@/, "").trim().toLowerCase()).filter(Boolean);
+  // Accept profile URLs, @handles and several handles per line, like everywhere else.
+  c.whitelist = parseHandleList((Array.isArray(c.whitelist) ? c.whitelist : c.whitelist ? [c.whitelist] : []).map(String).join("\n"));
+
+  const dv = s.discovery;
+  dv.languages = (Array.isArray(dv.languages) ? dv.languages : String(dv.languages || "").split(/[\s,;]+/)).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+  dv.minFollowers = Math.max(0, Math.round(num(dv.minFollowers, 1000)));
+  dv.maxFollowers = Math.max(dv.minFollowers, Math.round(num(dv.maxFollowers, 5000000)));
+  dv.activeWithinDays = clamp(num(dv.activeWithinDays, 14), 0, 365);
+  dv.maxUsers = clamp(Math.round(num(dv.maxUsers, 150)), 10, 1000);
+  dv.enrichMax = clamp(Math.round(num(dv.enrichMax, 25)), 0, 100);
+  dv.skipBots = dv.skipBots !== false;
 
   for (const g of ["A", "B"]) {
     s.groups[g].dailyLimit = clamp(Math.round(num(s.groups[g].dailyLimit, g === "A" ? 10 : 20)), 0, HARD.dailyComments);

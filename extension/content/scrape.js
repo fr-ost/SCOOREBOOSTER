@@ -197,7 +197,7 @@
       following: linkCount(primary, "profileFollowing", handle),
       verified: !!D.q("verifiedIcon", nameEl),
       protected: !!D.q("lockIcon", nameEl),
-      followsYou: !!D.q("followsYouBadge", primary),
+      followsYou: !!D.q("followsYouBadge", primary) || D.re("followsYou").test(D.text(nameEl)),
       youFollow: rb.un ? true : rb.fo || rb.pend ? false : null,
       followPending: !!rb.pend,
       defaultAvatar: /default_profile/.test(avatar),

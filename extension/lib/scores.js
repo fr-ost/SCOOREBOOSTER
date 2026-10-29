@@ -122,7 +122,7 @@ export function passesDiscoveryFilters(cand, f, ts = now()) {
     if (f.maxFollowers && followers > f.maxFollowers) why.push("followers above range");
   }
   if (f.activeWithinDays && cand.lastPostAt && ts - cand.lastPostAt > f.activeWithinDays * DAY) why.push("inactive");
-  if (f.languages && f.languages.length && cand.lang && !f.languages.includes(cand.lang)) why.push("language");
+  if (f.languages && f.languages.length && cand.lang && !f.languages.map((x) => String(x).toLowerCase()).includes(String(cand.lang).toLowerCase())) why.push("language");
   if (f.skipBots && cand.score && cand.score.bot) why.push("looks like a bot/spam");
   if (cand.profile && cand.profile.protected) why.push("protected account");
   return { pass: why.length === 0, why };
