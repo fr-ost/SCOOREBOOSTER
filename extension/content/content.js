@@ -38,7 +38,7 @@
       if (hit.stop) return { ok: false, settled: hit.stop };
       return { ok: true, key: hit.key };
     },
-    async scrapeTweets(m) { return { ok: true, ...S.scrapeTweets(m.limit || 40) }; },
+    async scrapeTweets(m) { return { ok: true, ...S.scrapeTweets(m.limit || 40), emptyState: !!D.q("emptyState") }; },
     async scrapeProfile() { return { ok: true, ...S.scrapeProfile() }; },
     async scrapeUsers(m) { return { ok: true, ...S.scrapeUsers(m.limit || 200) }; },
     async scrapeStatus(m) { return { ok: true, ...S.scrapeStatus(m.tweetId, m.me) }; },

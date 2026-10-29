@@ -94,7 +94,7 @@ export default {
               ctx.save((d) => {
                 d.customTones = (d.customTones || []).filter((x) => x.id !== c.id);
                 for (const g of ["A", "B"]) if (d.groups[g].tone === "custom:" + c.id) d.groups[g].tone = g === "A" ? "friendly" : "insightful";
-                d.learning.abTones = (d.learning.abTones || []).filter((x) => x !== "custom:" + c.id);
+                for (const g of ["A", "B"]) d.learning.abTones[g] = (d.learning.abTones[g] || []).filter((x) => x !== "custom:" + c.id);
               });
             }, { iconName: "trash", size: "sm", kind: "ghost-danger", title: "Remove tone" })),
           ctField(c.id, "text", "textarea", { rows: 2, ariaLabel: "Custom tone description", placeholder: "Describe the voice" })));
@@ -188,7 +188,8 @@ export default {
         ctx.field({ path: "learning.abTesting", type: "toggle", label: "A/B test tones and presets" }),
         ctx.field({ path: "learning.explore", type: "percent", label: "Exploration share", min: 0, max: 60, step: 5, suffix: "%", hint: "Share of comments used to test alternatives (max 60%)" }),
         ctx.field({ path: "learning.minSamples", type: "number", label: "Min samples per variant", min: 2, max: 100 })),
-      chipsField("learning.abTones", () => allToneKeys(ctx.settings).map((k) => [k, toneLabel(k, ctx.settings)]), "Tones to test"),
+      chipsField("learning.abTones.A", () => allToneKeys(ctx.settings).map((k) => [k, toneLabel(k, ctx.settings)]), "Group A tones to test (the group default is always included)"),
+      chipsField("learning.abTones.B", () => allToneKeys(ctx.settings).map((k) => [k, toneLabel(k, ctx.settings)]), "Group B tones to test (the group default is always included)"),
       chipsField("learning.abPresets", () => PRESET_KEYS.map((k) => [k, PRESET_LABEL[k]]), "Presets to test (none = only the matrix preset)"));
 
     const abResults = h("div", { class: "stack", id: "abResults" });
@@ -201,7 +202,7 @@ export default {
       clear(abResults);
       if (!data) { abResults.appendChild(h("p", { class: "muted small" }, "Results appear once ScoreX has posted comments and checked how they did (likes, replies, author replies, follow-backs).")); return; }
       const sug = data.suggestions || {};
-      const sugRows = ["A", "B"].filter((g) => sug[g]).map((g) => h("div", { class: "suggestion" },
+      const sugRows = ["A", "B"].filter((g) => sug[g] && sug[g].tone).map((g) => h("div", { class: "suggestion" },
         groupBadge(g),
         h("div", null,
           h("div", null, "Best so far: ", h("strong", null, toneLabel(sug[g].tone, ctx.settings)), sug[g].preset ? [" with ", h("strong", null, PRESET_LABEL[sug[g].preset] || sug[g].preset)] : null),

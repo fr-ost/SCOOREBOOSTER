@@ -76,18 +76,20 @@
     return { ok: true, where: c.where, text: boxText(c.box) };
   }
 
+  // Raw text (no trimming) so a chunk that is only a space still counts as typed.
+  const rawText = (box) => (box ? String(box.textContent || "") : "");
   function insertChunk(box, chunk) {
-    const before = boxText(box);
+    const before = rawText(box);
     let ok = false;
     try { ok = document.execCommand("insertText", false, chunk); } catch (_) { ok = false; }
-    if (!ok || boxText(box) === before) {
+    if (!ok && rawText(box) === before) {
       try {
         const dt = new DataTransfer();
         dt.setData("text/plain", chunk);
         box.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, composed: true, clipboardData: dt }));
       } catch (_) {}
     }
-    return boxText(box) !== before;
+    return rawText(box) !== before;
   }
 
   // Type the next chunk of characters at the end of the composer.
@@ -122,8 +124,19 @@
     if (!dlg) return { ok: true };
     const close = D.q("composerClose", dlg);
     if (close) D.humanClick(close);
-    const confirm = await D.waitFor(() => D.q("discardConfirm"), 2500, 200);
-    if (confirm) D.humanClick(confirm);
+    // X asks "Save post?" (Save = confirm, Discard = cancel) or "Discard post?" (Discard = confirm).
+    // Always pick the button that says Discard; never Save the AI draft into the account's drafts.
+    const sheet = await D.waitFor(() => D.q("confirmSheet") || D.q("discardConfirm"), 2500, 200);
+    if (sheet) {
+      const root = D.q("confirmSheet") || document;
+      const buttons = [D.q("confirmSheetConfirm", root), D.q("confirmSheetCancel", root)].filter(Boolean);
+      const discard = buttons.find((b) => /discard/i.test(D.text(b)));
+      if (discard) D.humanClick(discard);
+      else {
+        const cancel = D.q("confirmSheetCancel", root);
+        if (cancel && !/save/i.test(D.text(cancel))) D.humanClick(cancel);
+      }
+    }
     return { ok: !openDialog() };
   }
 
@@ -133,8 +146,12 @@
     const got = boxText(c.box);
     if (expectText && norm(expectText) !== got) return { ok: false, error: "composer_text_mismatch", text: got };
     const key = c.where === "modal" ? "replySubmitModal" : "replySubmitInline";
-    const btn = await D.waitFor(() => { const b = D.q(key, c.root) || D.q("replySubmitModal") || D.q("replySubmitInline"); return b && !D.isDisabled(b) ? b : null; }, 6000, 250);
-    if (!btn) return { ok: false, error: "submit_button_missing_or_disabled", dom: true };
+    const find = () => D.q(key, c.root) || D.q("replySubmitModal") || D.q("replySubmitInline");
+    const btn = await D.waitFor(() => { const b = find(); return b && !D.isDisabled(b) ? b : null; }, 6000, 250);
+    if (!btn) {
+      // A present-but-disabled button usually means X rejects the text (e.g. over its weighted length).
+      return find() ? { ok: false, error: "submit_button_disabled" } : { ok: false, error: "submit_button_missing", dom: true };
+    }
     D.humanClick(btn);
     return { ok: true, where: c.where };
   }
@@ -202,7 +219,7 @@
       replies: st.focal.metrics.replies || 0,
       reposts: st.focal.metrics.reposts || 0,
       views: st.focal.metrics.views,
-      authorReplied: !!st.replies.find((r) => r.author === t),
+      authorReplied: (st.focal.metrics.replies || 0) > 0 && !!st.replies.find((r) => r.author === t),
     };
   }
 

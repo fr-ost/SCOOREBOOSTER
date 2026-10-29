@@ -49,7 +49,7 @@ export function sanitizePatch(patch) {
   if ("group" in out) out.group = String(out.group).toUpperCase() === GROUP.A ? GROUP.A : GROUP.B;
   if ("tier" in out) out.tier = Number(out.tier) === 1 ? 1 : 2;
   if ("enabled" in out) out.enabled = !!out.enabled;
-  if ("priority" in out) out.priority = clamp(Math.round(num(out.priority, 50)), 0, 100);
+  if ("priority" in out) { out.priority = clamp(Math.round(num(out.priority, 50)), 0, 100); out.priorityManual = true; }
   if ("tone" in out) out.tone = String(out.tone || "");
   if ("preset" in out) out.preset = PRESET_KEYS.includes(out.preset) ? out.preset : "";
   if ("notes" in out) out.notes = String(out.notes || "").slice(0, 500);

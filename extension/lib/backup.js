@@ -1,6 +1,6 @@
 // ScoreX - export / import as JSON. API keys (sx.secrets) are never exported or imported.
 
-import { K, VERSION, STATUS } from "./constants.js";
+import { K, VERSION, STATUS, HS, OPEN_STATUSES } from "./constants.js";
 import { load, save, remove, getSettings, saveSettings, sanitizeSettings, updateTargets, patchState, DEFAULT_STATE } from "./store.js";
 import * as H from "./history.js";
 import { db, STORES } from "./db.js";
@@ -45,11 +45,32 @@ export async function importData(data, parts = ["settings", "targets", "history"
     await db().putMany(STORES.history, recs);
     imported.history = recs.length;
   }
-  if (parts.includes("learning") && data.learning) { await save({ [K.learning]: data.learning }); imported.learning = true; }
+  if (parts.includes("candidates") && data.candidates && typeof data.candidates === "object") {
+    const clean = {};
+    for (const [k, c] of Object.entries(data.candidates)) {
+      const h = normalizeHandle((c && c.handle) || k);
+      if (h && c && typeof c === "object") clean[h] = { ...c, handle: h };
+    }
+    await save({ [K.candidates]: { ...(await load(K.candidates, {})), ...clean } });
+    imported.candidates = Object.keys(clean).length;
+  }
+  if (parts.includes("learning") && data.learning && typeof data.learning === "object") { await save({ [K.learning]: data.learning }); imported.learning = true; }
   return { ok: true, imported };
 }
 
-export async function clearHistory() { await H.clearAll(); return { ok: true }; }
+// Clears history but keeps what the safety limits depend on: comments posted (or probably posted) in the
+// last 8 days and items still in the queue. Without them the daily / per-target limits would reset.
+export async function clearHistory() {
+  const keepSince = now() - 8 * 864e5;
+  let removed = 0, kept = 0;
+  for (const r of await H.all()) {
+    const recentPost = (r.status === HS.POSTED || r.maybePosted) && (r.postedAt || r.attemptAt || r.createdAt) >= keepSince;
+    if (recentPost || OPEN_STATUSES.includes(r.status)) { kept++; continue; }
+    await H.remove(r.id);
+    removed++;
+  }
+  return { ok: true, removed, kept };
+}
 
 // Factory reset of everything except API keys.
 export async function resetAll() {

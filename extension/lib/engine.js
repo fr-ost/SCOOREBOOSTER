@@ -3,7 +3,7 @@
 // exactly where it left off. A job lease in state.job prevents overlapping work.
 
 import { STATUS, MODE, HS, STOP, STOP_LABEL, ALARM, K, HARD, OPEN_STATUSES } from "./constants.js";
-import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, log, load } from "./store.js";
+import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, log, load, save } from "./store.js";
 import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
@@ -11,6 +11,7 @@ import { warmup, effectiveMode, dailyLimit, groupLimit, generationLimit, likeLim
 import { skipReason } from "./filters.js";
 import { effectiveTone, effectivePreset, isActive } from "./targets.js";
 import { generate } from "./generator.js";
+import { weightedLength } from "./quality.js";
 import { workerTab, releaseGuard } from "./tabs.js";
 import { watchOnce, refreshProfile } from "./watcher.js";
 import { postReply } from "./poster.js";
@@ -45,6 +46,10 @@ export async function scheduleTick(ms, why = "") {
 export async function onWorkerStart() {
   const st = await getState();
   if (st.job) await patchState({ job: null });
+  const d = await load(K.discovery, null);
+  if (d && (d.status === "running" || d.status === "cancelling")) {
+    await save({ [K.discovery]: { ...d, status: "error", message: "Interrupted (browser or extension restarted)", finishedAt: now() } });
+  }
   await ensureAlarms();
 }
 
@@ -67,47 +72,61 @@ export async function watchdog() {
 
 // ---------- lease ----------
 
-async function acquireLease(kind, ms = 12 * MIN) {
+// A lease lives LEASE_MS and is renewed every minute while its holder runs, so a killed holder's lease
+// expires within minutes while a long discovery keeps its lease for as long as it is alive.
+const LEASE_MS = 3 * MIN;
+async function acquireLease(kind) {
   let got = false;
   const id = uid("j");
   await patchState((s) => {
     if (s.job && s.job.leaseUntil > now()) return {};
     got = true;
-    return { job: { id, kind, startedAt: now(), leaseUntil: now() + ms } };
+    return { job: { id, kind, startedAt: now(), leaseUntil: now() + LEASE_MS } };
   });
   return got ? id : null;
 }
 async function releaseLease(id) {
   await patchState((s) => (s.job && s.job.id === id ? { job: null } : {}));
 }
-export async function withLease(kind, fn, ms) {
-  const id = await acquireLease(kind, ms);
+export async function withLease(kind, fn) {
+  const id = await acquireLease(kind);
   if (!id) return { ok: false, busy: true };
   keepAlive(true);
-  try { return await fn(); } finally { await releaseLease(id); keepAlive(false); }
+  const beat = setInterval(() => {
+    patchState((s) => (s.job && s.job.id === id ? { job: { ...s.job, leaseUntil: now() + LEASE_MS } } : {})).catch(() => {});
+  }, 60 * 1000);
+  try { return await fn(); } finally { clearInterval(beat); await releaseLease(id); keepAlive(false); }
 }
 
 // ---------- status ----------
 
+// Limits use ROLLING windows (last 24h / last 7 days), so an active-hours window that crosses midnight
+// can never get two daily limits in one session, and one target never gets 2 replies within 24h.
+// A reply that was probably sent (unclear confirmation, interrupted worker) counts as posted.
+export const countsAsPosted = (r) => r.status === HS.POSTED || !!r.maybePosted;
+const postedTime = (r) => r.postedAt || r.attemptAt || r.updatedAt || r.createdAt;
+
 export async function computeCounts(settings, ts = now()) {
   const tz = settings.timezone;
   const today = dayKey(ts, tz);
-  const recent = await H.since(ts - 8 * DAY);
+  const recent = await H.since(ts - 9 * DAY);
   const open = await H.openQueue();
-  const c = { postedToday: 0, postedGroup: { A: 0, B: 0 }, generatedToday: 0, likedToday: 0, skippedToday: 0, failedToday: 0, costToday: 0,
+  const c = { postedToday: 0, postedCalendarDay: 0, postedGroup: { A: 0, B: 0 }, generatedToday: 0, likedToday: 0, skippedToday: 0, failedToday: 0, costToday: 0,
     openQueue: 0, openGroup: { A: 0, B: 0 }, pendingReview: 0, queued: 0, targets: {} };
   const tgt = (h) => (c.targets[h] ||= { day: 0, week: 0, open: 0 });
   for (const r of recent) {
     if (dayKey(r.createdAt, tz) === today) {
-      if (r.attempts > 0) c.generatedToday++;
       c.costToday += r.cost || 0;
       if (r.status === HS.SKIPPED && r.attempts > 0) c.skippedToday++;
       if (r.status === HS.FAILED) c.failedToday++;
     }
-    if (r.liked && r.likedAt && dayKey(r.likedAt, tz) === today) c.likedToday++;
-    if (r.status === HS.POSTED && r.postedAt) {
-      if (dayKey(r.postedAt, tz) === today) { c.postedToday++; c.postedGroup[r.group] = (c.postedGroup[r.group] || 0) + 1; tgt(r.target).day++; }
-      if (ts - r.postedAt < 7 * DAY) tgt(r.target).week++;
+    if (r.attempts > 0 && ts - r.createdAt < DAY) c.generatedToday++;
+    if (r.liked && r.likedAt && ts - r.likedAt < DAY) c.likedToday++;
+    if (countsAsPosted(r)) {
+      const pt = postedTime(r);
+      if (ts - pt < DAY) { c.postedToday++; c.postedGroup[r.group] = (c.postedGroup[r.group] || 0) + 1; tgt(r.target).day++; }
+      if (dayKey(pt, tz) === today) c.postedCalendarDay++;
+      if (ts - pt < 7 * DAY) tgt(r.target).week++;
     }
   }
   for (const r of open) {
@@ -177,10 +196,11 @@ export async function start() {
   if (!active.length) return { ok: false, error: "Add at least one enabled target first (Targets)." };
   if (settings.watch.strategy === "list" && !settings.watch.listUrls.length) log("warn", "Watch strategy is 'X List' but no list URL is set - using batched search instead.");
   const ts = now();
-  await patchState({
+  await patchState((s) => ({
     status: STATUS.RUNNING, stopReason: null, stopDetail: "", alert: null, startedAt: ts,
-    firstStartedAt: st.firstStartedAt || ts, consecutiveFailures: 0, softErrors: 0, job: null,
-  });
+    firstStartedAt: st.firstStartedAt || ts, consecutiveFailures: 0, softErrors: 0, internalErrors: 0, emptyStreak: 0,
+    job: s.job && s.job.leaseUntil > now() ? s.job : null, // never drop a live lease (e.g. a running discovery)
+  }));
   if (!st.firstStartedAt) log("info", `First start. Warm-up: review mode is forced for ${HARD.warmupDays} days.`);
   log("info", "Started");
   await scheduleTick(randInt(4000, 12000), "start");
@@ -202,7 +222,7 @@ export async function resume() {
   const st = await getState();
   if (st.status === STATUS.RUNNING) return { ok: true };
   if (st.status === STATUS.STOPPED) return start();
-  await patchState({ status: STATUS.RUNNING, alert: null, consecutiveFailures: 0, softErrors: 0 });
+  await patchState({ status: STATUS.RUNNING, alert: null, consecutiveFailures: 0, softErrors: 0, internalErrors: 0 });
   log("info", "Resumed");
   await scheduleTick(randInt(3000, 10000), "resume");
   await refreshBadge();
@@ -273,12 +293,12 @@ async function expireQueue(settings, ts = now()) {
     if (r.status === HS.APPROVED && ts - (r.approvedAt || r.createdAt) > settings.review.approvedMaxAgeMin * MIN) why = "Approved but expired before a posting slot";
     if (r.status === HS.QUEUED && r.postCreatedAt && ts - r.postCreatedAt > (settings.watch.maxPostAgeMin + 25) * MIN) why = "Too late to post (post is no longer fresh)";
     if (r.status === HS.POSTING && ts - (r.attemptAt || r.updatedAt) > 10 * MIN) why = "Interrupted while posting - check the post manually";
-    if (why) await H.patch(r.id, { status: r.status === HS.POSTING ? HS.FAILED : HS.SKIPPED, reason: why });
+    if (why) await H.patch(r.id, (cur) => (cur.status === r.status ? { status: r.status === HS.POSTING ? HS.FAILED : HS.SKIPPED, reason: why, maybePosted: r.status === HS.POSTING } : null));
   }
 }
 
 // Main loop body. Returns the delay until the next tick.
-async function tickBody(settings, secrets) {
+async function tickBody(settings, secrets, reason = "timer") {
   const ts = now();
   let state = await getState();
 
@@ -319,31 +339,46 @@ async function tickBody(settings, secrets) {
   const mode = effectiveMode(settings, state, ts);
   let counts = await computeCounts(settings, ts);
 
-  // 1) Post one due item (approved in review mode, or queued in auto mode).
+  // 1) Post one due item (approved in review mode, or queued in auto mode). Every due item is tried in
+  //    order, so one item blocked by its group/target limit never blocks the others.
+  const targetsNow = await getTargets();
   const open = await H.openQueue();
   const due = open
     .filter((r) => (r.status === HS.APPROVED || (r.status === HS.QUEUED && mode === MODE.AUTO)) && (!r.scheduledFor || r.scheduledFor <= ts))
-    .sort((a, b) => (a.scheduledFor || a.createdAt) - (b.scheduledFor || b.createdAt))[0];
-  if (due) {
-    const targets = await getTargets();
-    const target = targets[due.target] || { group: due.group, tier: due.tier };
-    const gate = postGate(settings, state, { postedToday: counts.postedToday, postedGroup: counts.postedGroup, target: counts.targets[due.target] }, target, ts);
+    .sort((a, b) => (a.scheduledFor || a.createdAt) - (b.scheduledFor || b.createdAt));
+  let waitFor = null;
+  for (const item of due) {
+    const target = targetsNow[item.target];
+    if (!target || !isActive(target, settings)) {
+      await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: "Target disabled or removed" } : null));
+      continue;
+    }
+    const gate = postGate(settings, state, { postedToday: counts.postedToday, postedGroup: counts.postedGroup, target: counts.targets[item.target] }, target, ts);
     if (gate.ok) {
-      const res = await postOne(due, { tabId, settings, me, counts });
+      const res = await postOne(item, { tabId, settings, me, counts });
       if (res === "stopped") return null;
+      if (res === "aborted" || res === "moved" || res === "gone") continue;
       return { delay: humanDelay(40 * 1000, 120 * 1000), why: "after post" };
     }
     if (gate.reason === "target_day" || gate.reason === "target_week") {
-      await H.patch(due.id, { status: HS.SKIPPED, reason: GATE_LABEL[gate.reason] });
-    } else if (gate.until && gate.until - ts < 8 * MIN && gate.reason !== "outside_active_hours") {
-      // Nearly time: wait for the slot instead of browsing more.
-      return { delay: gate.until - ts + randInt(5, 40) * 1000, why: GATE_LABEL[gate.reason] };
+      await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: GATE_LABEL[gate.reason] } : null));
+      continue;
     }
+    // Shared waits (gap, break) apply to every item: wait for the slot if it is close.
+    if (gate.until && gate.reason !== "outside_active_hours") { waitFor = gate; break; }
   }
+  if (waitFor && waitFor.until - ts < 8 * MIN) return { delay: waitFor.until - ts + randInt(5, 40) * 1000, why: GATE_LABEL[waitFor.reason] };
   if (!(await stillRunning())) return null;
 
-  // 2) Watch for new posts and generate (unless the review queue is full).
-  if (counts.pendingReview < settings.review.maxPending) {
+  // 2) Watch for new posts and generate (unless the review queue is full). Watch pages are never loaded
+  //    more often than the hard minimum interval, whatever schedules the tick.
+  // A manual "Run a check now" may come sooner (20 s), and waits for that rather than being dropped.
+  const sinceWatch = state.lastWatchAt ? ts - state.lastWatchAt : Infinity;
+  const minWatchGap = (reason === "manual" ? 20 : HARD.minCheckIntervalSec) * 1000;
+  if (counts.pendingReview < settings.review.maxPending && sinceWatch < minWatchGap && reason === "manual") {
+    return { delay: minWatchGap - sinceWatch + 1000, why: "manual" };
+  }
+  if (counts.pendingReview < settings.review.maxPending && sinceWatch >= minWatchGap) {
     const targets = await getTargets();
     const w = await watchOnce(tabId, settings, targets, ts);
     if (w.stop) { await stop(w.stop, `${w.detail || ""} (while checking ${w.source || "posts"})`); return null; }
@@ -383,8 +418,14 @@ async function tickBody(settings, secrets) {
   let delay = nextCheckMs(settings);
   const st2 = await getState();
   const open2 = await H.openQueue();
-  const nextDue = open2.filter((r) => r.status === HS.APPROVED || (r.status === HS.QUEUED && mode === MODE.AUTO)).map((r) => Math.max(r.scheduledFor || 0, st2.nextCommentAt || 0)).sort((a, b) => a - b)[0];
-  if (nextDue) delay = Math.min(delay, Math.max(20000, nextDue - now() + randInt(5, 30) * 1000));
+  const counts2 = await computeCounts(settings, now());
+  const tg2 = await getTargets();
+  const postable = open2.filter((r) => (r.status === HS.APPROVED || (r.status === HS.QUEUED && mode === MODE.AUTO)) && tg2[r.target]).filter((r) => {
+    const g = postGate(settings, { ...st2, nextCommentAt: 0, breakUntil: 0, lastCommentAt: 0 }, { postedToday: counts2.postedToday, postedGroup: counts2.postedGroup, target: counts2.targets[r.target] }, tg2[r.target], now());
+    return g.ok || g.reason === "outside_active_hours";
+  });
+  const nextDue = postable.map((r) => Math.max(r.scheduledFor || 0, st2.nextCommentAt || 0, st2.breakUntil || 0)).sort((a, b) => a - b)[0];
+  if (nextDue) delay = Math.min(delay, Math.max(HARD.minCheckIntervalSec * 1000, nextDue - now() + randInt(5, 30) * 1000));
   return { delay, why: "next check" };
 }
 
@@ -399,7 +440,9 @@ export async function tick(reason = "alarm") {
       await patchState({ lastTickAt: now(), tickCount: (st.tickCount || 0) + 1 });
       const [settings, secrets] = await Promise.all([getSettings(), getSecrets()]);
       if (!secrets.openaiKey) { await stop(STOP.NO_API_KEY, "Add your OpenAI API key"); return null; }
-      return tickBody(settings, secrets);
+      const out = await tickBody(settings, secrets, reason);
+      await patchState((s) => (s.internalErrors ? { internalErrors: 0 } : {}));
+      return out;
     });
     if (res && res.busy) { await scheduleTick(reason === "manual" ? randInt(10, 20) * 1000 : randInt(45, 90) * 1000, reason === "manual" ? "manual" : "busy"); return; }
     if (await stillRunning()) {
@@ -495,7 +538,12 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
     if (c && c.stop) { await stop(c.stop, c.detail); return "stopped"; }
     t = c;
   }
-  const arm = chooseArm(t, settings, await H.all().catch(() => []));
+  let arm = {};
+  if (settings.learning.enabled && settings.learning.abTesting) {
+    const learnMeta = await load(K.learning, {});
+    const since = Math.max(learnMeta.abResetAt || 0, now() - 120 * DAY);
+    arm = chooseArm(t, settings, await H.since(since).catch(() => []), learnMeta.abResetAt || 0);
+  }
   const tone = arm.tone ? effectiveTone(t, settings, arm.tone) : effectiveTone(t, settings);
   const presetKey = arm.preset || preset0;
   const previous = (await H.recentPosted(50)).map((r) => r.comment).filter(Boolean);
@@ -541,9 +589,33 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     return "moved";
   }
   const allowLike = likeLimit(settings) > counts.likedToday;
-  await H.patch(rec.id, { status: HS.POSTING, attemptAt: now() });
-  const r = await postReply(rec, { tabId, settings, me, allowLike });
+  if (!(await stillRunning())) return "aborted";
+  // Compare-and-set: only claim the item if it is still in the state we picked it in (the user may have
+  // skipped or edited it a moment ago), and post the freshly read text.
+  const prevStatus = rec.status;
+  let claimed = null;
+  await H.patch(rec.id, (r) => {
+    if (r.status !== prevStatus) return null;
+    claimed = r;
+    return { status: HS.POSTING, attemptAt: now() };
+  });
+  if (!claimed) return "gone";
+  const shouldStop = async () => !(await stillRunning());
+  const r = await postReply(claimed, { tabId, settings, me, allowLike, shouldStop });
   const ts = now();
+  if (r.aborted) {
+    await H.patch(rec.id, { status: prevStatus, reason: "Posting interrupted by Pause/Stop - not posted" });
+    log("info", `Posting to @${rec.target} interrupted by you before submitting`);
+    return "aborted";
+  }
+  if (r.retry) {
+    const retries = (claimed.retries || 0) + 1;
+    if (retries >= 3) await H.patch(rec.id, { status: HS.FAILED, retries, reason: "The post page did not load 3 times (" + r.reason + ")" });
+    else await H.patch(rec.id, { status: prevStatus, retries, scheduledFor: ts + humanDelay(3 * MIN, 6 * MIN), reason: "Will retry: " + r.reason });
+    await patchState({ nextCommentAt: ts + humanDelay(2 * MIN, 4 * MIN), softErrors: (state.softErrors || 0) + 1 });
+    log("warn", `The post page for @${rec.target} did not load (${r.reason})`);
+    return "retry";
+  }
   if (r.ok) {
     await H.patch(rec.id, { status: HS.POSTED, postedAt: ts, replyUrl: r.replyUrl || "", replyId: r.replyId || "", liked: !!r.liked, likedAt: r.liked ? ts : null, reason: r.already ? "Reply was already in the thread" : "" });
     await patchState({ ...afterPost(settings, state, ts), consecutiveFailures: 0, lastLikeAt: r.liked ? ts : state.lastLikeAt, internalErrors: 0 });
@@ -566,7 +638,8 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     return "skipped";
   }
   const n = (state.consecutiveFailures || 0) + 1;
-  await H.patch(rec.id, { status: HS.FAILED, reason: r.reason || "post failed", liked: !!r.liked, likedAt: r.liked ? ts : null });
+  // maybePosted: X may have accepted it (composer cleared, no confirmation) -> counts toward limits.
+  await H.patch(rec.id, { status: HS.FAILED, reason: r.reason || "post failed", liked: !!r.liked, likedAt: r.liked ? ts : null, maybePosted: !!r.unsure });
   await patchState({ consecutiveFailures: n, nextCommentAt: ts + humanDelay(3 * MIN, 6 * MIN) });
   log("warn", `Posting to @${rec.target} failed: ${r.reason}`);
   if (n >= settings.safety.maxConsecutiveFailures) { await stop(STOP.POST_FAILURES, `${n} posting failures in a row (last: ${r.reason})`); return "stopped"; }
@@ -605,16 +678,23 @@ export async function reviewAction({ id, action, text }) {
   const editable = [HS.PENDING_REVIEW, HS.APPROVED, HS.QUEUED].includes(rec.status);
   if (!editable && action !== "skip") return { ok: false, error: `Item is already ${rec.status}` };
   const clean = typeof text === "string" ? text.trim() : null;
-  if (clean != null && clean.length > HARD.maxCommentChars) return { ok: false, error: `Comment is longer than ${HARD.maxCommentChars} characters` };
+  if (clean != null && weightedLength(clean) > HARD.maxCommentChars) return { ok: false, error: `Comment is longer than X allows (${HARD.maxCommentChars}; CJK characters and emoji count double)` };
   const edits = clean != null && clean !== rec.comment ? { comment: clean, edited: true, originalComment: rec.originalComment || rec.comment } : {};
-  if (action === "save") return { ok: true, record: await H.patch(id, edits) };
+  // Compare-and-set against the status we saw, so a click never overwrites an item that started posting.
+  const cas = async (fields) => {
+    const r = await H.patch(id, (cur) => ([HS.PENDING_REVIEW, HS.APPROVED, HS.QUEUED].includes(cur.status) ? fields : null));
+    return r ? { ok: true, record: r } : { ok: false, error: "The item is being posted or was already handled" };
+  };
+  if (action === "save") return cas(edits);
   if (action === "skip") {
     if (!editable) return { ok: false, error: `Item is already ${rec.status}` };
-    return { ok: true, record: await H.patch(id, { status: HS.SKIPPED, reason: "Skipped by you" }) };
+    return cas({ status: HS.SKIPPED, reason: "Skipped by you" });
   }
   if (action === "approve") {
     if (!(clean != null ? clean : rec.comment)) return { ok: false, error: "Comment is empty" };
-    const r = await H.patch(id, { ...edits, status: HS.APPROVED, approvedAt: now(), scheduledFor: now() });
+    const res = await cas({ ...edits, status: HS.APPROVED, approvedAt: now(), scheduledFor: now() });
+    if (!res.ok) return res;
+    const r = res.record;
     const st = await getState();
     if (st.status === STATUS.RUNNING) await scheduleTick(randInt(15, 45) * 1000, "approved item");
     await refreshBadge();
@@ -632,13 +712,20 @@ export async function reviewAction({ id, action, text }) {
       bestComments: await bestComments(), myHandle: settings.account.handle, compatFor: await compatLoader(), onCall: await onCallFactory(settings),
       feedback: "The owner asked for a different reply. Use a different angle and opening than: " + truncate(rec.comment, 200),
     });
-    const calls = [...(rec.calls || []), ...g.calls];
-    if (g.stop) { await H.patch(id, { calls }); await stop(g.stop, g.error && g.error.message); return { ok: false, error: "OpenAI: " + ((g.error && g.error.message) || g.stop) }; }
+    // The record may have changed while the model was thinking (approved, posted, skipped): always keep the
+    // cost of the new calls, but only replace the comment if it is still waiting in the same state.
+    const addCalls = (cur) => ({ calls: [...(cur.calls || []), ...g.calls], attempts: (cur.attempts || 0) + g.attempts });
+    if (g.stop) { await H.patch(id, addCalls); await stop(g.stop, g.error && g.error.message); return { ok: false, error: "OpenAI: " + ((g.error && g.error.message) || g.stop) }; }
     if (!g.ok) {
-      await H.patch(id, { calls, attempts: (rec.attempts || 0) + g.attempts });
+      await H.patch(id, addCalls);
       return { ok: false, error: g.skipped ? g.skipped.text : "OpenAI: " + ((g.error && g.error.message) || "error") };
     }
-    const r = await H.patch(id, { calls, comment: g.comment, originalComment: g.comment, edited: false, attempts: (rec.attempts || 0) + g.attempts, quality: g.quality, modelId: g.model.id, modelName: g.model.name, effort: g.model.reasoning ? g.effort : "none", fallbackUsed: g.fallbackUsed, status: HS.PENDING_REVIEW });
+    let changed = false;
+    const r = await H.patch(id, (cur) => {
+      if (cur.status !== rec.status) { changed = true; return addCalls(cur); }
+      return { ...addCalls(cur), comment: g.comment, originalComment: g.comment, edited: false, quality: g.quality, modelId: g.model.id, modelName: g.model.name, effort: g.model.reasoning ? g.effort : "none", fallbackUsed: g.fallbackUsed, status: HS.PENDING_REVIEW, approvedAt: null, scheduledFor: null };
+    });
+    if (changed) return { ok: false, error: `The item changed while regenerating (now ${r && r.status}); the new text was not applied`, record: r };
     return { ok: true, record: r };
   }
   return { ok: false, error: "Unknown action" };

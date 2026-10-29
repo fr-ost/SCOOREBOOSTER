@@ -20,11 +20,15 @@
     return null;
   }
 
+  // Short system messages only: toasts/alerts, and dialogs that are not the reply composer and contain no
+  // posts (otherwise words like "rate limit" inside someone's tweet would look like an X warning).
   function messages() {
     const out = [];
+    const isSystem = (el) => !D.q("composerTextbox", el) && !D.q("tweet", el) && !D.q("tweetText", el) && !D.closest(el, "tweet");
     for (const el of [...D.qa("toast"), ...D.qa("dialog")]) {
+      if (!isSystem(el)) continue;
       const t = D.text(el);
-      if (t) out.push(t.slice(0, 400));
+      if (t && t.length < 1500) out.push(t.slice(0, 400));
     }
     return out;
   }

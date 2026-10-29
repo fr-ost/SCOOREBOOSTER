@@ -71,7 +71,7 @@ function render() {
       : h("div", { class: ["p-cell", opts.cls], id: opts.id || null }, kids);
   };
   fill($("pGrid"), 
-    cell("Posted today", [String(t.posted != null ? t.posted : "-"), h("span", { class: "stat-of" }, ` / ${limit}`)], `A ${num(t.postedGroup && t.postedGroup.A)} · B ${num(t.postedGroup && t.postedGroup.B)}`, { valueId: "pPosted" }),
+    cell("Posted (24h)", [String(t.posted != null ? t.posted : "-"), h("span", { class: "stat-of" }, ` / ${limit}`)], `A ${num(t.postedGroup && t.postedGroup.A)} · B ${num(t.postedGroup && t.postedGroup.B)}`, { valueId: "pPosted" }),
     cell("Pending review", String(pending), queued ? `${queued} waiting to post` : "Open the queue", { onClick: () => openDashboard("review"), cls: pending ? "is-amber" : "", title: "Open the Review queue", id: "pPending" }),
     cell("Cost today", fmtUsd(todayCost), `${num(t.generated)} generated`),
     cell("This month", b.limit ? [fmtUsd(b.spent), h("span", { class: "stat-of" }, ` / ${fmtUsd(b.limit, 0)}`)] : fmtUsd(b.spent), b.limit ? `${Math.round(b.pct)}% of budget` : "No limit set", { cls: b.reached ? "is-red" : b.warn ? "is-amber" : "" }));

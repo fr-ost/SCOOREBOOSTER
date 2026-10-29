@@ -2,8 +2,8 @@
 // Everything is persisted (chrome.storage + IndexedDB), so this file is safe to be killed and restarted
 // at any time; on startup it re-arms the alarms and continues if the engine was running.
 
-import { ALARM, MSG, STATUS, STOP } from "../lib/constants.js";
-import { ensureDefaults, getSettings, getSecrets, getTargets, getState, patchState, updateCandidates, log } from "../lib/store.js";
+import { ALARM, MSG, STATUS, STOP, K } from "../lib/constants.js";
+import { ensureDefaults, getSettings, getSecrets, getTargets, getState, patchState, updateCandidates, log, load, save } from "../lib/store.js";
 import * as engine from "../lib/engine.js";
 import * as T from "../lib/targets.js";
 import { onContentReady, onTabRemoved } from "../lib/tabs.js";
@@ -44,7 +44,7 @@ chrome.alarms.onAlarm.addListener((a) => {
   else if (a.name === ALARM.WATCHDOG) engine.watchdog();
 });
 
-chrome.tabs.onRemoved.addListener((tabId) => { onTabRemoved(tabId); });
+chrome.tabs.onRemoved.addListener((tabId, info) => { onTabRemoved(tabId, info); });
 
 chrome.notifications.onClicked.addListener((id) => {
   const hash = id === "sx-review" ? "#review" : "#overview";
@@ -59,12 +59,16 @@ engine.onWorkerStart().catch(() => {});
 
 async function startDiscovery(opts) {
   const until = now() + 3 * 60 * 1000;
+  await save({ [K.discovery]: { status: "waiting", source: opts.source, step: "Waiting for the X tab", message: "", startedAt: now(), finishedAt: null } });
   while (now() < until) {
-    const r = await engine.withLease("discovery", () => runDiscovery(opts, engine.stop), 60 * 60 * 1000);
+    const cur = await load(K.discovery, {});
+    if (cur.status === "cancelling") { await save({ [K.discovery]: { ...cur, status: "cancelled", finishedAt: now() } }); return { ok: false, error: "cancelled" }; }
+    const r = await engine.withLease("discovery", () => runDiscovery(opts, engine.stop));
     if (!r || !r.busy) return r;
     await sleep(5000);
   }
   log("warn", "Discovery could not start: ScoreX was busy for 3 minutes");
+  await save({ [K.discovery]: { ...(await load(K.discovery, {})), status: "error", message: "ScoreX was busy for 3 minutes - try again", finishedAt: now() } });
   return { ok: false, error: "busy" };
 }
 
@@ -86,7 +90,7 @@ async function refreshTargetsNow(handles) {
         if (r && r.stop) { await engine.stop(r.stop, r.detail); break; }
         await sleep(3000 + Math.random() * 5000);
       }
-    }, 20 * 60 * 1000);
+    });
   })().catch((e) => log("error", "Refresh failed: " + e.message));
   return { ok: true, queued: list.length, when: "now" };
 }
@@ -173,8 +177,8 @@ const handlers = {
   learningRun: async () => {
     await patchState({ lastLearningAt: 0, learningForce: true });
     const st = await getState();
-    if (st.status === STATUS.RUNNING) await engine.scheduleTick(5000, "learning check");
-    return { ok: true };
+    if (st.status === STATUS.RUNNING) { await engine.scheduleTick(5000, "learning check"); return { ok: true, note: "Checking now" }; }
+    return { ok: true, note: "Checks run on the next check after you press Start" };
   },
   learningSummary: () => learningSummary(),
   abReset: () => resetAb(),

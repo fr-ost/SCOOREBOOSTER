@@ -149,7 +149,7 @@ export const DEFAULT_SETTINGS = {
     enabled: true,
     abTesting: true,
     explore: 0.2, // share of comments used to test other tones/models
-    abTones: ["insightful", "witty", "bold", "expert", "friendly"],
+    abTones: { A: ["friendly", "witty", "insightful"], B: ["insightful", "bold", "expert"] }, // tones tested per group
     abPresets: [], // empty = only the matrix preset; add e.g. ["balanced","cheap"] to test models
     minSamples: 8,
     coldAfterComments: 6, // no response after N comments -> lower frequency
@@ -185,7 +185,7 @@ export const DEFAULT_SETTINGS = {
   },
 
   ui: { theme: "system" },
-  advanced: { debug: false },
+  advanced: { debug: false, tabMode: "pinned" }, // tabMode: "pinned" tab in your window or a separate "window"
 };
 
 export const DEFAULT_STATE = {
@@ -288,6 +288,10 @@ export function sanitizeSettings(raw) {
   s.budget.warnAtPct = clamp(num(s.budget.warnAtPct, 80), 10, 100);
 
   const l = s.learning;
+  if (Array.isArray(l.abTones)) l.abTones = { A: l.abTones.slice(), B: l.abTones.slice() };
+  if (!l.abTones || typeof l.abTones !== "object") l.abTones = deepClone(DEFAULT_SETTINGS.learning.abTones);
+  for (const g of ["A", "B"]) l.abTones[g] = (Array.isArray(l.abTones[g]) ? l.abTones[g] : []).map(String).filter(Boolean).slice(0, 12);
+  l.abPresets = (Array.isArray(l.abPresets) ? l.abPresets : []).filter((p) => ["high", "balanced", "cheap"].includes(p));
   l.explore = clamp(num(l.explore, 0.2), 0, 0.6);
   l.minSamples = clamp(Math.round(num(l.minSamples, 8)), 2, 100);
   l.coldAfterComments = clamp(Math.round(num(l.coldAfterComments, 6)), 2, 50);

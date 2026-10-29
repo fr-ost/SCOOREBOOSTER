@@ -16,7 +16,7 @@ try {
   const pGive = M.addPost("alice", "Giveaway! RT & follow to win 100 USDC, winners announced Friday", 3);
   M.addPost("carol", "Random post from someone who is not a target at all today", 2);
 
-  await setup(H);
+  await setup(H, { learning: { abTesting: false } }); // tone defaults are checked below
   let r = await H.msg("start");
   assert(r && r.ok === false && /target/i.test(r.error), "start refuses without targets: " + (r && r.error));
   r = await H.msg("targetsUpsert", { rows: ["@bigbob"], defaults: { group: "B", tier: 1 } });

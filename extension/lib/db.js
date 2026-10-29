@@ -52,6 +52,12 @@ function idbAdapter() {
     putMany: (store, recs) => tx(store, "readwrite", (s) => Promise.all(recs.map((r) => p(s.put(r))))),
     get: (store, key) => tx(store, "readonly", (s) => p(s.get(key))),
     del: (store, key) => tx(store, "readwrite", (s) => p(s.delete(key))),
+    // fn(current) -> new record to store, or null to leave it unchanged. Runs inside one transaction.
+    update: (store, key, fn) => tx(store, "readwrite", (s) => p(s.get(key)).then((cur) => {
+      const next = fn(cur);
+      if (next == null) return null;
+      return p(s.put(next)).then(() => next);
+    })),
     clear: (store) => tx(store, "readwrite", (s) => p(s.clear())),
     count: (store) => tx(store, "readonly", (s) => p(s.count())),
     // All records with index value in [lo, hi] (either bound optional), oldest first.
@@ -103,6 +109,12 @@ export function memoryAdapter() {
     async putMany(name, recs) { return Promise.all(recs.map((r) => this.put(name, r))); },
     async get(name, key) { return clone(st(name).get(key)); },
     async del(name, key) { st(name).delete(key); },
+    async update(name, key, fn) {
+      const next = fn(clone(st(name).get(key)));
+      if (next == null) return null;
+      st(name).set(key, clone(next));
+      return clone(next);
+    },
     async clear(name) { st(name).clear(); },
     async count(name) { return st(name).size; },
     async range(name, index, lo, hi) {

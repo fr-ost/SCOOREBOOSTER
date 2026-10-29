@@ -16,9 +16,12 @@ export function onContentReady(tabId, url) {
   readyWaiters.delete(tabId);
   for (const r of list) r(url || true);
 }
-export function onTabRemoved(tabId) {
+// A tab closed by the user is not adopted again later; one closed because the window/browser closed may be
+// restored by Chrome, so it stays adoptable.
+export function onTabRemoved(tabId, removeInfo) {
   readyWaiters.delete(tabId);
-  return getState().then((st) => (st.workerTabId === tabId ? patchState({ workerTabId: null }) : null)).catch(() => {});
+  const closingWindow = !!(removeInfo && removeInfo.isWindowClosing);
+  return getState().then((st) => (st.workerTabId === tabId ? patchState(closingWindow ? { workerTabId: null } : { workerTabId: null, workerTabPinned: false }) : null)).catch(() => {});
 }
 
 function waitReadyMessage(tabId, timeoutMs) {
@@ -76,13 +79,14 @@ async function createTab(settings) {
   const url = "https://x.com/home";
   let tab;
   if (settings && settings.advanced && settings.advanced.tabMode === "window") {
-    const win = await chrome.windows.create({ url, focused: false, type: "normal", width: 560, height: 900 });
+    // Wide enough for X's desktop layout (narrow windows switch to the mobile layout).
+    const win = await chrome.windows.create({ url, focused: false, type: "normal", width: 1100, height: 900 });
     tab = win.tabs && win.tabs[0];
   } else {
     tab = await chrome.tabs.create({ url, active: false, pinned: true });
   }
   if (!tab) return null;
-  await patchState({ workerTabId: tab.id });
+  await patchState({ workerTabId: tab.id, workerTabPinned: !!tab.pinned, workerTabIndex: tab.index });
   const ok = await waitReady(tab.id, 45000);
   if (!ok) return null;
   await protect(tab.id);
@@ -108,6 +112,22 @@ export async function workerTab(settings, { create = true } = {}) {
       }
     }
     await patchState({ workerTabId: null });
+  }
+  // After a Chrome restart the pinned tab we created comes back with a new id: adopt it instead of
+  // opening a second one (the restored pinned x.com tab at our old position, else the last pinned one).
+  if (st.workerTabPinned) {
+    let pinned = [];
+    try { pinned = await chrome.tabs.query({ pinned: true, url: X_MATCH }); } catch (_) {}
+    const cand = pinned.find((t) => t.index === st.workerTabIndex) || pinned[pinned.length - 1];
+    if (cand && !cand.active) {
+      if (cand.discarded) { try { await chrome.tabs.reload(cand.id); } catch (_) {} }
+      if (await waitReady(cand.id, 40000)) {
+        await patchState({ workerTabId: cand.id, workerTabIndex: cand.index });
+        await protect(cand.id);
+        log("info", "Reusing the restored ScoreX X tab");
+        return cand.id;
+      }
+    }
   }
   if (!create) return null;
   return createTab(settings);

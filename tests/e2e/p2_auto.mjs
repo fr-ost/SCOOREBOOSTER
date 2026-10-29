@@ -112,6 +112,8 @@ try {
   await H.msg("runNow");
   st = await waitStopped("repeated_post_failures", 150000);
   assert(st.stopReason === "repeated_post_failures", "AUTO-STOP after 2 posting failures in a row");
+  const unsure = (await H.history()).filter((x) => x.status === "failed" && x.maybePosted);
+  assert(unsure.length === 2, "unclear posts are kept as 'probably sent' and count toward limits");
   M.replyMode = "ok";
 
   // ---- X changed its markup -> stop ----
@@ -146,7 +148,10 @@ try {
 
   // ---- review queue expiry ----
   await H.settings({ mode: "review" });
-  const p9 = M.addPost("erin", "Shipping our first public roadmap this week, curious how it changes support volume.", 2);
+  // (erin's earlier unclear post counts as "probably sent", so her 1-per-24h limit is used: new account)
+  M.addUser("hank", { followers: 12000 });
+  await H.msg("targetsUpsert", { rows: ["hank"], defaults: { group: "B", tier: 2 } });
+  const p9 = M.addPost("hank", "Shipping our first public roadmap this week, curious how it changes support volume.", 2);
   await H.patchState({ nextCommentAt: 0 });
   await H.msg("runNow");
   const r9 = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p9.id && x.status === "pending_review"), "pending p9", 90000);
@@ -168,6 +173,20 @@ try {
   await H.msg("runNow");
   const sf = await H.waitFor(async () => (await H.history()).find((x) => x.id === qf.id && x.status === "skipped"), "restricted skipped", 120000);
   assert(/restricted/.test(sf.reason) && (await H.store("sx.state")).status === "running", "restricted replies are skipped without stopping");
+
+  // ---- a target's reply inside someone else's thread is not commented (only original posts) ----
+  M.hideReplyBox = false;
+  M.addUser("gina", { followers: 15000 });
+  await H.msg("targetsUpsert", { rows: ["gina"], defaults: { group: "B", tier: 2 } });
+  const parent = M.addPost("frank", "Parent post in a thread that gina answers.", 30);
+  const pg = M.addPost("gina", "Agree with this thread, the onboarding point is the one most teams miss entirely.", 2, { parentId: parent.id });
+  await H.patchState({ nextCommentAt: 0, consecutiveFailures: 0 });
+  await H.msg("runNow");
+  const qg = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pg.id && x.status === "queued"), "queued pg", 90000);
+  await H.patchHistory(qg.id, { scheduledFor: 0 });
+  await H.msg("runNow");
+  const sg = await H.waitFor(async () => (await H.history()).find((x) => x.id === qg.id && x.status === "skipped"), "thread reply skipped", 120000);
+  assert(/reply_in_thread/.test(sg.reason) && !M.replies.some((r) => r.inReplyTo === pg.id), "replies inside threads are skipped at posting time");
 
   log(`\nPhase 2 e2e: ${passCount()} checks passed`);
 } catch (e) {

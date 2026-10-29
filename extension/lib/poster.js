@@ -9,7 +9,8 @@ import { navigate, send, waitForPage, bringToFront } from "./tabs.js";
 import { pageVerdict, domStop } from "./guard.js";
 import { sleep, humanDelay, randInt, randFloat, chance, tweetIdFromUrl } from "./util.js";
 
-const norm = (t) => String(t || "").replace(/ /g, " ").replace(/\s+/g, " ").trim();
+// Same normalisation as content/actions.js (zero-width joiners are dropped on both sides).
+const norm = (t) => String(t || "").replace(/\u00a0/g, " ").replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
 
 // Split text into 1-3 character chunks with per-chunk delays for a given chars-per-minute speed.
 export function typingPlan(text, cpmMin, cpmMax) {
@@ -19,7 +20,9 @@ export function typingPlan(text, cpmMin, cpmMax) {
   let i = 0;
   const chars = Array.from(String(text));
   while (i < chars.length) {
-    const n = Math.min(chars.length - i, chance(0.55) ? 1 : chance(0.75) ? 2 : 3);
+    let n = Math.min(chars.length - i, chance(0.55) ? 1 : chance(0.75) ? 2 : 3);
+    // attach whitespace to the following character so no chunk is whitespace-only
+    while (i + n < chars.length && /^\s+$/.test(chars.slice(i, i + n).join(""))) n++;
     const piece = chars.slice(i, i + n).join("");
     i += n;
     let delay = perChar * n * randFloat(0.6, 1.45);
@@ -52,9 +55,12 @@ async function cleanup(tabId) {
  *   { ok:false, stop, detail }            -> engine stops (safety)
  *   { ok:false, skip:true, reason }       -> post gone / replies restricted (not a failure)
  *   { ok:false, fail:true, reason }       -> counts toward "repeated post failures"
+ *   { ok:false, retry:true, reason }      -> the page did not load/render; the item stays queued
+ *   { ok:false, aborted:true }            -> Pause/Stop pressed before submitting; nothing was posted
  */
 export async function postReply(rec, ctx) {
   const { tabId, settings, me } = ctx;
+  const stopped = ctx.shouldStop || (async () => false);
   const sf = settings.safety;
   const tweetId = rec.postId || tweetIdFromUrl(rec.postUrl);
   const text = String(rec.comment || "").trim();
@@ -67,16 +73,24 @@ export async function postReply(rec, ctx) {
   if (v) return { ok: false, stop: v.stop, detail: v.detail };
   const pv = pageVerdict(w.page, settings);
   if (pv && pv.notFound) return { ok: false, skip: true, reason: "post_unavailable" };
+  // Not rendered (hidden tab, "Something went wrong", slow network): keep the item for a later retry.
+  if (!w.ok) return { ok: false, retry: true, reason: "page_not_ready_" + (w.settled || (w.timeout ? "timeout" : w.error || "no_answer")) };
 
   const st = await send(tabId, CMD.SCRAPE_STATUS, { tweetId, me }, 20000);
   v = verdictOf(st, settings);
   if (v) return { ok: false, stop: v.stop, detail: v.detail };
-  if (!st.ok || !st.focal) return { ok: false, skip: true, reason: "post_not_found" };
+  if (!st.ok) return { ok: false, retry: true, reason: "status_unreadable" };
+  if (!st.focal) {
+    const pv2 = pageVerdict(st.page, settings);
+    if (pv2 && pv2.notFound) return { ok: false, skip: true, reason: "post_not_found" };
+    return { ok: false, retry: true, reason: "post_not_rendered" };
+  }
   if (st.myReplies && st.myReplies.length) {
     const mine = st.myReplies[0];
     return { ok: true, already: true, replyUrl: mine.url, replyId: mine.id, liked: !!st.focal.liked };
   }
   if (st.canReply === false) return { ok: false, skip: true, reason: "replies_restricted" };
+  if (st.focalIndex > 0) return { ok: false, skip: true, reason: "reply_in_thread_not_original_post" };
 
   // Read the post: base pause + time proportional to its length.
   const readMs = humanDelay(sf.readDelaySec.min * 1000, sf.readDelaySec.max * 1000) + Math.min(9000, norm(st.focal.text).length * randFloat(15, 35));
@@ -84,6 +98,7 @@ export async function postReply(rec, ctx) {
   await send(tabId, CMD.SCROLL, { dy: randInt(120, 420) }, 8000);
   await sleep(humanDelay(700, 2200));
 
+  if (await stopped()) return { ok: false, aborted: true };
   let liked = false;
   if (ctx.allowLike && !st.focal.liked) {
     const lk = await send(tabId, CMD.LIKE, { tweetId }, 15000);
@@ -94,6 +109,7 @@ export async function postReply(rec, ctx) {
     await sleep(humanDelay(900, 2600));
   }
 
+  if (await stopped()) return { ok: false, aborted: true, liked };
   const restore = sf.bringTabToFront ? await bringToFront(tabId) : null;
   try {
     const oc = await send(tabId, CMD.OPEN_COMPOSER, { tweetId }, 20000);
@@ -110,8 +126,10 @@ export async function postReply(rec, ctx) {
     // Type at a human speed. Delays live here (worker), each chunk is one quick page command.
     let typed = "";
     let misses = 0;
+    let k = 0;
     for (const ch of typingPlan(text, sf.typingCpm.min, sf.typingCpm.max)) {
       await sleep(ch.delay);
+      if (++k % 8 === 0 && (await stopped())) { await cleanup(tabId); return { ok: false, aborted: true, liked }; }
       const r = await send(tabId, CMD.TYPE, { text: ch.text }, 8000);
       if (r.page) { const vv = pageVerdict(r.page, settings); if (vv && vv.stop) { await cleanup(tabId); return { ok: false, stop: vv.stop, detail: vv.detail, liked }; } }
       if (!r.ok) { if (++misses >= 3) break; continue; }
@@ -130,6 +148,7 @@ export async function postReply(rec, ctx) {
       }
     }
     await sleep(humanDelay(1200, 3800)); // re-read before sending
+    if (await stopped()) { await cleanup(tabId); return { ok: false, aborted: true, liked }; } // last chance: Pause/Stop wins
 
     const sb = await send(tabId, CMD.SUBMIT_REPLY, { expectText: text }, 15000);
     v = verdictOf(sb, settings);

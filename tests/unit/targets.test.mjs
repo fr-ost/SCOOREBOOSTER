@@ -77,7 +77,7 @@ describe("targets.js", () => {
         group: "A", tier: "1", enabled: 0, priority: 150, tone: null, preset: "ultra",
         notes: "n".repeat(600), name: "x".repeat(100), handle: "evil", stats: { comments: 999 }, score: {},
       });
-      assert.deepEqual(Object.keys(p).sort(), ["enabled", "group", "name", "notes", "preset", "priority", "tier", "tone"]);
+      assert.deepEqual(Object.keys(p).sort(), ["enabled", "group", "name", "notes", "preset", "priority", "priorityManual", "tier", "tone"]);
       assert.equal(p.group, "A");
       assert.equal(p.tier, 1);
       assert.equal(p.enabled, false);
@@ -88,8 +88,8 @@ describe("targets.js", () => {
       assert.equal(p.name.length, 80);
     });
     test("defaults for odd values", () => {
-      assert.deepEqual(tg.sanitizePatch({ group: "x", tier: 7, priority: "abc", preset: "cheap" }), { group: "B", tier: 2, priority: 50, preset: "cheap" });
-      assert.deepEqual(tg.sanitizePatch({ priority: -3 }), { priority: 0 });
+      assert.deepEqual(tg.sanitizePatch({ group: "x", tier: 7, priority: "abc", preset: "cheap" }), { group: "B", tier: 2, priority: 50, priorityManual: true, preset: "cheap" });
+      assert.deepEqual(tg.sanitizePatch({ priority: -3 }), { priority: 0, priorityManual: true });
       assert.deepEqual(tg.sanitizePatch({}), {});
     });
   });

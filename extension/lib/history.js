@@ -40,21 +40,29 @@ export function newRecord(fields) {
   };
 }
 
-export async function put(rec) {
+function finalize(rec) {
   const { usage, cost } = sumCalls(rec.calls);
   rec.tokens = usage;
   rec.cost = cost;
   rec.updatedAt = now();
+  return rec;
+}
+export async function put(rec) {
+  finalize(rec);
   await db().put(S, rec);
   return rec;
 }
 export const get = (id) => db().get(S, id);
 export const remove = (id) => db().del(S, id);
+// Atomic read-modify-write (one IndexedDB transaction). `fields` may be a function of the current record;
+// returning null/undefined from it aborts the write (compare-and-set) and patch() resolves to null.
 export async function patch(id, fields) {
-  const r = await get(id);
-  if (!r) return null;
-  Object.assign(r, typeof fields === "function" ? fields(r) || {} : fields);
-  return put(r);
+  return db().update(S, id, (r) => {
+    if (!r) return null;
+    const upd = typeof fields === "function" ? fields(r) : fields;
+    if (upd == null) return null;
+    return finalize(Object.assign(r, upd));
+  });
 }
 
 export const byStatus = (status) => db().byIndex(S, "status", status);

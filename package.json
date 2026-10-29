@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/unit/"
+    "test": "node --test tests/unit/",
+    "test:e2e": "node tests/e2e/p1_core.mjs && node tests/e2e/p2_auto.mjs && node tests/e2e/p3_learning.mjs && node tests/e2e/ui_smoke.mjs"
   }
 }

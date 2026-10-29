@@ -106,7 +106,7 @@
       url: `https://x.com/${pl.handle}/status/${pl.id}`,
       author: pl.handle,
       authorName: nameLines[0] && !nameLines[0].startsWith("@") ? nameLines[0] : "",
-      text: D.text(textEl).slice(0, 4000),
+      text: textWithEmoji(textEl).slice(0, 4000),
       lang: textEl ? (textEl.getAttribute("lang") || "") : "",
       createdAt: datetime ? Date.parse(datetime) || null : null,
       isRepost: repost,
@@ -121,6 +121,17 @@
       liked: !!D.q("unlikeButton", article),
       metrics: metrics(article),
     };
+  }
+
+  // X renders emoji as <img alt="🔥"> inside the text; keep them so text comparisons work.
+  function textWithEmoji(el) {
+    if (!el) return "";
+    if (!el.querySelector("img[alt]")) return D.text(el);
+    const clone = el.cloneNode(true);
+    clone.querySelectorAll("img[alt]").forEach((img) => img.replaceWith(document.createTextNode(img.getAttribute("alt") || "")));
+    // innerText needs layout; the clone is detached, so use textContent and keep line breaks from <br>.
+    clone.querySelectorAll("br").forEach((br) => br.replaceWith(document.createTextNode("\n")));
+    return String(clone.textContent || "").replace(/\u00a0/g, " ").trim();
   }
 
   function articles(root) {
@@ -236,15 +247,38 @@
   }
 
   // Status page: the focal post, whether replying is possible, and replies already in the thread.
+  // Visible text of the primary column without any post bodies (for notices like "Who can reply?").
+  function noticeText(primary) {
+    const clone = primary.cloneNode(true);
+    for (const sel of D.cfg().sel.tweet) { try { clone.querySelectorAll(sel).forEach((n) => n.remove()); } catch (_) {} }
+    return String(clone.textContent || "").replace(/\s+/g, " ").slice(0, 5000);
+  }
+
+  // A section heading after the focal post ("Discover more", "More posts") ends the conversation:
+  // posts below it are recommendations, not replies.
+  function firstHeadingAfter(el, primary) {
+    for (const h of primary.querySelectorAll('h2, [role="heading"]')) {
+      if (D.closest(h, "tweet")) continue;
+      if (el.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING) return h;
+    }
+    return null;
+  }
+
   function scrapeStatus(tweetId, me) {
+    const primary = D.q("primaryColumn") || document;
     const all = articles().map((a) => ({ a, t: parseTweet(a) })).filter((x) => x.t);
     const focalIdx = all.findIndex((x) => x.t.id === String(tweetId) && !x.t.isRepost);
     const focal = focalIdx >= 0 ? all[focalIdx].t : null;
-    const replies = focalIdx >= 0 ? all.slice(focalIdx + 1).map((x) => x.t) : [];
-    const primary = D.q("primaryColumn") || document;
-    const restricted = D.re("replyRestricted").test(D.text(primary).slice(0, 5000)) && !D.q("composerTextbox", primary);
+    let after = focalIdx >= 0 ? all.slice(focalIdx + 1) : [];
+    if (focalIdx >= 0) {
+      const stop = firstHeadingAfter(all[focalIdx].a, primary);
+      if (stop) after = after.filter((x) => x.a.compareDocumentPosition(stop) & Node.DOCUMENT_POSITION_FOLLOWING);
+    }
+    const replies = after.map((x) => x.t);
+    const restricted = D.re("replyRestricted").test(noticeText(primary)) && !D.q("composerTextbox", primary);
     const myReplies = me ? replies.filter((r) => r.author === me) : [];
-    return { focal, replies: replies.slice(0, 30), canReply: !restricted, myReplies };
+    // Parent posts rendered above the focal post mean it is itself a reply inside a thread.
+    return { focal, focalIndex: focalIdx, replies: replies.slice(0, 30), canReply: !restricted, myReplies };
   }
 
   globalThis.SXScrape = { parseTweet, scrapeTweets, scrapeProfile, scrapeUsers, scrapeStatus, articles, relationButtons };

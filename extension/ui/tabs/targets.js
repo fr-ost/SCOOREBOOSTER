@@ -322,7 +322,7 @@ export default {
       const d = ctx.data[K.discovery];
       clear(progressHost);
       if (!d || typeof d !== "object" || (!d.status && !d.startedAt)) { progressHost.appendChild(h("p", { class: "muted small" }, "No discovery run yet.")); discCancel.disabled = true; return; }
-      const running = ["running", "queued", "cancelling"].includes(d.status);
+      const running = ["running", "queued", "waiting", "cancelling"].includes(d.status);
       discCancel.disabled = !running || d.status === "cancelling";
       const p = d.progress || {};
       const done = num(p.done), total = num(p.total);

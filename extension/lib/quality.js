@@ -28,6 +28,22 @@ const HASHTAG_RE = /(^|\s)#[\p{L}\p{N}_]+/u;
 const MENTION_RE = /(^|\s)@[A-Za-z0-9_]{1,15}\b/;
 const DASH_RE = /—|―/; // em dash, horizontal bar
 
+// Length as X counts it (twitter-text v3): most Latin/Cyrillic/Arabic... characters weigh 1, CJK and
+// other scripts weigh 2, every emoji (incl. ZWJ sequences) weighs 2, URLs weigh 23. Limit: 280.
+const LIGHT = [[0x0000, 0x10ff], [0x2000, 0x200d], [0x2010, 0x201f], [0x2032, 0x2037]];
+const isLight = (cp) => LIGHT.some(([a, b]) => cp >= a && cp <= b);
+export function weightedLength(text) {
+  let t = String(text || "");
+  let n = 0;
+  t = t.replace(/https?:\/\/\S+/g, () => { n += 23; return ""; });
+  const graphemes = typeof Intl !== "undefined" && Intl.Segmenter ? [...new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(t)].map((s) => s.segment) : Array.from(t);
+  for (const g of graphemes) {
+    if (/\p{Extended_Pictographic}/u.test(g)) { n += 2; continue; }
+    for (const ch of g) n += isLight(ch.codePointAt(0)) ? 1 : 2;
+  }
+  return n;
+}
+
 // Clean model output: quotes, labels, leading @mentions, dashes, whitespace.
 export function sanitizeComment(raw) {
   let t = String(raw == null ? "" : raw).replace(/\r/g, "").trim();
@@ -111,6 +127,7 @@ export function ruleCheck(text, ctx = {}) {
   if (/^skip$/i.test(t)) { add("model_skip", "Model chose to skip this post"); return { pass: false, reasons, similarity: null }; }
   if (t.length < minChars) add("too_short", `Shorter than ${minChars} characters`);
   if (t.length > maxChars) add("too_long", `Longer than ${maxChars} characters`);
+  else if (weightedLength(t) > HARD.maxCommentChars) add("too_long", `Longer than X's ${HARD.maxCommentChars}-character limit (CJK and emoji count double)`);
   if (LINK_RE.test(t)) add("link", "Contains a link");
   if (HASHTAG_RE.test(t)) add("hashtag", "Contains a hashtag");
   if (MENTION_RE.test(t)) add("mention", "Contains an @mention");

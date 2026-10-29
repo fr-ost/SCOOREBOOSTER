@@ -144,9 +144,9 @@ export default {
       load();
     }, { kind: "ghost" });
     const clearBtn = btn("Clear history", async () => {
-      if (!(await confirmDialog("Delete the whole comment history (costs, results, review queue)? Targets and settings stay. This cannot be undone - export a CSV first if you need it.", { title: "Clear history", okLabel: "Delete history", danger: true }))) return;
+      if (!(await confirmDialog("Delete the comment history (costs, results)? Comments posted in the last 8 days and items still in the queue are kept, because the daily and per-account safety limits depend on them. Targets and settings stay. This cannot be undone - export a CSV first if you need it.", { title: "Clear history", okLabel: "Delete history", danger: true }))) return;
       const r = await ctx.send("historyClear", {}, { label: "Clear history" });
-      if (r) { toast("History cleared"); load(); ctx.refreshCounts(); }
+      if (r) { toast(`History cleared (${num(r.removed)} removed, ${num(r.kept)} kept for safety limits)`); load(); ctx.refreshCounts(); }
     }, { kind: "ghost-danger", iconName: "trash", id: "historyClearBtn" });
 
     const quickSeg = segmented([["day", "Per day"], ["week", "Per week"], ["month", "Per month"]], quickView, (v) => { quickView = v; drawQuick(ctx.settings.timezone); }, { label: "Totals period" });

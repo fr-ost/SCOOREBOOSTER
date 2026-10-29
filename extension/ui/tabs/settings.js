@@ -211,7 +211,7 @@ export default {
     };
     const advancedCard = card({ title: "Advanced" },
       h("div", { class: "form-grid" },
-        f({ path: "advanced.tabMode", type: "select", label: "Worker tab", options: [["pinned", "Pinned tab in this window"], ["window", "Separate minimised window"]], format: (v) => v || "pinned", hint: "Where ScoreX opens its own X tab." }),
+        f({ path: "advanced.tabMode", type: "select", label: "Worker tab", options: [["pinned", "Pinned tab in this window"], ["window", "Separate window (keep it visible)"]], format: (v) => v || "pinned", hint: "Where ScoreX opens its own X tab. Use a separate, visible window if X does not render in a background tab." }),
         f({ path: "advanced.debug", type: "toggle", label: "Debug logging", hint: "More detail in Recent activity. API keys are always redacted." })),
       sectionTitle("Selector overrides"),
       h("p", { class: "muted small" }, "When X changes its page and ScoreX stops with \"X page changed\", you can patch selectors here without waiting for an update. Same shape as content/selectors.js (sel / text / misc); merged over the built-in values."),

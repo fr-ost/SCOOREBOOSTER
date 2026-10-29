@@ -126,13 +126,18 @@ ${likeBtn}
     }
     m = p.match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/);
     if (m) {
-      const post = M.posts.find((x) => x.id === m[2]);
+      let post = M.posts.find((x) => x.id === m[2]);
+      if (!post) {
+        const mineR = M.replies.find((x) => x.id === m[2]);
+        if (mineR) post = { id: mineR.id, author: M.me, text: mineR.text, createdAt: mineR.at, likes: mineR.likes || 0, replies: M.posts.filter((x) => x.replyTo === mineR.id).length, reposts: 0, views: 50, reply: (M.posts.find((x) => x.id === mineR.inReplyTo) || {}).author };
+      }
       if (!post) return { html: shell(`<div data-testid="emptyState"><span data-testid="empty_state_header_text">Hmm...this page doesn't exist. Try searching for something else.</span></div>`) };
       const mine = M.replies.filter((r) => r.inReplyTo === post.id).map((r) => tweetHtml({ id: r.id, author: M.me, text: r.text, createdAt: r.at, likes: r.likes || 0, replies: r.replyCount || 0, reposts: 0, views: 10, reply: post.author }));
       const others = M.posts.filter((x) => x.replyTo === post.id).map((x) => tweetHtml(x));
       const composer = M.hideReplyBox ? `<div><span>Who can reply? People @${post.author} mentioned can reply</span></div>` :
         `<div id="composer"><div data-testid="tweetTextarea_0" role="textbox" contenteditable="true" aria-label="Post text"></div><button data-testid="tweetButtonInline" aria-disabled="true" disabled>Reply</button></div>`;
-      return { html: shell(`${tweetHtml(post, { focal: true })}${composer}<section id="replies">${[...mine, ...others].join("")}</section>`, { title: "Post" }) };
+      const parent = post.parentId ? M.posts.find((x) => x.id === post.parentId) : null;
+      return { html: shell(`${parent ? tweetHtml(parent) : ""}${tweetHtml(post, { focal: true })}${composer}<section id="replies">${[...mine, ...others].join("")}</section>`, { title: "Post" }) };
     }
     m = p.match(/^\/([A-Za-z0-9_]{1,15})\/(followers|verified_followers|following)$/);
     if (m) {

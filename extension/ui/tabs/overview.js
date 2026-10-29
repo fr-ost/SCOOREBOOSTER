@@ -149,7 +149,7 @@ export default {
       const pctOf = (a, z) => (z ? (num(a) / z) * 100 : 0);
       const v = (x) => (x == null ? "-" : x);
       fill(stats, 
-        stat({ label: "Posted today", value: [h("span", { id: "postedToday" }, v(t.posted)), h("span", { class: "stat-of" }, ` / ${limit}`)], sub: `Ramp week ${stage + 1}${stage >= 2 ? "+" : ""}: ${limit} per day (hard cap ${HARD.dailyComments})`, pct: pctOf(t.posted, limit), kind: "green" }),
+        stat({ label: "Posted (last 24h)", value: [h("span", { id: "postedToday" }, v(t.posted)), h("span", { class: "stat-of" }, ` / ${limit}`)], sub: `Ramp week ${stage + 1}${stage >= 2 ? "+" : ""}: ${limit} per 24h (hard cap ${HARD.dailyComments})`, pct: pctOf(t.posted, limit), kind: "green" }),
         stat({ label: "Group A", value: [v(pg.A), h("span", { class: "stat-of" }, ` / ${v(gl.A)}`)], sub: "Follow you - keep warm", pct: pctOf(pg.A, gl.A), kind: "teal" }),
         stat({ label: "Group B", value: [v(pg.B), h("span", { class: "stat-of" }, ` / ${v(gl.B)}`)], sub: "Don't follow you - get noticed", pct: pctOf(pg.B, gl.B), kind: "violet" }),
         stat({ label: "Generated", value: [v(t.generated), h("span", { class: "stat-of" }, ` / ${genLimit}`)], sub: "OpenAI generations (limit protects spend)", pct: pctOf(t.generated, genLimit) }),

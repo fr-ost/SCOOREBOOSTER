@@ -116,6 +116,7 @@ export const CMD = Object.freeze({
   TYPE: "type",
   COMPOSER_TEXT: "composerText",
   CLEAR_COMPOSER: "clearComposer",
+  CLOSE_COMPOSER: "closeComposer",
   SUBMIT_REPLY: "submitReply",
   REPLY_RESULT: "replyResult",
   FOLLOW_STATE: "followState",

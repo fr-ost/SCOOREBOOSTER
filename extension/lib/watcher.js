@@ -74,12 +74,13 @@ async function readPage(tabId, url, settings) {
   if (v && v.notFound) return { ok: true, posts: [], notFound: true, page: w.page };
   await sleep(humanDelay(1500, 3500)); // glance at the page like a person would
   await scrollAFew(tabId, settings.watch.scrolls);
+  if (w.ok && w.key === "emptyState") return { ok: true, posts: [], articleCount: 0, unparsed: 0, emptyResult: true, page: w.page };
   const r = await send(tabId, CMD.SCRAPE_TWEETS, { limit: 50 }, 20000);
   const v2 = pageVerdict(r.page, settings);
   if (v2 && v2.stop) return { ok: false, stop: v2.stop, detail: v2.detail };
   if (!r.ok) return { ok: false, soft: r.error || "scrape_failed", page: r.page };
   if (v2 && v2.soft === "error_page") return { ok: false, soft: "error_page", detail: v2.detail, page: r.page };
-  return { ok: true, posts: r.tweets || [], articleCount: r.articleCount || 0, unparsed: r.unparsed || 0, page: r.page };
+  return { ok: true, posts: r.tweets || [], articleCount: r.articleCount || 0, unparsed: r.unparsed || 0, emptyResult: !!r.emptyState, page: r.page };
 }
 
 async function readProfile(tabId, handle, settings) {
@@ -131,8 +132,9 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now()) {
   if (pageInfo && pageInfo.articleCount >= 3 && pageInfo.unparsed >= pageInfo.articleCount) {
     return { ok: false, stop: STOP.DOM_CHANGED, detail: `${pageInfo.articleCount} posts on the page but none could be read`, source: plan.label };
   }
-  const hiddenEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && pageInfo.page.hidden && !pageInfo.notFound);
-  const visibleEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && !pageInfo.page.hidden && !pageInfo.notFound);
+  const realEmpty = !!(pageInfo && (pageInfo.notFound || pageInfo.emptyResult)); // X said "no results"
+  const hiddenEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && pageInfo.page.hidden && !realEmpty);
+  const visibleEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && !pageInfo.page.hidden && !realEmpty);
 
   // Update target caches (recent posts feed the prompt; profiles from rotation feed the ranking).
   const byAuthor = {};
@@ -152,7 +154,8 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now()) {
   for (const p of posts) {
     if (!p.id || seen[p.id]) continue;
     const t = targetsMap[p.author];
-    if (!t || !isActive(t, settings, ts) || p.isRepost) { seenNow.push(p.id); continue; }
+    if (p.isRepost) continue; // the original may be another target's post: don't mark it seen
+    if (!t || !isActive(t, settings, ts)) { seenNow.push(p.id); continue; }
     const age = p.createdAt ? ts - p.createdAt : null;
     if (age != null && age < minAge) { waiting.push(p); continue; } // revisit next tick
     if (age != null && age > maxAge) { seenNow.push(p.id); continue; }

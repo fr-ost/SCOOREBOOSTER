@@ -93,6 +93,16 @@ function preRank(c) {
  * opts: { source, handles, query, maxUsers, enrich }  stopFn(reason, detail) is engine.stop.
  */
 export async function runDiscovery(opts, stopFn) {
+  try {
+    return await runDiscoveryInner(opts, stopFn);
+  } catch (e) {
+    await setJob({ status: "error", message: "Failed: " + String((e && e.message) || e).slice(0, 200), finishedAt: now() });
+    log("error", "Discovery failed: " + String((e && e.message) || e));
+    return { ok: false, error: String((e && e.message) || e) };
+  }
+}
+
+async function runDiscoveryInner(opts, stopFn) {
   cancelRequested = false;
   const settings = await getSettings();
   const me = String(settings.account.handle || "").toLowerCase();
@@ -179,7 +189,12 @@ export async function runDiscovery(opts, stopFn) {
   return { ok: true, found: list.length };
 }
 
-export function cancelDiscovery() { cancelRequested = true; return setJob({ status: "cancelling" }); }
+export async function cancelDiscovery() {
+  const cur = await load(K.discovery, {});
+  if (cur.status !== "running" && cur.status !== "waiting") return cur;
+  cancelRequested = true;
+  return setJob({ status: "cancelling" });
+}
 
 // Move candidates into targets.
 export async function candidatesToTargets(handles, group, tier, upsert) {

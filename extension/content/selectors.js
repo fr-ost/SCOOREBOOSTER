@@ -18,7 +18,7 @@
     sel: {
       // ---- layout / session ----
       primaryColumn: ['[data-testid="primaryColumn"]', "main[role=\"main\"]"],
-      loggedInMarker: ['[data-testid="SideNav_AccountSwitcher_Button"]', '[data-testid="AppTabBar_Profile_Link"]'],
+      loggedInMarker: ['[data-testid="SideNav_AccountSwitcher_Button"]', '[data-testid="AppTabBar_Profile_Link"]', '[data-testid="AppTabBar_Home_Link"]', '[data-testid="SideNav_NewTweet_Button"]', '[data-testid="DashButton_ProfileIcon_Link"]'],
       profileNavLink: ['[data-testid="AppTabBar_Profile_Link"]'], // href="/<your handle>"
       accountSwitcher: ['[data-testid="SideNav_AccountSwitcher_Button"]'],
       loginButtons: ['[data-testid="loginButton"]', '[data-testid="signupButton"]', 'a[href="/login"]', 'a[href="/i/flow/login"]'],
