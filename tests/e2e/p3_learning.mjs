@@ -26,12 +26,12 @@ try {
 
   // ---- one real comment, assigned to an A/B arm ----
   const p = M.addPost("bigbob", "Retention beats acquisition for most seed stage startups, but nobody wants to hear it.", 2);
-  await H.msg("runNow");
+  await H.runNow();
   const rec = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p.id && x.status === "pending_review"), "pending", 90000);
   assert(rec.abArm && /^(insightful|witty)\|balanced$/.test(rec.abArm), "comment assigned to an A/B arm: " + rec.abArm);
   await H.msg("reviewAction", { id: rec.id, action: "approve" });
   await H.patchState({ nextCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const posted = await H.waitFor(async () => (await H.history()).find((x) => x.id === rec.id && x.status === "posted"), "posted", 120000);
   const reply = M.replies[0];
   assert(reply && posted.replyId === reply.id, "reply id captured for later checks");
@@ -64,7 +64,7 @@ try {
   assert(q.coldUntil > Date.now() + 5 * DAY && q.priority < 50, "non-responder cools down with lower priority");
   const qPost = M.addPost("quiet", "Fresh post from the quiet account that should not get a comment while cooling down.", 2);
   await H.patchState({ nextCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   await sleep(12000);
   assert(!(await H.history()).find((x) => x.postId === qPost.id && x.attempts > 0), "no generation for a cooling-down target");
 
@@ -91,7 +91,7 @@ try {
   const handles = pv.candidates.map((c) => c.handle);
   assert(handles.includes("dave") && !handles.includes("erin") && !handles.includes("frank"), "preview: whitelist and tier-1 protection respected (" + handles.join(",") + ")");
   await H.patchState({ lastUnfollowAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   await H.waitFor(async () => M.unfollows.includes("dave"), "dave unfollowed", 150000);
   const d = (await H.store("sx.targets")).dave;
   assert(d.rel.youFollow === false && d.enabled === false, "unfollowed target is updated and disabled");
@@ -99,7 +99,7 @@ try {
   await patchTargets({ erin: { rel: { youFollowSince: Date.now() - 9 * DAY } } });
   await H.settings({ cleanup: { whitelist: [] } });
   await H.patchState({ lastUnfollowAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   await sleep(15000);
   assert(!M.unfollows.includes("erin"), "cleanup daily limit (1) respected");
 

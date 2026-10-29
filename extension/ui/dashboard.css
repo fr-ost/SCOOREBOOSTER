@@ -235,6 +235,8 @@ input:focus-visible, select:focus-visible, textarea:focus-visible { outline: non
   gap: 18px;
 }
 .view:focus { outline: none; }
+/* one host per rendered tab (keeps the view's column layout) */
+.tab-host { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
 #alertSlot:not(:empty) { padding: 16px 28px 0; max-width: 1440px; }
 
 @media (max-width: 900px) {

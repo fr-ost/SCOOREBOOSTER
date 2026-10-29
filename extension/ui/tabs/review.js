@@ -2,6 +2,7 @@
 // waiting for their posting slot. Reads history from IndexedDB, acts through reviewAction messages.
 
 import { K, HS, HARD, MODE } from "../../lib/constants.js";
+import { weightedLength } from "../../lib/quality.js";
 import * as history from "../../lib/history.js";
 import { num } from "../../lib/util.js";
 import { h, clear, card, btn, busy, toast, icon, groupBadge, tierBadge, statusBadge, badge, xLink, link, confirmDialog, emptyState, fmtUsd, fmtCount, fmtAgo, fmtTime, fmtIn, fmtDateTime, truncate, debounce, add, fill } from "../components.js";
@@ -26,14 +27,16 @@ export default {
       if (!pending.length) return;
       const dirty = [...drafts.keys()].filter((id) => pending.some((r) => r.id === id)).length;
       const msg = `Approve all ${pending.length} pending comment${pending.length === 1 ? "" : "s"}? They post one by one inside your safety limits.` + (dirty ? ` ${dirty} unsaved edit${dirty === 1 ? " is" : "s are"} not included - save them first.` : "");
+      const ids = pending.map((r) => r.id); // only what the user saw when clicking
       if (!(await confirmDialog(msg, { title: "Approve all", okLabel: "Approve all" }))) return;
-      const r = await ctx.send("reviewApproveAll", {}, { label: "Approve all" });
+      const r = await ctx.send("reviewApproveAll", { ids }, { label: "Approve all" });
       if (r) { toast(`Approved ${num(r.count)}`, { type: "success" }); load(true); }
     }, { kind: "primary", iconName: "check", id: "approveAllBtn" });
     const skipAll = btn("Skip all", async () => {
       if (!pending.length) return;
+      const ids = pending.map((r) => r.id);
       if (!(await confirmDialog(`Skip all ${pending.length} pending comment${pending.length === 1 ? "" : "s"}? Skipped comments are kept in History.`, { title: "Skip all", okLabel: "Skip all", danger: true }))) return;
-      const r = await ctx.send("reviewSkipAll", {}, { label: "Skip all" });
+      const r = await ctx.send("reviewSkipAll", { ids }, { label: "Skip all" });
       if (r) { toast(`Skipped ${num(r.count)}`, { type: "success" }); load(true); }
     }, { id: "skipAllBtn" });
 
@@ -95,7 +98,7 @@ export default {
       ta.value = text;
       const counter = h("span", { class: "char-count", "aria-live": "polite" });
       const updateCount = () => {
-        const n = ta.value.length;
+        const n = weightedLength(ta.value); // X's count: CJK characters and emoji count double
         counter.textContent = `${n} / ${HARD.maxCommentChars}`;
         counter.className = "char-count" + (n > HARD.maxCommentChars ? " is-over" : n > s.quality.maxChars ? " is-warn" : "");
         counter.title = n > HARD.maxCommentChars ? "Too long for X" : n > s.quality.maxChars ? `Longer than your max (${s.quality.maxChars})` : "";
@@ -129,7 +132,7 @@ export default {
         const approve = btn("Approve", (e) => {
           const v = ta.value.trim();
           if (!v) { toast("The comment is empty.", { type: "warn" }); return; }
-          if (v.length > HARD.maxCommentChars) { toast(`Too long: X allows ${HARD.maxCommentChars} characters.`, { type: "warn" }); return; }
+          if (weightedLength(v) > HARD.maxCommentChars) { toast(`Too long: X allows ${HARD.maxCommentChars} (CJK characters and emoji count double).`, { type: "warn" }); return; }
           act(rec, "approve", v, e.currentTarget, el);
         }, { kind: "primary", iconName: "check", title: "Approve this text; it posts in its time slot" });
         saveBtn = btn("Save edit", (e) => act(rec, "save", ta.value.trim(), e.currentTarget, el), { title: "Save your edit without approving" });

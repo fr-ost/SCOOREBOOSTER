@@ -18,6 +18,10 @@ import { postReply } from "./poster.js";
 import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
+import { cancelDiscovery } from "./discovery.js";
+
+// Background X jobs started outside the tick (profile refreshes) check this flag; Pause/Stop set it.
+export const backgroundAbort = { requested: false };
 
 const SAFETY_STOPS = new Set(Object.values(STOP).filter((s) => s !== STOP.USER));
 let ticking = false;
@@ -47,7 +51,7 @@ export async function onWorkerStart() {
   const st = await getState();
   if (st.job) await patchState({ job: null });
   const d = await load(K.discovery, null);
-  if (d && (d.status === "running" || d.status === "cancelling")) {
+  if (d && ["running", "cancelling", "waiting", "queued"].includes(d.status)) {
     await save({ [K.discovery]: { ...d, status: "error", message: "Interrupted (browser or extension restarted)", finishedAt: now() } });
   }
   await ensureAlarms();
@@ -117,7 +121,7 @@ export async function computeCounts(settings, ts = now()) {
   for (const r of recent) {
     if (dayKey(r.createdAt, tz) === today) {
       c.costToday += r.cost || 0;
-      if (r.status === HS.SKIPPED && r.attempts > 0) c.skippedToday++;
+      if (r.status === HS.SKIPPED) c.skippedToday++;
       if (r.status === HS.FAILED) c.failedToday++;
     }
     if (r.attempts > 0 && ts - r.createdAt < DAY) c.generatedToday++;
@@ -210,6 +214,8 @@ export async function start() {
 }
 
 export async function pause() {
+  backgroundAbort.requested = true;
+  await cancelDiscovery().catch(() => {});
   await patchState({ status: STATUS.PAUSED, nextTickAt: null });
   clearTimeout(tickTimer);
   await chrome.alarms.clear(ALARM.TICK).catch(() => {});
@@ -233,6 +239,8 @@ export async function resume() {
 export async function stop(reason = STOP.USER, detail = "") {
   const label = STOP_LABEL[reason] || reason;
   const safety = SAFETY_STOPS.has(reason);
+  backgroundAbort.requested = true; // Stop means stop everything that drives the X tab
+  await cancelDiscovery().catch(() => {});
   await patchState({
     status: STATUS.STOPPED, stopReason: reason, stopDetail: truncate(detail, 300), stoppedAt: now(), nextTickAt: null,
     alert: safety ? { reason, label, detail: truncate(detail, 300), at: now() } : null,
@@ -372,9 +380,9 @@ async function tickBody(settings, secrets, reason = "timer") {
 
   // 2) Watch for new posts and generate (unless the review queue is full). Watch pages are never loaded
   //    more often than the hard minimum interval, whatever schedules the tick.
-  // A manual "Run a check now" may come sooner (20 s), and waits for that rather than being dropped.
+  // A manual "Run a check now" waits for the hard minimum interval instead of being dropped.
   const sinceWatch = state.lastWatchAt ? ts - state.lastWatchAt : Infinity;
-  const minWatchGap = (reason === "manual" ? 20 : HARD.minCheckIntervalSec) * 1000;
+  const minWatchGap = HARD.minCheckIntervalSec * 1000;
   if (counts.pendingReview < settings.review.maxPending && sinceWatch < minWatchGap && reason === "manual") {
     return { delay: minWatchGap - sinceWatch + 1000, why: "manual" };
   }
@@ -678,7 +686,13 @@ async function backgroundStep({ tabId, settings, me }) {
 
 // ---------- review actions (from the dashboard) ----------
 
-export async function reviewAction({ id, action, text }) {
+export async function reviewAction(msg) {
+  const res = await reviewActionInner(msg);
+  await refreshBadge().catch(() => {});
+  return res;
+}
+
+async function reviewActionInner({ id, action, text }) {
   const rec = await H.get(id);
   if (!rec) return { ok: false, error: "Item not found" };
   const editable = [HS.PENDING_REVIEW, HS.APPROVED, HS.QUEUED].includes(rec.status);
@@ -738,13 +752,17 @@ export async function reviewAction({ id, action, text }) {
   return { ok: false, error: "Unknown action" };
 }
 
-export async function reviewBulk(action) {
-  const items = await H.byStatus(HS.PENDING_REVIEW);
+// Acts only on the ids the user was shown (never on items generated while a confirm dialog was open).
+export async function reviewBulk(action, ids) {
+  if (!Array.isArray(ids)) return { ok: false, error: "No items given" };
+  const want = new Set(ids);
+  const items = (await H.byStatus(HS.PENDING_REVIEW)).filter((r) => want.has(r.id));
   let n = 0;
   for (const r of items) {
-    const res = await reviewAction({ id: r.id, action });
+    const res = await reviewActionInner({ id: r.id, action });
     if (res.ok) n++;
   }
+  await refreshBadge();
   return { ok: true, count: n };
 }
 

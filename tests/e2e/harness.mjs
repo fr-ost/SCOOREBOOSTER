@@ -80,6 +80,9 @@ export async function boot({ port = 8443, viewport = { width: 1280, height: 900 
   H.secrets = async (patch) => (await H.page()).evaluate(async (p) => { const S = await import("/lib/store.js"); await S.setSecrets(p); }, patch);
   H.history = async () => (await H.page()).evaluate(async () => { const X = await import("/lib/history.js"); return (await X.all()).sort((a, b) => a.createdAt - b.createdAt); });
   H.patchHistory = async (id, fields) => (await H.page()).evaluate(async ([id, f]) => { const X = await import("/lib/history.js"); return X.patch(id, f); }, [id, fields]);
+  // "Run a check now" for tests: the engine never loads watch pages more often than every 90 s, so tests
+  // clear the last-watch time first instead of waiting it out.
+  H.runNow = async () => { await H.patchState({ lastWatchAt: 0 }); return H.msg("runNow"); };
   H.badge = async () => H.sw.evaluate(() => chrome.action.getBadgeText({}));
   H.waitFor = async (fn, what, timeoutMs = 60000, every = 500) => {
     const until = Date.now() + timeoutMs;

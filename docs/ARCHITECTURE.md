@@ -65,7 +65,7 @@ extension/
 | discoveryStart | `{ source, handles, query, maxUsers, enrich }` | `{}` (progress in `sx.discovery`) |
 | discoveryCancel | - | `{}` |
 | reviewAction | `{ id, action: approve\|skip\|regenerate\|save, text }` | `{ record }` |
-| reviewApproveAll / reviewSkipAll | - | `{ count }` |
+| reviewApproveAll / reviewSkipAll | `{ ids }` (the items the user saw) | `{ count }` |
 | testOpenAI | `{ modelId, effort }` | `{ text, usage, cost, ms, error }` |
 | previewPrompt | `{ handle? }` | `{ instructions, input }` |
 | sorsaTest | - | `{ score, remaining }` |

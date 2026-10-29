@@ -24,7 +24,7 @@ try {
   assert(s.effectiveMode === "review" && s.warmup.active, "day 1: Full auto is locked (warm-up)");
   assert(s.today.limit === 10, "week 1 daily limit is 10");
   const p1 = M.addPost("bigbob", "Most founders underestimate how long distribution takes to compound. Start before launch.", 3);
-  await H.msg("runNow");
+  await H.runNow();
   const r1 = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p1.id && x.attempts > 0), "item for p1", 90000);
   assert(r1.status === "pending_review", "warm-up item went to the review queue, not auto");
   await H.msg("reviewAction", { id: r1.id, action: "skip" });
@@ -44,12 +44,12 @@ try {
   s = (await H.msg("getStatus")).status;
   assert(s.effectiveMode === "auto" && !s.warmup.active, "after 3 days Full auto is active");
   const p2 = M.addPost("alice", "We cut our signup form from 9 fields to 3 and conversion jumped. Asking for company size later worked fine.", 2);
-  await H.msg("runNow");
+  await H.runNow();
   const q = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p2.id && x.status === "queued"), "queued auto item", 90000);
   assert(q.scheduledFor > Date.now() + 20000, "auto item is scheduled with a human delay (" + Math.round((q.scheduledFor - Date.now()) / 1000) + "s)");
   await H.patchHistory(q.id, { scheduledFor: 0 });
   await H.patchState({ nextCommentAt: 0, lastCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const posted = await H.waitFor(async () => (await H.history()).find((x) => x.id === q.id && x.status === "posted"), "auto posted", 120000);
   assert(M.replies.some((r) => r.inReplyTo === p2.id), "Full auto posted the reply");
   assert(posted.liked && M.likes.includes(p2.id), "like + comment combo liked the post first");
@@ -62,7 +62,7 @@ try {
   const start = new Date(now.getTime() + 2 * 3600e3), end = new Date(now.getTime() + 3 * 3600e3);
   await H.settings({ timezone: "UTC", safety: { activeHours: { enabled: true, start: hh(start), end: hh(end) } } });
   const searchesBefore = M.log.length;
-  await H.msg("runNow");
+  await H.runNow();
   const sl = await H.waitFor(async () => { const x = await H.store("sx.state"); return x.sleepingUntil ? x : null; }, "sleeping", 30000);
   assert(Math.abs(sl.sleepingUntil - start.getTime()) < 2 * MIN, "outside active hours: sleeping until the window opens");
   assert(M.log.length === searchesBefore, "no X activity while sleeping");
@@ -73,11 +73,11 @@ try {
   // ---- X warning toast on reply -> stop ----
   const p3 = M.addPost("bigbob", "Hiring take: generalists win early, specialists win later. Most teams flip too soon.", 2);
   await H.patchState({ nextCommentAt: 0, lastCommentAt: 0, sleepingUntil: null });
-  await H.msg("runNow");
+  await H.runNow();
   const q3 = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p3.id && x.status === "queued"), "queued p3", 90000);
   M.replyMode = "warning";
   await H.patchHistory(q3.id, { scheduledFor: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   let st = await waitStopped("unusual_activity", 120000);
   assert(/automated/i.test(st.stopDetail) && st.alert, "AUTO-STOP on X 'looks automated' warning");
   assert(!M.replies.some((r) => r.inReplyTo === p3.id), "nothing posted on warning");
@@ -88,10 +88,10 @@ try {
   const p4 = M.addPost("bigbob", "Ran a pricing test: annual-first default lifted cash collected by 30 percent.", 2);
   await H.msg("resume");
   await H.patchState({ nextCommentAt: 0, lastCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const q4 = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p4.id && x.status === "queued"), "queued p4", 90000);
   await H.patchHistory(q4.id, { scheduledFor: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   st = await waitStopped("rate_limit", 120000);
   assert(st.stopReason === "rate_limit", "AUTO-STOP on X rate limit message");
 
@@ -103,13 +103,13 @@ try {
   const pe = M.addPost("erin", "Unpopular opinion: weekly product updates are more valuable than big launches for B2B.", 2);
   await H.msg("resume");
   await H.patchState({ nextCommentAt: 0, lastCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   await H.waitFor(async () => { const h = await H.history(); return h.filter((x) => (x.postId === pd.id || x.postId === pe.id) && x.status === "queued").length === 2; }, "2 queued", 120000);
   for (const x of (await H.history()).filter((x) => x.status === "queued")) await H.patchHistory(x.id, { scheduledFor: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   await H.waitFor(async () => (await H.history()).some((x) => x.status === "failed" && /not_visible|not_confirmed/.test(x.reason)), "first failure", 120000);
   await H.patchState({ nextCommentAt: 0, lastCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   st = await waitStopped("repeated_post_failures", 150000);
   assert(st.stopReason === "repeated_post_failures", "AUTO-STOP after 2 posting failures in a row");
   const unsure = (await H.history()).filter((x) => x.status === "failed" && x.maybePosted);
@@ -119,7 +119,7 @@ try {
   // ---- X changed its markup -> stop ----
   M.pageMode = "broken";
   M.addPost("bigbob", "A post on a page whose markup changed", 2); M.addPost("alice", "x", 2); M.addPost("dave", "y", 2);
-  await H.msg("resume"); await H.msg("runNow");
+  await H.msg("resume"); await H.runNow();
   st = await waitStopped("dom_changed", 60000);
   assert(st.stopReason === "dom_changed", "AUTO-STOP when posts render but can't be read (selectors outdated)");
   M.pageMode = "ok";
@@ -132,7 +132,7 @@ try {
   assert(pinned.includes(true), "worker tab is pinned");
   await tab.close();
   await sleep(1000);
-  await H.msg("runNow");
+  await H.runNow();
   await H.waitFor(async () => !!(await xTab()), "tab reopened", 60000);
   assert(true, "closed X tab was reopened automatically");
 
@@ -142,7 +142,7 @@ try {
   await sleep(1500);
   s = (await H.msg("getStatus")).status; // wakes the worker
   assert(s.state.status === "running", "after a worker restart the engine is still running (state in storage)");
-  await H.msg("runNow");
+  await H.runNow();
   await H.waitFor(async () => ((await H.store("sx.state")).tickCount || 0) > before, "tick after restart", 90000);
   assert(true, "ticks continue after the service worker was killed");
 
@@ -153,10 +153,10 @@ try {
   await H.msg("targetsUpsert", { rows: ["hank"], defaults: { group: "B", tier: 2 } });
   const p9 = M.addPost("hank", "Shipping our first public roadmap this week, curious how it changes support volume.", 2);
   await H.patchState({ nextCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const r9 = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p9.id && x.status === "pending_review"), "pending p9", 90000);
   await H.patchHistory(r9.id, { createdAt: Date.now() - 5 * 3600e3 });
-  await H.msg("runNow");
+  await H.runNow();
   await H.waitFor(async () => (await H.history()).find((x) => x.id === r9.id && x.status === "skipped" && /Expired/.test(x.reason)), "expired", 60000);
   assert(true, "stale review items expire");
 
@@ -167,10 +167,10 @@ try {
   await H.msg("targetsUpsert", { rows: ["frank"], defaults: { group: "B", tier: 2 } });
   const pf = M.addPost("frank", "Only people I mention can reply to this one, testing restricted replies today.", 2);
   await H.patchState({ nextCommentAt: 0, consecutiveFailures: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const qf = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pf.id && x.status === "queued"), "queued pf", 90000);
   await H.patchHistory(qf.id, { scheduledFor: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const sf = await H.waitFor(async () => (await H.history()).find((x) => x.id === qf.id && x.status === "skipped"), "restricted skipped", 120000);
   assert(/restricted/.test(sf.reason) && (await H.store("sx.state")).status === "running", "restricted replies are skipped without stopping");
 
@@ -181,10 +181,10 @@ try {
   const parent = M.addPost("frank", "Parent post in a thread that gina answers.", 30);
   const pg = M.addPost("gina", "Agree with this thread, the onboarding point is the one most teams miss entirely.", 2, { parentId: parent.id });
   await H.patchState({ nextCommentAt: 0, consecutiveFailures: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const qg = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pg.id && x.status === "queued"), "queued pg", 90000);
   await H.patchHistory(qg.id, { scheduledFor: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   const sg = await H.waitFor(async () => (await H.history()).find((x) => x.id === qg.id && x.status === "skipped"), "thread reply skipped", 120000);
   assert(/reply_in_thread/.test(sg.reason) && !M.replies.some((r) => r.inReplyTo === pg.id), "replies inside threads are skipped at posting time");
 

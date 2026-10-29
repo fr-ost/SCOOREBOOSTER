@@ -108,7 +108,10 @@ async function runDiscoveryInner(opts, stopFn) {
   const me = String(settings.account.handle || "").toLowerCase();
   const maxUsers = clamp(Math.round(Number(opts.maxUsers) || settings.discovery.maxUsers), 10, 1000);
   const sources = sourceUrls(opts.source, { me, handles: opts.handles, query: opts.query });
-  if (!sources.length) return { ok: false, error: "Nothing to search: add handles or a keyword." };
+  if (!sources.length) {
+    await setJob({ status: "error", message: "Nothing to search: add handles or a keyword (or set your X handle for 'My followers').", finishedAt: now() });
+    return { ok: false, error: "Nothing to search: add handles or a keyword." };
+  }
   await setJob({ status: "running", source: opts.source, step: "Opening X", progress: { done: 0, total: sources.length }, found: 0, message: "", startedAt: now(), finishedAt: null });
   const tabId = await workerTab(settings);
   if (tabId == null) { await setJob({ status: "error", message: "Could not open the X tab" }); return { ok: false, error: "Could not open the X tab" }; }

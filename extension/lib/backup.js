@@ -49,7 +49,8 @@ export async function importData(data, parts = ["settings", "targets", "history"
     imported.targets = n;
   }
   if (parts.includes("history") && Array.isArray(data.history)) {
-    const recs = data.history.slice(0, 50000).map(cleanHistoryRecord).filter(Boolean);
+    const existing = new Set((await H.all()).map((r) => r.id));
+    const recs = data.history.slice(0, 50000).map(cleanHistoryRecord).filter((r) => r && !existing.has(r.id));
     await db().putMany(STORES.history, recs);
     imported.history = recs.length;
   }
@@ -140,10 +141,16 @@ export async function clearHistory() {
   return { ok: true, removed, kept };
 }
 
-// Factory reset of everything except API keys.
+// Factory reset of everything except API keys and what the safety limits depend on: comments posted in the
+// last 8 days (rolling 24h / 7-day caps) and the spend ledger (monthly budget). Warm-up starts again.
 export async function resetAll() {
-  await remove([K.settings, K.targets, K.candidates, K.seen, K.logs, K.discovery, K.selectorOverrides, K.learning, K.spend, K.state]);
-  await H.clearAll();
+  await remove([K.settings, K.targets, K.candidates, K.seen, K.logs, K.discovery, K.selectorOverrides, K.learning, K.state]);
+  const keepSince = now() - 8 * 864e5;
+  for (const r of await H.all()) {
+    const recentPost = (r.status === HS.POSTED || r.maybePosted) && (r.postedAt || r.attemptAt || r.createdAt) >= keepSince;
+    if (recentPost) { if (OPEN_STATUSES.includes(r.status)) await H.patch(r.id, { status: HS.SKIPPED, reason: "Reset" }); continue; }
+    await H.remove(r.id);
+  }
   await db().clear(STORES.events).catch(() => {});
   await save({ [K.state]: { ...DEFAULT_STATE, status: STATUS.STOPPED } });
   return { ok: true };

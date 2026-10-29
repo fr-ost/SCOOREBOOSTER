@@ -63,7 +63,7 @@ try {
   const edited = "Distribution compounds, but only after activation works. What did your first 100 users have in common?";
   r = await H.msg("reviewAction", { id: recBob.id, action: "approve", text: edited });
   assert(r.ok && r.record.status === "approved" && r.record.edited, "approved with edit");
-  await H.msg("runNow");
+  await H.runNow();
   const posted = await H.waitFor(async () => (await H.history()).find((x) => x.id === recBob.id && x.status === "posted"), "bigbob comment posted", 120000);
   assert(M.replies.length === 1 && M.replies[0].text === edited && M.replies[0].inReplyTo === pBob.id, "reply posted through the page with the exact edited text");
   assert(/\/0x_nation\/status\/\d+/.test(posted.replyUrl), "reply URL captured: " + posted.replyUrl);
@@ -76,18 +76,18 @@ try {
 
   // ---- gap respected, then posts ----
   r = await H.msg("reviewAction", { id: recAlice.id, action: "approve" });
-  await H.msg("runNow");
+  await H.runNow();
   await sleep(8000);
   assert((await H.history()).find((x) => x.id === recAlice.id).status === "approved", "second approved item waits for the gap");
   await H.patchState({ nextCommentAt: 0, lastCommentAt: Date.now() - 15 * 60000 });
-  await H.msg("runNow");
+  await H.runNow();
   await H.waitFor(async () => (await H.history()).find((x) => x.id === recAlice.id && x.status === "posted"), "alice comment posted", 120000);
   assert(M.replies.length === 2, "second reply posted after the gap");
 
   // ---- per-target daily cap: a new bigbob post is not generated today ----
   const pBob2 = M.addPost("bigbob", "Second post today about hiring generalists versus specialists in early startups.", 2);
   await H.patchState({ nextCommentAt: 0 });
-  await H.msg("runNow");
+  await H.runNow();
   await sleep(15000);
   const h3 = await H.history();
   assert(!h3.find((x) => x.postId === pBob2.id && x.attempts > 0), "no generation for a target already commented on today");
@@ -96,7 +96,7 @@ try {
   M.addUser("dave", { name: "Dave", followers: 40000 });
   const pDave = M.addPost("dave", "Hot take: most dashboards are vanity. The metric that matters is weekly active teams.", 3);
   await H.msg("targetsUpsert", { rows: ["dave"], defaults: { group: "B", tier: 2 } });
-  await H.msg("runNow");
+  await H.runNow();
   const recDave = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pDave.id && x.status === "pending_review"), "dave pending", 90000);
   const before = recDave.comment;
   r = await H.msg("reviewAction", { id: recDave.id, action: "regenerate" });
@@ -107,7 +107,7 @@ try {
   // ---- auto-stop: captcha ----
   M.pageMode = "captcha";
   M.addPost("dave", "Another fresh post that should never be acted on while a captcha is up.", 2);
-  await H.msg("runNow");
+  await H.runNow();
   st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" ? s : null; }, "stop on captcha", 60000);
   assert(st.stopReason === "captcha" && st.alert && st.alert.reason === "captcha", "AUTO-STOP on captcha with alert");
   assert((await H.badge()) === "!", "red badge shown");
@@ -118,13 +118,13 @@ try {
   M.pageMode = "logged_out";
   r = await H.msg("resume");
   assert(r.ok, "resume after safety stop");
-  await H.msg("runNow");
+  await H.runNow();
   st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" && s.stopReason === "logged_out" ? s : null; }, "stop on logout", 60000);
   assert(st.stopReason === "logged_out", "AUTO-STOP when logged out");
 
   // ---- wrong account ----
   M.pageMode = "wrong_account";
-  await H.msg("resume"); await H.msg("runNow");
+  await H.msg("resume"); await H.runNow();
   st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" && s.stopReason === "wrong_account" ? s : null; }, "stop on wrong account", 60000);
   assert(/someone_else/.test(st.stopDetail), "AUTO-STOP on a different logged-in account");
 
@@ -134,7 +134,7 @@ try {
   M.addUser("erin", { followers: 9000 });
   M.addPost("erin", "Shipping a new pricing page tomorrow with usage based tiers for small teams.", 2);
   await H.msg("targetsUpsert", { rows: ["erin"], defaults: { group: "B", tier: 2 } });
-  await H.msg("resume"); await H.msg("runNow");
+  await H.msg("resume"); await H.runNow();
   st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" && s.stopReason === "openai_auth" ? s : null; }, "stop on 401", 60000);
   assert(st.stopReason === "openai_auth", "AUTO-STOP when the OpenAI key is rejected");
   const logs = JSON.stringify(await H.store("sx.logs"));
@@ -143,7 +143,7 @@ try {
   // ---- budget ----
   M.openai.mode = "ok";
   await H.settings({ budget: { monthlyUsd: 0.0001 } });
-  await H.msg("resume"); await H.msg("runNow");
+  await H.msg("resume"); await H.runNow();
   st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" && s.stopReason === "budget_reached" ? s : null; }, "stop on budget", 60000);
   assert(st.stopReason === "budget_reached", "AUTO-STOP when the monthly budget is reached");
   await H.settings({ budget: { monthlyUsd: 0 } });

@@ -57,18 +57,21 @@ engine.onWorkerStart().catch(() => {});
 
 // ---------- discovery runner (needs the X tab, so it shares the engine lease) ----------
 
-async function startDiscovery(opts) {
+const ACTIVE_DISCOVERY = ["running", "waiting", "cancelling", "queued"];
+async function startDiscovery(opts, jobId) {
   const until = now() + 3 * 60 * 1000;
-  await save({ [K.discovery]: { status: "waiting", source: opts.source, step: "Waiting for the X tab", message: "", startedAt: now(), finishedAt: null } });
+  const mine = async () => { const d = await load(K.discovery, {}); return d.jobId === jobId ? d : null; };
   while (now() < until) {
-    const cur = await load(K.discovery, {});
+    const cur = await mine();
+    if (!cur) return { ok: false, error: "superseded" };
     if (cur.status === "cancelling") { await save({ [K.discovery]: { ...cur, status: "cancelled", finishedAt: now() } }); return { ok: false, error: "cancelled" }; }
-    const r = await engine.withLease("discovery", () => runDiscovery(opts, engine.stop));
+    const r = await engine.withLease("discovery", () => runDiscovery({ ...opts, jobId }, engine.stop));
     if (!r || !r.busy) return r;
     await sleep(5000);
   }
   log("warn", "Discovery could not start: ScoreX was busy for 3 minutes");
-  await save({ [K.discovery]: { ...(await load(K.discovery, {})), status: "error", message: "ScoreX was busy for 3 minutes - try again", finishedAt: now() } });
+  const cur = await mine();
+  if (cur) await save({ [K.discovery]: { ...cur, status: "error", message: "ScoreX was busy for 3 minutes - try again", finishedAt: now() } });
   return { ok: false, error: "busy" };
 }
 
@@ -79,20 +82,24 @@ async function refreshTargetsNow(handles) {
     await patchState((s) => ({ pendingRefresh: [...new Set([...(s.pendingRefresh || []), ...list])] }));
     return { ok: true, queued: list.length, when: "next idle check" };
   }
-  // Not running: refresh now in the background (still through the same lease + page checks).
+  // Not running: refresh now in the background (same lease + page checks); Pause/Stop abort it.
+  const now50 = list.slice(0, 50);
+  engine.backgroundAbort.requested = false;
   (async () => {
     await engine.withLease("refresh", async () => {
       const settings = await getSettings();
       const tabId = await workerTab(settings);
       if (tabId == null) return;
-      for (const h of list.slice(0, 20)) {
+      for (const h of now50) {
+        if (engine.backgroundAbort.requested) { log("info", "Profile refresh stopped by you"); break; }
         const r = await refreshProfile(tabId, h, settings);
         if (r && r.stop) { await engine.stop(r.stop, r.detail); break; }
         await sleep(3000 + Math.random() * 5000);
       }
     });
   })().catch((e) => log("error", "Refresh failed: " + e.message));
-  return { ok: true, queued: list.length, when: "now" };
+  if (list.length > now50.length) await patchState((s) => ({ pendingRefresh: [...new Set([...(s.pendingRefresh || []), ...list.slice(50)])] }));
+  return { ok: true, queued: list.length, when: list.length > 50 ? "50 now, the rest while running" : "now" };
 }
 
 async function previewPrompt(handle) {
@@ -152,14 +159,23 @@ const handlers = {
   candidatesClear: async () => { await updateCandidates(() => ({})); return { ok: true }; },
 
   discoveryStart: async (m) => {
-    startDiscovery({ source: m.source, handles: m.handles || [], query: m.query || "", maxUsers: m.maxUsers, enrich: !!m.enrich }).catch((e) => log("error", "Discovery failed: " + e.message));
+    const cur = await load(K.discovery, {});
+    if (ACTIVE_DISCOVERY.includes(cur.status)) return { ok: false, error: "A discovery is already running - cancel it first" };
+    const jobId = "d" + now().toString(36);
+    await save({ [K.discovery]: { jobId, status: "waiting", source: m.source, step: "Waiting for the X tab", message: "", startedAt: now(), finishedAt: null } });
+    startDiscovery({ source: m.source, handles: m.handles || [], query: m.query || "", maxUsers: m.maxUsers, enrich: !!m.enrich }, jobId)
+      .then(async (r) => {
+        const d = await load(K.discovery, {});
+        if (r && r.ok === false && d.jobId === jobId && ["waiting", "running"].includes(d.status)) await save({ [K.discovery]: { ...d, status: "error", message: r.error || "Could not start", finishedAt: now() } });
+      })
+      .catch((e) => log("error", "Discovery failed: " + e.message));
     return { ok: true };
   },
   discoveryCancel: async () => { await cancelDiscovery(); return { ok: true }; },
 
   reviewAction: (m) => engine.reviewAction(m),
-  reviewApproveAll: () => engine.reviewBulk("approve"),
-  reviewSkipAll: () => engine.reviewBulk("skip"),
+  reviewApproveAll: (m) => engine.reviewBulk("approve", m.ids),
+  reviewSkipAll: (m) => engine.reviewBulk("skip", m.ids),
 
   testOpenAI: async (m) => {
     const [settings, secrets] = await Promise.all([getSettings(), getSecrets()]);
@@ -186,8 +202,8 @@ const handlers = {
 
   exportData: (m) => exportData(m.parts),
   importData: (m) => importData(m.data, m.parts),
-  historyClear: () => clearHistory(),
-  resetAll: async () => { await engine.stop(STOP.USER); return resetAll(); },
+  historyClear: async () => { const r = await clearHistory(); await engine.refreshBadge(); return r; },
+  resetAll: async () => { await engine.stop(STOP.USER); const r = await resetAll(); await engine.refreshBadge(); return r; },
 };
 
 

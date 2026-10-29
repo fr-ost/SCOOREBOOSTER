@@ -190,6 +190,13 @@ export default {
       const allowed = new Set(["sel", "text", "misc", "version"]);
       const bad = Object.keys(v).filter((k) => !allowed.has(k));
       if (bad.length) return { ok: false, error: `Unknown top-level key(s): ${bad.join(", ")}. Use sel, text or misc.` };
+      for (const grp of ["sel", "text", "misc"]) {
+        if (v[grp] != null && (typeof v[grp] !== "object" || Array.isArray(v[grp]))) return { ok: false, error: `"${grp}" must be an object of named entries, e.g. {"${grp}": {"likeButton": ...}}.` };
+      }
+      // dashboard.html loads content/selectors.js, so the built-in keys are known here.
+      const known = globalThis.SX_SELECTORS ? { sel: Object.keys(globalThis.SX_SELECTORS.sel), text: Object.keys(globalThis.SX_SELECTORS.text) } : null;
+      const unknown = known ? Object.keys(v.sel || {}).filter((k) => !known.sel.includes(k)).concat(Object.keys(v.text || {}).filter((k) => !known.text.includes(k))) : [];
+      if (unknown.length) return { ok: false, error: `Unknown selector key(s): ${unknown.join(", ")}. Check the spelling against content/selectors.js.` };
       const frag = document.createDocumentFragment();
       for (const [k, list] of Object.entries(v.sel || {})) {
         for (const sel of Array.isArray(list) ? list : [list]) {
@@ -285,7 +292,7 @@ export default {
       sectionTitle("Reset"),
       h("p", { class: "muted small" }, "Stops the engine and deletes settings, targets, candidates, history, logs, learning data and selector overrides. Your API keys are kept (remove them above or in Models & Costs)."),
       btn("Reset everything", async () => {
-        if (!(await confirmDialog("Reset ScoreX completely? Settings, targets, candidates, history and logs are deleted. API keys are kept.", { title: "Reset everything", okLabel: "Continue", danger: true }))) return;
+        if (!(await confirmDialog("Reset ScoreX completely? Settings, targets, candidates, history and logs are deleted. Kept: API keys, the spend ledger, and comments posted in the last 8 days (the 24h / 7-day safety limits and the monthly budget depend on them). Warm-up starts again.", { title: "Reset everything", okLabel: "Continue", danger: true }))) return;
         if (!(await confirmDialog("This cannot be undone. Really delete everything?", { title: "Are you sure?", okLabel: "Delete everything", danger: true }))) return;
         const r = await ctx.send("resetAll", {}, { label: "Reset" });
         if (r) { toast("ScoreX was reset"); setTimeout(() => location.reload(), 600); }

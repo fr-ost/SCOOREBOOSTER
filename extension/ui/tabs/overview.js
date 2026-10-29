@@ -27,7 +27,7 @@ export default {
       hero,
       warnings,
       h("div", { class: "grid-2-1" },
-        card({ title: "Today", subtitle: "Resets at midnight in your time zone", actions: h("a", { href: "#history", class: "btn btn-sm btn-ghost" }, "History") }, stats),
+        card({ title: "Today", subtitle: "Posted, generated and likes: last 24 hours (rolling). Cost, skipped, failed: since midnight.", actions: h("a", { href: "#history", class: "btn btn-sm btn-ghost" }, "History") }, stats),
         card({ title: "Mode", subtitle: "How generated comments get posted" }, modeBody)),
       card({
         title: "Recent activity",

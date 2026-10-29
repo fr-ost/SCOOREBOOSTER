@@ -321,9 +321,10 @@ export default {
     function drawDiscovery() {
       const d = ctx.data[K.discovery];
       clear(progressHost);
-      if (!d || typeof d !== "object" || (!d.status && !d.startedAt)) { progressHost.appendChild(h("p", { class: "muted small" }, "No discovery run yet.")); discCancel.disabled = true; return; }
+      if (!d || typeof d !== "object" || (!d.status && !d.startedAt)) { progressHost.appendChild(h("p", { class: "muted small" }, "No discovery run yet.")); discCancel.disabled = true; discStart.disabled = false; return; }
       const running = ["running", "queued", "waiting", "cancelling"].includes(d.status);
       discCancel.disabled = !running || d.status === "cancelling";
+      discStart.disabled = running; // one discovery at a time
       const p = d.progress || {};
       const done = num(p.done), total = num(p.total);
       const pct = total ? (running ? Math.max(4, ((done + 0.5) / total) * 100) : 100) : running ? 10 : 100;

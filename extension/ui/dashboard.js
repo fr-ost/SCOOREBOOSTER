@@ -262,11 +262,15 @@ async function route() {
     a.classList.toggle("active", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   }
+  // Each render gets its own host inside the view. Navigating clears the view, which detaches the old host,
+  // so a slow tab that is still awaiting can only append into its own detached host, never the next tab.
+  const host = h("div", { class: "tab-host" });
+  view.appendChild(host);
   try {
-    await tab.render(view, ctx);
+    await tab.render(host, ctx);
   } catch (e) {
     console.error("[ScoreX UI] tab render failed", tab.id, e);
-    view.appendChild(h("div", { class: "card" }, h("div", { class: "card-body" }, h("strong", null, "This tab failed to render. "), String((e && e.message) || e))));
+    host.appendChild(h("div", { class: "card" }, h("div", { class: "card-body" }, h("strong", null, "This tab failed to render. "), String((e && e.message) || e))));
   }
   if (seq === renderSeq) view.dataset.ready = tab.id;
 }
