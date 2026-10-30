@@ -34,6 +34,24 @@ describe("data: scoreboard", () => {
     assert.match(errors[0], /cap/);
   });
 
+  test("a score check of an account that is one of your targets also stores the score on the target", async () => {
+    await setup({ ethos: { enabled: true, dailyCap: 50 } });
+    await S.save({ [K.targets]: { alice: { handle: "alice", score: { own: 40 } } } });
+    const fetchImpl = async () => res(200, { score: 1500, profileId: 7 });
+    const r = await SB.checkScores("alice", { fetchImpl, ...FAST });
+    assert.equal(r.ok, true);
+    const t = rawGet(K.targets).alice;
+    assert.equal(t.score.providers.ethos.score, r.results.ethos.score);
+    assert.ok(t.score.providers.ethos.at > 0);
+    assert.equal(t.score.own, 40, "other score fields are kept");
+    // Not a target: nothing is created.
+    await SB.checkScores("bob", { fetchImpl, ...FAST });
+    assert.equal(Object.hasOwn(rawGet(K.targets), "bob"), false);
+    // A failed check leaves the stored score alone.
+    await SB.checkScores("alice", { fetchImpl: async () => res(500, {}), ...FAST });
+    assert.equal(rawGet(K.targets).alice.score.providers.ethos.score, r.results.ethos.score);
+  });
+
   test("target scores: a provider that keeps failing is asked 3 times, not once per target, and the run reports an error", async () => {
     await setup({ ethos: { enabled: true, dailyCap: 5000 } });
     const tg = {}; for (let i = 0; i < 12; i++) tg["t" + i] = { handle: "t" + i, score: null };

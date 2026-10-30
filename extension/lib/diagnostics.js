@@ -4,7 +4,7 @@
 // job lease, so it never overlaps a running check, post or discovery.
 
 import { CMD } from "./constants.js";
-import { getSettings, log } from "./store.js";
+import { getSettings, log, patchState } from "./store.js";
 import { workerTab, navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
 import { withLease, stop } from "./engine.js";
@@ -69,7 +69,11 @@ export async function runSelfTest() {
   });
   if (res && res.busy) return { ok: false, error: "ScoreX is busy in the X tab - try again in a minute (or pause it first)" };
   const failedN = res && res.checks ? res.checks.filter((c) => !c.ok).length : 0;
-  if (res && res.ok) log(failedN ? "warn" : "info", `Self-test: ${res.checks.length - failedN} of ${res.checks.length} checks passed`);
+  if (res && res.ok) {
+    log(failedN ? "warn" : "info", `Self-test: ${res.checks.length - failedN} of ${res.checks.length} checks passed`);
+    // The last live test, for Settings > Diagnostics (survives a dashboard reload).
+    await patchState({ lastSelfTest: { at: res.at || now(), ok: !failedN && !res.stop, checks: res.checks.slice(0, 20), stop: res.stop || null } }).catch(() => {});
+  }
   return res;
 }
 

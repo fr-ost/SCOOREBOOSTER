@@ -81,13 +81,14 @@ async function keepAlive(fn) {
 // Long provider jobs (smart-follower search, target scores) run in the background; progress is written to
 // sx.scoreboard.job so the dashboard can show it. One job at a time; Stop in the dashboard cancels it.
 let scoreJob = null;
-function startScoreJob(kind, label, run) {
+// extra: fields kept on the job for the dashboard (e.g. { provider } for target scores).
+function startScoreJob(kind, label, run, extra = {}) {
   if (scoreJob) return { ok: false, error: "Another score job is still running" };
   const job = { kind, label, cancel: false };
   scoreJob = job;
   const write = (patch) => SB.updateBoard((b) => ({ ...b, job: { ...(b.job || {}), ...patch, kind, label, updatedAt: now() } }));
   keepAlive(async () => {
-    await write({ status: "running", startedAt: now(), finishedAt: null, done: 0, total: 0, current: "", error: "", result: null });
+    await write({ status: "running", startedAt: now(), finishedAt: null, done: 0, total: 0, current: "", error: "", result: null, provider: null, ...extra });
     let r;
     try {
       r = await run({ onProgress: (p) => write({ ...p }), shouldStop: async () => job.cancel });
@@ -236,7 +237,7 @@ const handlers = {
   scoreCheck: (m) => keepAlive(() => SB.checkScores(String(m.handle || ""))),
   smartFollowers: (m) => keepAlive(() => SB.smartFollowersOf(String(m.handle || ""), { maxAgeMs: m.fresh ? 0 : undefined })),
   smartSweep: (m) => startScoreJob("sweep", "Smart followers", (ctl) => SB.sweepSmartFollowers((m.handles || []).map(String), ctl)),
-  targetScores: (m) => startScoreJob("targets", "Target scores", (ctl) => SB.refreshTargetScores((m.handles || []).map(String), String(m.provider || ""), ctl)),
+  targetScores: (m) => startScoreJob("targets", "Target scores", (ctl) => SB.refreshTargetScores((m.handles || []).map(String), String(m.provider || ""), ctl), { provider: String(m.provider || "") || null }),
   scoreJobCancel: async () => { if (scoreJob) scoreJob.cancel = true; return { ok: true }; },
 
   // ---- Tone "Try it": write a sample reply to a pasted post (never posted; the real cost is recorded) ----

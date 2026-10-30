@@ -160,6 +160,23 @@ export async function checkScores(handle, extra = {}) {
     capMap(b.checks, CAP_CHECKS);
     return b;
   });
+  // A checked account that is one of your targets keeps the fresh scores too (Targets table and drawer).
+  const fresh = Object.entries(results).filter(([, r]) => !r.error && r.score != null);
+  if (fresh.length) {
+    const blend = ctx.settings.scores.blendSorsa;
+    await updateTargets((all) => {
+      const t = Object.hasOwn(all, h) ? all[h] : null;
+      if (!t) return all;
+      t.score = t.score && typeof t.score === "object" ? t.score : {};
+      t.score.providers = { ...(t.score.providers || {}) };
+      for (const [pid, r] of fresh) {
+        t.score.providers[pid] = { score: r.score, max: r.max, at: now() };
+        if (pid === "sorsa") { t.score.sorsa = r.score; t.score.sorsaUpdatedAt = now(); }
+      }
+      t.score.combined = combinedScore(t.score.own, t.score.sorsa, blend);
+      return all;
+    });
+  }
   return { ok: true, handle: h, results };
 }
 

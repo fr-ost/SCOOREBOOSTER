@@ -275,6 +275,7 @@ export const DEFAULT_STATE = {
   accountUnknownStreak: 0, // page loads in a row where the logged-in account could not be read
   lastMentionsAt: null, // last read of your mentions (conversation alerts)
   lastHistoryMaintAt: null, // last history retention run
+  lastSelfTest: null, // { at, ok, checks: [{ id, label, ok, detail }], stop } - the last live X self-test (diagnostics.js)
 };
 
 export const DEFAULT_SECRETS = { openaiKey: "", sorsaKey: "", twitterscoreKey: "", moniKey: "" };
