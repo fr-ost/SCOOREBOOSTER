@@ -202,15 +202,18 @@ export async function postReply(rec, ctx) {
     // The content script checks the account and looks for prompts once more right before the click.
     const sb = await send(tabId, CMD.SUBMIT_REPLY, { expectText: text, expectMe: want || undefined }, 15000);
     v = verdictOf(sb, settings);
-    if (v) { await cleanup(tabId); return { ok: false, stop: v.stop, detail: v.detail, liked }; }
+    // (sb.ok: the click happened before the page showed the stop, so the reply may be on X unless X refused it)
+    if (v) { await cleanup(tabId); return { ok: false, stop: v.stop, detail: v.detail, liked, unsure: !!sb.ok && !REJECTED.has(v.stop) }; }
     if (sb.state) return { ok: false, stop: stopFor(sb.state), detail: sb.detail || sb.state, liked, unsure: false }; // not clicked
     const ar2 = accountRefusal(sb, want);
     if (ar2) { await cleanup(tabId); return ar2.stop ? { ok: false, stop: ar2.stop, detail: ar2.detail, liked } : accountUnknown(liked); }
-    if (!sb.ok) { await cleanup(tabId); return { ok: false, fail: true, reason: sb.error || "submit_failed", liked }; }
+    // No answer to the submit (tab frozen or reloaded): the click may have happened, so it is handled like an
+    // unconfirmed result below (thread re-check, then "may have been sent"). Never re-submitted.
+    if (!sb.ok && !sb.noAnswer) { await cleanup(tabId); return { ok: false, fail: true, reason: sb.error || "submit_failed", liked }; }
 
     // From here on the Reply button was clicked: anything short of a confirmation or an explicit rejection by
     // X counts as "may have been sent" (unsure), so the daily and per-account limits never under-count.
-    let rr = await send(tabId, CMD.REPLY_RESULT, { tweetId, expectText: text, me, timeoutMs: 20000 }, 40000);
+    let rr = sb.ok ? await send(tabId, CMD.REPLY_RESULT, { tweetId, expectText: text, me, timeoutMs: 20000 }, 40000) : { ok: false, noAnswer: true, error: "no_answer" };
     // The text is still in the box and nothing was confirmed: X may still be sending it. Wait once more
     // before leaving the page (leaving would cancel a request in flight). Never re-submits.
     if (!rr.ok && !rr.state && rr.error === "not_confirmed") {

@@ -103,6 +103,26 @@ describe("poster: unclear result after the Reply click (XP-3)", () => {
     assert.equal(r.stop, STOP.WARNING);
     assert.ok(!r.unsure);
   });
+
+  test("no answer to the submit itself (the click may have happened) -> thread re-check, then unsure; never re-submitted", async (t) => {
+    fast(t);
+    const env = fakeTab(xPage({ submitReply: NEVER }));
+    const r = await run(env);
+    assert.equal(r.fail, true);
+    assert.equal(r.unsure, true, "a submit without an answer may have posted: it counts toward the limits");
+    assert.equal(env.count("submitReply"), 1);
+    assert.equal(env.count("replyResult"), 0, "no confirmation wait on a page that did not answer");
+    assert.ok(env.after("submitReply").includes("navigate"), "the thread is checked again for the reply");
+  });
+
+  test("the submit was refused before the click (button disabled) -> plain failure, not counted as maybe sent", async (t) => {
+    fast(t);
+    const env = fakeTab(xPage({ submitReply: () => ({ ok: false, error: "submit_button_disabled" }) }));
+    const r = await run(env);
+    assert.equal(r.fail, true);
+    assert.equal(r.reason, "submit_button_disabled");
+    assert.ok(!r.unsure);
+  });
 });
 
 describe("poster: unknown X prompts (fail closed)", () => {

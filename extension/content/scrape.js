@@ -186,7 +186,7 @@
   // The profile header's "Follows you": only next to the profile's own name, never a badge from a "Who to
   // follow" / "You might like" user cell, a post or an overlay that is also in the primary column.
   function profileFollowsYou(primary, nameEl, handle) {
-    const own = (b) => !D.closest(b, "userCell") && !D.closest(b, "tweet") && !D.closest(b, "dialog");
+    const own = (b) => !D.closest(b, "userCell") && !D.closest(b, "tweet") && !D.closest(b, "dialog") && !D.closest(b, "knownOverlay");
     if (D.qaAll("followsYouBadge", primary).some(own)) return true;
     const lines = D.text(nameEl).split("\n").map((s) => s.trim()).filter(Boolean);
     return badgeLineAfterHandle(lines, handle);
