@@ -10,10 +10,12 @@ const posted = (r) => r && r.status === HS.POSTED && r.postedAt;
 
 // Funnel: added -> checked -> don't follow you (commenting) -> commented -> followed back; plus the ones
 // that already followed you and the ones given up (blacklisted after N days without a follow-back).
-export function funnel(targets, history, blacklist = {}) {
-  const list = Object.values(targets || {}).filter((t) => t && t.handle);
-  const gaveUp = Object.values(blacklist || {}).filter((b) => b && b.reason === "no_followback");
-  const commentedHandles = new Set((history || []).filter(posted).map((r) => r.target));
+// opts.since (ms): only targets added since then, removals since then and comments posted since then.
+export function funnel(targets, history, blacklist = {}, opts = {}) {
+  const since = Number(opts.since) || 0;
+  const list = Object.values(targets || {}).filter((t) => t && t.handle && (!since || (t.addedAt || 0) >= since || ((t.stats && t.stats.firstCommentAt) || 0) >= since));
+  const gaveUp = Object.values(blacklist || {}).filter((b) => b && b.reason === "no_followback" && (!since || (b.at || 0) >= since));
+  const commentedHandles = new Set((history || []).filter((r) => posted(r) && (!since || r.postedAt >= since)).map((r) => r.target));
   const s = { added: list.length + gaveUp.length, checking: 0, follows: 0, notFollowing: 0, commented: 0, followedBack: 0, gaveUp: gaveUp.length };
   for (const t of list) {
     const f = followStatus(t);

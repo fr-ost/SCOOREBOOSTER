@@ -40,7 +40,8 @@ export async function providerStates() {
     const mode = pickMode(def, cfg.mode, hasKey);
     const u = (board.usage || {})[def.id];
     out.push({
-      id: def.id, name: def.name, site: def.site, about: def.about || "", keyName: def.keyName || null, keyHelp: def.keyHelp || "",
+      id: def.id, name: def.name, alias: def.alias || "", site: def.site, about: def.about || "", profileUrl: def.profileUrl || "",
+      keyName: def.keyName || null, keyHelp: def.keyHelp || "", keyNote: def.keyNote || "", max: def.max || null, tiers: def.tiers || null,
       enabled: !!cfg.enabled, modePref: cfg.mode || "auto", mode, modes: Object.keys(def.modes || {}),
       needs: mode ? modeNeeds(def, mode) : { origins: [], permissions: [] },
       granted: mode ? await granted(def, mode) : false,

@@ -8,7 +8,7 @@ import * as engine from "../lib/engine.js";
 import * as T from "../lib/targets.js";
 import { onContentReady, onTabRemoved } from "../lib/tabs.js";
 import { runDiscovery, cancelDiscovery, candidatesToTargets } from "../lib/discovery.js";
-import { testModel, buildInstructions, buildInput } from "../lib/generator.js";
+import { testModel, buildInstructions, buildInput, generate } from "../lib/generator.js";
 import { testSorsa, refreshScores } from "../lib/sorsa.js";
 import { summary as learningSummary, resetAb } from "../lib/learning.js";
 import { preview as cleanupPreview } from "../lib/cleanup.js";
@@ -18,7 +18,7 @@ import { normalizeHandle, now, sleep } from "../lib/util.js";
 import * as H from "../lib/history.js";
 import { refreshProfile } from "../lib/watcher.js";
 import { workerTab } from "../lib/tabs.js";
-import { recordSpend } from "../lib/costs.js";
+import { recordSpend, getSpend, budgetStatus } from "../lib/costs.js";
 import * as SB from "../lib/scoreboard.js";
 import { runSelfTest } from "../lib/diagnostics.js";
 
@@ -249,6 +249,25 @@ const handlers = {
   smartSweep: (m) => startScoreJob("sweep", "Smart followers", (ctl) => SB.sweepSmartFollowers((m.handles || []).map(String), ctl)),
   targetScores: (m) => startScoreJob("targets", "Target scores", (ctl) => SB.refreshTargetScores((m.handles || []).map(String), String(m.provider || ""), ctl)),
   scoreJobCancel: async () => { if (scoreJob) scoreJob.cancel = true; return { ok: true }; },
+
+  // ---- Tone "Try it": write a sample reply to a pasted post (never posted; the real cost is recorded) ----
+  sampleReply: async (m) => {
+    const [settings, secrets, targets] = await Promise.all([getSettings(), getSecrets(), getTargets()]);
+    if (!secrets.openaiKey) return { ok: false, error: "Add your OpenAI API key first (Models & Costs)" };
+    if (budgetStatus(settings, await getSpend()).reached) return { ok: false, error: "Monthly OpenAI budget reached" };
+    const text = String(m.text || "").trim().slice(0, 1500);
+    if (text.length < 10) return { ok: false, error: "Paste the post text (a sentence or more)" };
+    const h = normalizeHandle(m.handle || "");
+    const t = (h && Object.hasOwn(targets, h) && targets[h]) || T.newTarget(h || "sample_author", { tier: Number(m.tier) === 1 ? 1 : 2 });
+    const post = { id: "sample", author: t.handle, authorName: t.name || "", text, lang: "", createdAt: now() - 5 * 60000 };
+    const tone = T.effectiveTone(t, settings);
+    const presetKey = T.effectivePreset(t, settings);
+    const previous = (await H.recentPosted(50)).map((r) => r.comment).filter(Boolean);
+    const g = await keepAlive(() => generate({ settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey, previous, bestComments: [], myHandle: settings.account.handle, onCall: async (call) => { await recordSpend(call.cost, call.modelId, settings.timezone); } }));
+    const cost = (g.calls || []).reduce((a, c) => a + (c.cost || 0), 0);
+    if (g.ok) return { ok: true, comment: g.comment, model: g.model && g.model.name, effort: g.effort, cost, tone: tone.key, preset: presetKey, quality: g.quality };
+    return { ok: false, error: g.skipped ? g.skipped.text : (g.error && g.error.message) || g.stop || "Generation failed", cost };
+  },
 
   // ---- diagnostics ----
   selfTest: () => keepAlive(() => runSelfTest()),
