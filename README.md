@@ -186,20 +186,44 @@ and every account would look like a non-follower, so ScoreX stops ("X page chang
 "Doesn't follow you" is only trusted while the badge was seen working in the last 3 days. If an account
 that followed you unfollows later, it is treated as not following again (after two checks in a row).
 
-## 6. Scores: what ScoreX uses (Kaito / Sorsa)
+## 6. Scores (TwitterScore, Sorsa, Ethos, Moni)
 
-* **Kaito**: not available. Kaito shut down Yaps and its leaderboards on 2026-01-15 after X changed its API
-  policy. Its old public Yaps API is gone, and the later Kaito / X data agreement came with no public
-  developer API. ScoreX does not use Kaito.
-* **Sorsa**: available as an **optional** provider (off by default). It is a paid API ($49/month for 10k
-  requests; new accounts get 100 free requests). Enable it in Settings with your own key: Chrome asks for
-  permission to reach `api.sorsa.io`, and scores are cached for 24 hours. The Sorsa Score is based on who
-  follows an account, so follow-backs from high-Sorsa accounts are what move your own score.
-* **ScoreX rank** (always used, no network): a 0-100 score built from followers (reach, 40%), engagement rate of
-  recent posts (25%), posting activity and recency (20%) and follower/following ratio plus verification (15%).
-  Spam/bot signals (spam bio, repetitive or "gm"-only posts, following far more than followers, default
-  avatar, very new account...) reduce it strongly. Tier 1 is suggested at 50k+ followers or rank 78+.
-  With Sorsa enabled, the **combined** rank blends both (50/50 by default).
+ScoreX can show your own score on four score sites, check any account, and turn the "smart followers" of big
+accounts into targets. Every provider is **off** until you turn it on in the **Scores** tab; Chrome then asks
+for permission to reach that one site. Only X handles are sent (yours, your targets' or the account you check).
+Provider keys are stored like the OpenAI key (the extension's IndexedDB) and are never logged or exported.
+
+| Provider | What you get | Key | How ScoreX reads it |
+|---|---|---|---|
+| **TwitterScore** (twitterscore.io) | score out of 1000; the first 3 smart followers (free profile page) | not needed (paid API optional) | the free public page; *browser tab* mode reads the rendered page in a background tab; API mode (your key) lists every smart follower |
+| **Sorsa** (sorsa.io, formerly TweetScout) | Sorsa Score with tiers (Noted / Credible / Significant / Supreme); the 20 highest-score followers | needed: 100 free requests, then paid | API v3 (`api.sorsa.io`) |
+| **Ethos** (ethos.network) | credibility score out of 2800 | not needed | free public API |
+| **Moni** (getmoni.io) | Moni score; smart followers | free key (a few hundred requests a month) | API |
+
+* **Your scores**: refreshed about once a day (or with *Refresh now*), with a daily history for the chart and
+  the 7- and 30-day changes.
+* **Check any account**: scores from every enabled provider, then *Add as target* or *Show smart followers*.
+* **Smart followers -> targets** (Discover): pick big accounts, for example your Tier 1 targets. ScoreX asks each
+  enabled provider for their smart followers, merges the lists, skips accounts that already follow you, your
+  targets and the blacklist, and shows the rest as candidates with their scores. Accounts listed under several
+  big accounts rank higher. Nothing is added or followed until you choose.
+* **Target scores**: fetch provider scores for your targets (a background job with progress and Cancel).
+* **Daily request caps** per provider protect your free quotas and the sites; requests are paced and cached
+  (your own score 20 h, checks and smart-follower lists 3 days, target scores 7 days).
+* **Provider overrides** (Scores > Advanced): if a site renames a field or moves an endpoint, patch it there
+  (JSON, limited to that provider's own https hosts) without waiting for an update.
+
+What cannot be guaranteed: these sites change their pages and APIs without notice, and some block automated
+reads (ScoreX shows "bot check" and tries again another day). The free TwitterScore page shows 3 smart
+followers, not 5-6. Sorsa's web app now needs a login, so ScoreX uses its API. The provider definitions were
+written from each site's public documentation and tested against mock servers, not against the live sites
+from the development machine. Kaito is not available (it shut down its Yaps API in January 2026).
+
+**ScoreX rank** (always on, no network): a 0-100 score built from followers (reach, 40%), engagement rate of
+recent posts (25%), posting activity and recency (20%) and follower/following ratio plus verification (15%).
+Spam/bot signals (spam bio, repetitive or "gm"-only posts, following far more than followers, default avatar,
+very new account...) reduce it strongly. Tier 1 is suggested at 50k+ followers or rank 78+. With Sorsa enabled,
+the **combined** rank blends both (50/50 by default).
 
 ## 7. Self-learning (Phase 3)
 
@@ -278,9 +302,11 @@ wording to the `text` patterns (captcha, rate limit, "Your post was sent", ...).
 ## 11. Privacy
 
 Everything stays in your browser (`chrome.storage.local` and IndexedDB). The only outbound requests are to
-`api.openai.com` (and `api.sorsa.io` only if you enable Sorsa). There is no telemetry, no remote code and no
-X API. API keys are never exported, logged or sent to x.com. Permissions: `storage`, `alarms` and
-`notifications`, plus host access to `x.com` and `api.openai.com` (Sorsa is an optional permission).
+`api.openai.com` and, only for the score sites you turn on, `api.sorsa.io`, `twitterscore.io`,
+`api.ethos.network` and `api.discover.getmoni.io` (they receive X handles, nothing else). There is no telemetry,
+no remote code and no X API. API keys are never exported, logged or sent to x.com. Permissions: `storage`,
+`alarms` and `notifications`, plus host access to `x.com` and `api.openai.com`; the score sites and `scripting`
+(only for TwitterScore's browser-tab mode) are optional permissions that Chrome asks for when you turn them on.
 
 ## 12. Development
 
