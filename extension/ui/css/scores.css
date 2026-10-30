@@ -1,3 +1,92 @@
 /* ScoreX - Scores (#scores): My scores cells, Score history chart, Follow-backs that count, Check any account, Target scores, Providers.
    Screen-specific styles only. Tokens, the shell and shared components live in ../dashboard.css (use its
    custom properties: --text*, --border*, --lime, --mark-edge, --accent-text, --amber*, --red*, --viz-1..6, --fs-*, --s1..s7). */
+
+.scores-head { padding-bottom: 14px; }
+.scores-head #refreshOwnWhy:empty { display: none; }
+
+/* My scores: one ledger cell per provider */
+.pcells { margin-bottom: 6px; }
+.pcells .pcell { flex: 1 1 230px; gap: 6px; padding-top: 16px; padding-bottom: 16px; }
+.pcell .fig-value { font-size: var(--fs-hero); line-height: 1.05; }
+.pcell .pcell-cap { width: 100%; }
+.pcell .pcell-cap .tag { margin-left: auto; }
+.pcell .fig-row { min-height: 38px; }
+.pcell .fig-sub { gap: 4px 10px; }
+.pcell .ptier { font-weight: 650; color: var(--text); }
+.pcell.off { color: var(--text-3); }
+.pcell.off .cap { color: var(--text-3); }
+.pcell.off .fig-sub { color: var(--text-3); }
+.pcell-state { font-size: 15px; font-weight: 600; padding: 6px 0 2px; color: var(--text-2); }
+.pcell-msg, .pcell-err { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.pcell.is-error .fig-value { color: var(--text-2); }
+.pmeter { height: 3px; background: var(--border); border-radius: 1px; overflow: hidden; }
+.pmeter i { display: block; height: 100%; background: var(--bar-ink, var(--text)); }
+.ext-link { white-space: nowrap; }
+
+/* Score history */
+.score-legend { gap: 4px 6px; }
+.legend-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 8px; border-radius: var(--r-xs, 2px);
+  border: 1px solid transparent; background: transparent; color: var(--text-2); font: inherit; font-size: var(--fs-s); cursor: pointer;
+}
+.legend-btn:hover { background: var(--hover); color: var(--text); }
+.legend-btn b { font-family: var(--mono); color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend-btn.is-off { color: var(--text-3); text-decoration: line-through; }
+.legend-btn.is-off .key { opacity: 0.35; }
+.legend-btn.is-off b { color: var(--text-3); }
+.score-legend > span { padding: 0 8px; }
+.score-chart { margin-top: 4px; }
+#scoreHistory .sec-actions .filterbar { flex-wrap: wrap; justify-content: flex-end; }
+
+/* account cell: handle + name under it */
+.who { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.who-name { font-size: 11.5px; color: var(--text-2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Check any account */
+.check-row .input { flex: 1 1 200px; min-width: 0; }
+.check-cells { margin: 10px 0; }
+.check-cells .check-cell { flex: 1 1 120px; padding-top: 10px; padding-bottom: 10px; }
+.check-cell .fig-value { font-size: var(--fs-xl); }
+#scoreCheckResult:empty { display: none; }
+.recent-checks { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.recent-checks:empty { display: none; }
+.recent-li { align-items: baseline; padding: 6px 0; }
+.recent-scores { color: var(--text-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Target scores: coverage bars per provider */
+.target-scores { display: flex; flex-direction: column; gap: 10px; border-top: 1px solid var(--border); padding-top: 16px; }
+.sub-head { display: flex; align-items: baseline; gap: 6px 14px; flex-wrap: wrap; }
+.cover { display: grid; grid-template-columns: minmax(90px, 120px) minmax(60px, 1fr) auto auto; gap: 8px 12px; align-items: center; font-size: var(--fs-s); }
+.cover .cover-name { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.cover .cover-n { text-align: right; }
+.cover .cover-empty { grid-column: 1 / -1; }
+.job-strip-host:empty { display: none; }
+.job-strip { display: flex; flex-direction: column; gap: 6px; padding: 10px 0 0; border-top: 1px dashed var(--border); }
+.job-head { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; }
+
+/* Providers setup rows */
+.prov-setup { display: flex; flex-direction: column; border-top: 1px solid var(--border); }
+.prow { display: flex; flex-direction: column; gap: 10px; padding: 16px 0; border-bottom: 1px solid var(--border); min-width: 0; }
+.prow-head { display: flex; align-items: center; gap: 8px 12px; flex-wrap: wrap; }
+.prow-name { display: inline-flex; align-items: center; gap: 8px; }
+.prow-about { max-width: 760px; }
+.prow-grid { display: grid; grid-template-columns: 90px minmax(160px, 260px) minmax(120px, 170px) minmax(160px, 240px); gap: 12px 18px; align-items: start; }
+.prow-grid > .field-check { padding-top: 22px; }
+.prow-usage { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; }
+.prow-msg:empty, .prow-err:empty { display: none; }
+.prow.is-off .prow-name strong { color: var(--text-2); }
+.prov-global { padding-top: 16px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+
+@media (max-width: 900px) {
+  .prow-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+@media (max-width: 720px) {
+  .pcells .pcell { flex-basis: 100%; }
+  .cover { grid-template-columns: minmax(80px, 100px) minmax(40px, 1fr) auto; }
+  .cover .btn { grid-column: 1 / -1; justify-self: start; }
+  .prow-grid { grid-template-columns: minmax(0, 1fr); }
+  .prow-grid > .field-check { padding-top: 0; }
+  #scoreHistory .sec-actions .filterbar { justify-content: flex-start; }
+}
+.th-prov { display: inline-flex; align-items: center; gap: 6px; }

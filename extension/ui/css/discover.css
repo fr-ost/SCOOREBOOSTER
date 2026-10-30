@@ -1,3 +1,58 @@
-/* ScoreX - Discover (#discover): source switch, smart-follower sweeps, Big accounts swept, Candidates.
+/* ScoreX - Discover (#discover): source switch, smart-follower lookup + sweep, X discovery, big accounts swept, candidates table.
    Screen-specific styles only. Tokens, the shell and shared components live in ../dashboard.css (use its
    custom properties: --text*, --border*, --lime, --mark-edge, --accent-text, --amber*, --red*, --viz-1..6, --fs-*, --s1..s7). */
+
+.disc-top { display: flex; flex-direction: column; gap: 12px; padding-bottom: 18px; }
+.disc-form .input { flex: 1 1 380px; min-width: 0; }
+.disc-form .input[hidden] { display: none; }
+.disc-avail { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 2px 0; margin-left: auto; }
+.disc-avail .avail { display: inline-flex; align-items: center; gap: 0; white-space: nowrap; }
+.disc-avail .avail .key { margin-right: 6px; }
+.disc-opts .input-sm { width: 90px; }
+.disc-hint { margin-top: -4px; }
+.disc-progress[hidden] { display: none; }
+
+/* job strip (also used on Scores): status square, label, counter, Cancel; progress bar below while running */
+.disc-top .job-strip { display: flex; flex-direction: column; gap: 6px; padding: 10px 0 0; border-top: 1px dashed var(--border); }
+.disc-top .job-head { display: flex; align-items: center; gap: 6px 10px; flex-wrap: wrap; }
+
+/* Big accounts swept: ruled blocks in a 3-column grid (not boxed cards) */
+.swept-grid { row-gap: 22px; }
+.swept-block { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.swept-head { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.swept-head .handle { font-size: var(--fs-m); }
+.swept-foot { display: flex; align-items: baseline; gap: 8px; padding-top: 2px; }
+.rank-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.rank-li { display: grid; grid-template-columns: 18px minmax(0, 1fr) 64px 48px; gap: 8px; align-items: center; font-size: var(--fs-s); min-height: 22px; }
+.rank-li .rank-h { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rank-li .rank-h .handle-link { font-weight: 500; }
+.rank-li .rank-v { text-align: right; font-size: var(--fs-s); }
+.rank-li .barcell { justify-content: flex-start; }
+
+/* smart followers of one account */
+#smartLookup[hidden], #swept[hidden] { display: none; }
+.look-merged { display: flex; flex-direction: column; gap: 8px; padding-top: 18px; }
+
+/* account cell: handle (+ tags) and the name under it */
+.who { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
+.who-row { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.who-name { font-size: 11.5px; color: var(--text-2); max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.listed { display: inline-flex; align-items: center; white-space: nowrap; }
+.filter-cell { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+
+/* candidates */
+.cand-bar .seg-filter { flex: none; }
+#candidates .sec-title .count { margin-left: 8px; vertical-align: 2px; }
+
+@media (max-width: 1100px) {
+  .disc-avail { margin-left: 0; flex-basis: 100%; }
+}
+@media (max-width: 720px) {
+  .disc-form .input { flex-basis: 100%; }
+  .cand-bar .search-wrap { max-width: none; flex-basis: 100%; }
+  .rank-li { grid-template-columns: 18px minmax(0, 1fr) 64px 44px; }
+}
+.disc-avail .avail-sep { margin: 0 8px; color: var(--text-3); }
+.th-prov { display: inline-flex; align-items: center; gap: 6px; }
+.listed-n { margin-left: 6px; }
+.cand-actions { justify-content: flex-end; }

@@ -1,13 +1,12 @@
 // Settings tab. Essentials: your X account, watch strategy (+ list URLs), comment window.
 // Advanced (collapsed groups): mode/time zone/theme, watching details, review expiry, learning, cleanup
-// (OFF by default, with a confirm), Sorsa, worker tab + debug + selector overrides, data import/export/reset.
+// (OFF by default, with a confirm), worker tab + debug + selector overrides, data import/export/reset.
+// Score sites (Sorsa, TwitterScore, Ethos, Moni: keys, caps, the Sorsa blend) are set up on the Scores screen.
 
 import { K, MODE, HARD } from "../../lib/constants.js";
-import { SORSA } from "../../lib/scores.js";
 import * as history from "../../lib/history.js";
 import { num } from "../../lib/util.js";
 import { h, clear, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, modal, download, readFileText, stamp, toggleEl, xLink, badge, fmtCount, uidShort, renderTable, add } from "../components.js";
-import { secretField } from "./models.js";
 import { timeZones } from "./safety.js";
 
 const DATA_PARTS = [
@@ -138,44 +137,6 @@ export default {
         f({ path: "cleanup.dailyLimit", type: "number", label: "Max unfollows per day", min: 0, max: HARD.dailyUnfollows, hint: `Cap ${HARD.dailyUnfollows}` })),
       f({ path: "cleanup.whitelist", type: "list", label: "Never unfollow (whitelist)", rows: 3, placeholder: "@friend\n@brand" }));
 
-    // ------------------------------------------------ Sorsa
-    const sorsaToggle = toggleEl("Use Sorsa Score", ctx.settings.scores.sorsaEnabled, null, { id: "sorsaEnabled" });
-    // The permission prompt must be requested synchronously inside the click/change handler (user gesture).
-    sorsaToggle.input.addEventListener("change", () => {
-      const input = sorsaToggle.input;
-      if (input.checked) {
-        let req;
-        try { req = chrome.permissions.request({ origins: [SORSA.permission] }); } catch (e) { input.checked = false; toast("Permission request failed: " + e.message, { type: "error" }); return; }
-        Promise.resolve(req).then((granted) => {
-          if (!granted) { input.checked = false; toast("Sorsa stays off: access to api.sorsa.io was not granted.", { type: "warn" }); return; }
-          ctx.save((d) => { d.scores.sorsaEnabled = true; d.providers.sorsa = { ...(d.providers.sorsa || {}), enabled: true }; });
-          toast("Sorsa enabled", { type: "success" });
-        }, (e) => { input.checked = false; toast("Permission request failed: " + ((e && e.message) || e), { type: "error" }); });
-      } else {
-        ctx.save((d) => { d.scores.sorsaEnabled = false; d.providers.sorsa = { ...(d.providers.sorsa || {}), enabled: false }; });
-        try { Promise.resolve(chrome.permissions.remove({ origins: [SORSA.permission] })).catch(() => {}); } catch (_) {}
-      }
-    });
-    ctx.addRefresher((s) => { if (!sorsaToggle.isConnected) return false; sorsaToggle.input.checked = !!s.scores.sorsaEnabled; return true; });
-    const sorsaOut = h("div", { class: "small", id: "sorsaOut" });
-    const sorsaSec = section({ hint: "Adds Sorsa's influence score next to ScoreX rank. Paid API; 100 free requests, one per profile refresh." },
-      h("div", { class: "split" },
-        h("div", { class: "stack" },
-          secretField(ctx, { key: "sorsaKey", label: "Sorsa API key", placeholder: "Your Sorsa key", id: "sorsaKeyField", hint: h("span", null, "Get one at ", h("a", { href: "https://api.sorsa.io", target: "_blank", rel: "noopener noreferrer" }, "api.sorsa.io"), ".") }),
-          h("div", { class: "field field-check" }, sorsaToggle, h("div", { class: "field-hint" }, "Asks Chrome for access to api.sorsa.io the first time.")),
-          f({ path: "scores.blendSorsa", type: "percent", label: "Weight of Sorsa in the combined rank", min: 0, max: 100, step: 5, suffix: "%" })),
-        sub("Check and refresh",
-          h("div", { class: "toolbar" },
-            btn("Test", (e) => { const b = e.currentTarget; busy(b, async () => { const r = await ctx.send("sorsaTest", {}, { label: "Sorsa test" }); clear(sorsaOut); if (r) add(sorsaOut, `Works. Sample score: ${r.score != null ? r.score : "-"}`, r.remaining != null ? ` · ${r.remaining} requests left` : ""); }); }, { iconName: "bolt", id: "sorsaTestBtn" }),
-            btn("Refresh all targets", async (e) => {
-              const handles = ctx.targetList().map((t) => t.handle);
-              if (!handles.length) { toast("No targets yet.", { type: "warn" }); return; }
-              if (!(await confirmDialog(`Fetch Sorsa scores for ${handles.length} target${handles.length === 1 ? "" : "s"}? This uses about ${handles.length} Sorsa requests.`, { title: "Refresh Sorsa scores", okLabel: "Refresh" }))) return;
-              const r = await ctx.send("sorsaRefresh", { handles }, { label: "Sorsa refresh" });
-              if (r) toast(`Updated ${num(r.updated)} Sorsa scores`, { type: "success" });
-            }, { iconName: "refresh" })),
-          sorsaOut)));
-
     // ------------------------------------------------ advanced
     const ovText = h("textarea", { class: "input mono", rows: 8, id: "selectorOverrides", spellcheck: "false", placeholder: '{\n  "sel": { "likeButton": ["[data-testid=\\"like\\"]"] }\n}' });
     const ovStatus = h("div", { class: "small", id: "overrideStatus", "aria-live": "polite" });
@@ -304,8 +265,7 @@ export default {
       }, { kind: "danger", iconName: "trash", id: "resetAllBtn" }));
 
     const cleanupAdv = advanced({ key: "settings.cleanup", title: "Cleanup", desc: "Optional unfollow of accounts that never followed back" }, cleanupSec);
-    const sorsaAdv = advanced({ key: "settings.sorsa", title: "Sorsa Score", desc: "Optional third-party influence score with your own key" }, sorsaSec);
-    const syncTags = () => { cleanupAdv.setTag(ctx.settings.cleanup.enabled ? "on" : "off"); sorsaAdv.setTag(ctx.settings.scores.sorsaEnabled ? "on" : "off"); };
+    const syncTags = () => { cleanupAdv.setTag(ctx.settings.cleanup.enabled ? "on" : "off"); };
     syncTags();
     ctx.on("settings", syncTags);
 
@@ -319,7 +279,6 @@ export default {
       advanced({ key: "settings.review", title: "Review queue", desc: "Expiry of pending and approved items, max waiting, notifications" }, reviewSec),
       advanced({ key: "settings.learning", title: "Learning", desc: "Engagement checks, cool-downs, automatic tier moves (follow checks: Targets tab)" }, learningSec),
       cleanupAdv,
-      sorsaAdv,
       advanced({ key: "settings.worker", title: "Worker tab and selectors", desc: "Pinned tab or separate window, debug logging, selector overrides" }, workerSec, selectorsSec),
       advanced({ key: "settings.data", title: "Data", desc: "Export and import backups, export history, reset everything" }, dataSec, resetSec));
 
