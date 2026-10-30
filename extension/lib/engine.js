@@ -19,6 +19,7 @@ import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
 import { followStep } from "./follow.js";
+import { conversationsStep } from "./conversations.js";
 import { catchUpCandidates, catchUpMaxAgeMin } from "./catchup.js";
 import { cancelDiscovery } from "./discovery.js";
 
@@ -751,6 +752,12 @@ async function backgroundStep({ tabId, settings, me }) {
   }
   {
     const r = await followStep({ tabId, settings, me, shouldStop });
+    if (r && r.stop) return r;
+    if (r && r.did) return r;
+  }
+  if (await shouldStop()) return null;
+  if (settings.learning.conversations && settings.learning.conversations.enabled) {
+    const r = await conversationsStep({ tabId, settings, me, shouldStop });
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }

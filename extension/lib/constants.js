@@ -7,7 +7,7 @@ export const VERSION = "1.1.0";
 export const K = Object.freeze({
   settings: "sx.settings",
   secrets: "sx.secrets", // legacy location only (migrated): keys now live in the extension IndexedDB "kv" store
-  secretsRev: "sx.secretsRev", // { rev, hasOpenai, hasSorsa } - no key material; lets open pages refresh
+  secretsRev: "sx.secretsRev", // { rev, hasOpenai, hasSorsa, has: { [keyName]: bool } } - no key material; lets open pages refresh
   state: "sx.state",
   targets: "sx.targets", // { [handle]: Target }
   candidates: "sx.candidates", // { [handle]: Candidate }
@@ -20,6 +20,7 @@ export const K = Object.freeze({
   blacklist: "sx.blacklist", // { [handle]: { handle, name, reason, at, days, comments, tier } } never re-added as targets
   scoreboard: "sx.scoreboard", // your scores per provider (+ history), score checks, smart followers, usage
   providerOverrides: "sx.providerOverrides", // partial provider definitions JSON, merged over lib/providerdefs.js
+  conversations: "sx.conversations", // { items: [{ id, target, comment, replyUrl, authorReplyUrl, text, at, done }], checkedAt } author replies to answer
   schema: "sx.schemaVersion",
 });
 
@@ -62,6 +63,9 @@ export const STOP = Object.freeze({
   OPENAI_QUOTA: "openai_quota",
   NO_API_KEY: "no_api_key",
   TAB_UNAVAILABLE: "tab_unavailable",
+  UNKNOWN_PROMPT: "unknown_prompt", // X showed a dialog/notice ScoreX does not know (e.g. an AI-label prompt): never clicked
+  ACCOUNT_UNKNOWN: "account_unknown", // the logged-in account could not be verified several times in a row
+  REACH_DROP: "reach_drop", // your replies' views fell sharply (possible hidden replies); only when safety.reach.action = "stop"
   INTERNAL: "internal_error",
 });
 
@@ -80,6 +84,9 @@ export const STOP_LABEL = Object.freeze({
   openai_quota: "OpenAI quota exhausted / billing issue",
   no_api_key: "No OpenAI API key set",
   tab_unavailable: "Could not open the X tab",
+  unknown_prompt: "X showed a prompt ScoreX does not know",
+  account_unknown: "Could not verify which X account is logged in",
+  reach_drop: "Your replies are reaching far fewer people",
   internal_error: "Internal error",
 });
 

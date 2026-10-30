@@ -274,10 +274,10 @@ describe("store.js", () => {
       assert.equal(st2.tickCount, 3);
       assert.equal(st2.commentsSinceBreak, 0);
 
-      assert.deepEqual(await store.getSecrets(), { openaiKey: "", sorsaKey: "" });
+      assert.deepEqual(await store.getSecrets(), { openaiKey: "", sorsaKey: "", twitterscoreKey: "", moniKey: "" });
       await store.setSecrets({ openaiKey: "sk-test" });
       await store.setSecrets({ sorsaKey: "s" });
-      assert.deepEqual(await store.getSecrets(), { openaiKey: "sk-test", sorsaKey: "s" });
+      assert.deepEqual(await store.getSecrets(), { openaiKey: "sk-test", sorsaKey: "s", twitterscoreKey: "", moniKey: "" });
 
       await store.updateTargets((all) => { all.foo = { handle: "foo" }; return all; });
       assert.deepEqual(await store.getTargets(), { foo: { handle: "foo" } });

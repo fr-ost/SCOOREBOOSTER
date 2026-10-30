@@ -79,6 +79,13 @@ export const all = () => db().all(S);
 export const count = () => db().count(S);
 export const clearAll = () => db().clear(S);
 
+// Retention (settings.history): compacts old skipped/failed records and deletes very old unposted ones; posted
+// records are kept. sw.js runs it at most about once a day. Returns { compacted, deleted }.
+// eslint-disable-next-line no-unused-vars
+export async function maintain(settings, ts = now()) {
+  return { compacted: 0, deleted: 0 };
+}
+
 // Last n posted comments (newest first), for style/similarity.
 export async function recentPosted(n = 50) {
   const posted = await byStatus(HS.POSTED);

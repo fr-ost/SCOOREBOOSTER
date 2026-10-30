@@ -21,6 +21,7 @@ import { workerTab } from "../lib/tabs.js";
 import { recordSpend, getSpend, budgetStatus } from "../lib/costs.js";
 import * as SB from "../lib/scoreboard.js";
 import { runSelfTest } from "../lib/diagnostics.js";
+import { markDone as conversationDone } from "../lib/conversations.js";
 
 const EXT_ORIGIN = chrome.runtime.getURL("");
 
@@ -47,8 +48,20 @@ chrome.runtime.onStartup.addListener(async () => {
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === ALARM.TICK) engine.tick("alarm");
   else if (a.name === ALARM.WATCHDOG) engine.watchdog();
-  else if (a.name === ALARM.SCORES) autoRefreshScores().catch((e) => log("warn", "Score refresh failed: " + e.message));
+  else if (a.name === ALARM.SCORES) {
+    autoRefreshScores().catch((e) => log("warn", "Score refresh failed: " + e.message));
+    maintainHistory().catch((e) => log("warn", "History retention failed: " + e.message));
+  }
 });
+
+// History retention (settings.history), at most about once a day; rides on the 4-hourly scores alarm.
+async function maintainHistory() {
+  const st = await getState();
+  if (st.lastHistoryMaintAt && now() - st.lastHistoryMaintAt < 20 * 3600e3) return;
+  await patchState({ lastHistoryMaintAt: now() });
+  const r = await H.maintain(await getSettings());
+  if (r && (r.compacted || r.deleted)) log("info", `History tidied: ${r.compacted} old records compacted, ${r.deleted} removed`);
+}
 
 // Your own scores on the enabled providers, about once a day (refreshOwn skips anything newer than 20 h).
 async function ensureScoresAlarm() {
@@ -271,6 +284,10 @@ const handlers = {
 
   // ---- diagnostics ----
   selfTest: () => keepAlive(() => runSelfTest()),
+
+  // ---- conversations (author replies) + reach monitor ----
+  conversationDone: (m) => conversationDone(String(m.id || ""), m.done !== false),
+  reachDismiss: async () => { await patchState({ reachAlert: null, reachDismissedAt: now() }); return { ok: true }; },
 
   learningRun: async () => {
     await patchState({ lastLearningAt: 0, learningForce: true });

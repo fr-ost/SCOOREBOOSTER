@@ -118,6 +118,7 @@ export const DEFAULT_SETTINGS = {
     styleExampleCount: 4, // best-performing posted comments shown to the model as style references
     autoStyleFromHistory: true,
     extraRules: "",
+    learnFromEdits: true, // your recent review edits (draft -> what you posted) are shown to the model as voice examples
   },
 
   // Follow tracking: only accounts that don't follow you are commented on.
@@ -154,6 +155,11 @@ export const DEFAULT_SETTINGS = {
     readDelaySec: { min: 3, max: 8 }, // "reading" the post before replying
     maxConsecutiveFailures: 2,
     bringTabToFront: false,
+    // Reply reach monitor: views of your checked replies as a proxy for replies X hides. Heuristics, not guarantees.
+    // action when reach drops: "notify" | "review" (switch to Review mode) | "halve" (halve the daily limit) | "stop"
+    reach: { enabled: true, action: "review", minChecked: 15, dropPct: 60, lowViews: 10, lowShare: 0.5 },
+    maxPageLoads24h: 0, // optional cap on X page loads per rolling 24 hours (0 = no cap); the engine waits, never stops
+    adaptiveWatch: { enabled: true, afterEmpty: 6, maxIntervalMin: 15 }, // stretch watch checks while targets post nothing new
     skip: {
       ads: true,
       linkOnly: true,
@@ -179,6 +185,7 @@ export const DEFAULT_SETTINGS = {
     autoTierUp: true,
     engagementCheckAfterHours: 24,
     maxChecksPerRun: 3,
+    conversations: { enabled: true, everyMin: 40 }, // read your mentions for replies from the accounts you comment on
   },
 
   cleanup: {
@@ -207,6 +214,11 @@ export const DEFAULT_SETTINGS = {
     maxUsers: 150, // user cells collected per source
     enrichMax: 25, // profiles visited for scoring per run
   },
+
+  // Score-aware targeting: priorities use provider scores x how likely the account is to follow back.
+  targeting: { useValue: true },
+  // History retention: skipped/failed records are compacted after N days and deleted after M days; posted ones are kept.
+  history: { compactAfterDays: 30, keepUnpostedDays: 90 },
 
   ui: { theme: "system" },
   advanced: { debug: false, tabMode: "pinned" }, // tabMode: "pinned" tab in your window or a separate "window"
@@ -243,9 +255,15 @@ export const DEFAULT_STATE = {
   modelCompat: {}, // { [modelName]: { noVerbosity, noFormat, noReasoning, noStore } } learned from 400s
   hiddenEmptyStreak: 0, // watch pages that rendered nothing while the tab was hidden
   pendingRefresh: [], // handles whose profile should be refreshed on the next idle tick
+  footprint: null, // X page loads per hour bucket for the rolling 24 h window (counted in lib/tabs.js navigate)
+  reachAlert: null, // { at, message, medianNow, medianBefore, lowShare, checked, action } set by the reach monitor until dismissed
+  emptyWatchStreak: 0, // watch checks in a row that found no fresh target post (adaptive watch cadence)
+  accountUnknownStreak: 0, // page loads in a row where the logged-in account could not be read
+  lastMentionsAt: null, // last read of your mentions (conversation alerts)
+  lastHistoryMaintAt: null, // last history retention run
 };
 
-export const DEFAULT_SECRETS = { openaiKey: "", sorsaKey: "" };
+export const DEFAULT_SECRETS = { openaiKey: "", sorsaKey: "", twitterscoreKey: "", moniKey: "" };
 
 // ---------- sanitising ----------
 
@@ -307,6 +325,18 @@ export function sanitizeSettings(raw) {
   sf.typingCpm = range(sf.typingCpm, 60, 600, 170, 320);
   sf.readDelaySec = range(sf.readDelaySec, 1, 120, 3, 8);
   sf.maxConsecutiveFailures = clamp(Math.round(num(sf.maxConsecutiveFailures, 2)), 1, HARD.maxPostFailures);
+  const re = sf.reach && typeof sf.reach === "object" ? sf.reach : {};
+  sf.reach = {
+    enabled: re.enabled !== false,
+    action: ["notify", "review", "halve", "stop"].includes(re.action) ? re.action : "review",
+    minChecked: clamp(Math.round(num(re.minChecked, 15)), 5, 200),
+    dropPct: clamp(num(re.dropPct, 60), 20, 95),
+    lowViews: clamp(Math.round(num(re.lowViews, 10)), 1, 1000),
+    lowShare: clamp(num(re.lowShare, 0.5), 0.1, 1),
+  };
+  sf.maxPageLoads24h = clamp(Math.round(num(sf.maxPageLoads24h, 0)), 0, 5000);
+  const aw = sf.adaptiveWatch && typeof sf.adaptiveWatch === "object" ? sf.adaptiveWatch : {};
+  sf.adaptiveWatch = { enabled: aw.enabled !== false, afterEmpty: clamp(Math.round(num(aw.afterEmpty, 6)), 2, 50), maxIntervalMin: clamp(num(aw.maxIntervalMin, 15), 5, 60) };
   sf.skip.minChars = clamp(Math.round(num(sf.skip.minChars, 20)), 0, 280);
   for (const k of ["languages", "politicalKeywords", "blockedWords"]) {
     sf.skip[k] = (Array.isArray(sf.skip[k]) ? sf.skip[k] : []).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
@@ -333,6 +363,7 @@ export function sanitizeSettings(raw) {
   delete s.prompt.styleExamples; // pasted comment samples are no longer used
   s.prompt.styleExampleCount = clamp(Math.round(num(s.prompt.styleExampleCount, 4)), 0, 10);
   s.prompt.extraRules = String(s.prompt.extraRules || "").slice(0, 2000);
+  s.prompt.learnFromEdits = s.prompt.learnFromEdits !== false;
 
   const fo = s.follow;
   fo.giveUpDays = clamp(Math.round(num(fo.giveUpDays, 14)), 3, 90);
@@ -360,6 +391,13 @@ export function sanitizeSettings(raw) {
   l.coldAfterComments = clamp(Math.round(num(l.coldAfterComments, 6)), 2, 50);
   l.coldCooldownDays = clamp(num(l.coldCooldownDays, 10), 1, 90);
   l.maxChecksPerRun = clamp(Math.round(num(l.maxChecksPerRun, 3)), 0, 10);
+  const cv = l.conversations && typeof l.conversations === "object" ? l.conversations : {};
+  l.conversations = { enabled: cv.enabled !== false, everyMin: clamp(num(cv.everyMin, 40), 15, 240) };
+
+  s.targeting = { useValue: !(s.targeting && s.targeting.useValue === false) };
+  const hi = s.history && typeof s.history === "object" ? s.history : {};
+  const compactAfterDays = clamp(Math.round(num(hi.compactAfterDays, 30)), 7, 365);
+  s.history = { compactAfterDays, keepUnpostedDays: clamp(Math.round(num(hi.keepUnpostedDays, 90)), Math.max(14, compactAfterDays), 3650) };
 
   const c = s.cleanup;
   c.afterDays = clamp(num(c.afterDays, 7), 7, 365);
@@ -460,7 +498,9 @@ export function setSecrets(patch) {
     const cur = await getSecrets();
     const next = { ...DEFAULT_SECRETS, ...cur, ...patch };
     await db().put(STORES.kv, { id: SECRETS_ID, ...next });
-    await save({ [K.secretsRev]: { rev: now(), hasOpenai: !!next.openaiKey, hasSorsa: !!next.sorsaKey } });
+    // Which keys are set (names only, never key material), so open pages can show "key saved" states.
+    const has = Object.fromEntries(Object.entries(next).filter(([k]) => k !== "id").map(([k, v]) => [k, !!v]));
+    await save({ [K.secretsRev]: { rev: now(), hasOpenai: !!next.openaiKey, hasSorsa: !!next.sorsaKey, has } });
     return next;
   });
 }
