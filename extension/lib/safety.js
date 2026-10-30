@@ -25,7 +25,9 @@ export function dailyLimit(settings, state, ts = now()) {
 export function generationLimit(settings, state, ts = now()) {
   return Math.ceil(dailyLimit(settings, state, ts) * settings.safety.generationFactor);
 }
-export function likeLimit(settings) { return settings.safety.like.enabled ? clamp(settings.safety.like.dailyLimit, 0, HARD.dailyLikes) : 0; }
+// Likes happen only right before a comment, so their limit is the comment cap (no separate like limit).
+export function likeLimit(settings) { return settings.safety.like && settings.safety.like.enabled ? HARD.dailyLikes : 0; }
+export function accountsLimit(settings) { return clamp(Math.round(Number(settings.safety.accountsPerDay) || 100), 1, HARD.accountsPerDay); }
 
 // ---------- active hours ----------
 
@@ -81,7 +83,7 @@ export function nextCheckMs(settings) {
 
 // ---------- gates ----------
 
-// Can a comment be posted right now? counts: { postedToday, target: {day, week} }
+// Can a comment be posted right now? counts: { postedToday, accountsToday, target: {day, week} }
 export function postGate(settings, state, counts, target, ts = now()) {
   const ah = activeHours(settings, ts);
   if (!ah.inside) return { ok: false, reason: "outside_active_hours", until: ah.opensAt };
@@ -92,6 +94,8 @@ export function postGate(settings, state, counts, target, ts = now()) {
   if (counts.postedToday >= total) return { ok: false, reason: "daily_limit", limit: total };
   if (target) {
     const tc = counts.target || { day: 0, week: 0 };
+    // A new account for today needs room under the daily account limit (100 different accounts by default).
+    if (!tc.day && (counts.accountsToday || 0) >= accountsLimit(settings)) return { ok: false, reason: "accounts_limit" };
     if (tc.day >= Math.min(settings.safety.perTargetDay, HARD.perTargetDay)) return { ok: false, reason: "target_day" };
     if (tc.week >= Math.min(settings.safety.perTargetWeek, HARD.perTargetWeek)) return { ok: false, reason: "target_week" };
   }
@@ -106,6 +110,7 @@ export function generateGate(settings, state, counts, target, ts = now()) {
   if (target) {
     const tc = counts.target || { day: 0, week: 0, open: 0 };
     if (tc.open > 0) return { ok: false, reason: "target_has_open_item" };
+    if (!tc.day && (counts.accountsOpen || 0) >= accountsLimit(settings)) return { ok: false, reason: "accounts_limit" };
     if (tc.day >= Math.min(settings.safety.perTargetDay, HARD.perTargetDay)) return { ok: false, reason: "target_day" };
     if (tc.week >= Math.min(settings.safety.perTargetWeek, HARD.perTargetWeek)) return { ok: false, reason: "target_week" };
     if (target.coldUntil && target.coldUntil > ts) return { ok: false, reason: "target_cold" };
@@ -118,8 +123,9 @@ export const GATE_LABEL = {
   break: "Taking a break",
   gap: "Waiting between comments",
   daily_limit: "Daily comment limit reached",
-  target_day: "Already commented on this account today",
-  target_week: "3 comments on this account this week",
+  target_day: "Per-account daily limit reached for this account",
+  target_week: "Per-account weekly limit reached for this account",
+  accounts_limit: "Daily limit of different accounts reached",
   target_has_open_item: "A comment for this account is already queued",
   target_cold: "Account is cooling down (no response)",
   generation_limit: "Daily generation limit reached",

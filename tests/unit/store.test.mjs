@@ -18,8 +18,12 @@ describe("store.js", () => {
       const s = sanitizeSettings({});
       assert.equal(s.timezone, "Asia/Dhaka");
       assert.equal(s.mode, MODE.REVIEW);
-      assert.deepEqual(s.safety.ramp, [10, 20, 30]);
-      assert.deepEqual(s.safety.gapMin, { min: 3, max: 12 });
+      assert.deepEqual(s.safety.ramp, [200, 200, 200]);
+      assert.deepEqual(s.safety.gapMin, { min: 2, max: 6 });
+      assert.equal(s.safety.perTargetDay, 2);
+      assert.equal(s.safety.accountsPerDay, 100);
+      assert.deepEqual(s.safety.like, { enabled: true });
+      assert.equal(s.safety.activeHours.enabled, false);
       assert.equal(s.models.length, 12, "GPT-6 and GPT-5 families");
       assert.equal(s.presets.high.modelId, "m_best");
       assert.equal(sanitizeSettings(null).timezone, "Asia/Dhaka");
@@ -29,7 +33,7 @@ describe("store.js", () => {
     test("HARD caps cannot be exceeded", () => {
       const s = sanitizeSettings({
         safety: {
-          ramp: [50, 50, 50], perTargetDay: 5, perTargetWeek: 9, like: { enabled: true, dailyLimit: 500 },
+          ramp: [500, 500, 500], perTargetDay: 5, perTargetWeek: 99, accountsPerDay: 9999, like: { enabled: true, dailyLimit: 500 },
           gapMin: { min: 0, max: 1 }, maxConsecutiveFailures: 99,
         },
         cleanup: { afterDays: 1, dailyLimit: 999 },
@@ -38,27 +42,47 @@ describe("store.js", () => {
         watch: { checkIntervalSec: { min: 5, max: 10 } },
       });
       assert.deepEqual(s.safety.ramp, [HARD.dailyComments, HARD.dailyComments, HARD.dailyComments]);
-      assert.deepEqual(s.safety.ramp, [30, 30, 30]);
-      assert.equal(s.safety.perTargetDay, 1);
-      assert.equal(s.safety.perTargetWeek, 3);
-      assert.equal(s.safety.like.dailyLimit, 50);
+      assert.deepEqual(s.safety.ramp, [200, 200, 200]);
+      assert.equal(s.safety.perTargetDay, 2);
+      assert.equal(s.safety.perTargetWeek, 14);
+      assert.equal(s.safety.accountsPerDay, HARD.accountsPerDay);
+      assert.deepEqual(s.safety.like, { enabled: true }, "no separate like limit");
       assert.equal(s.safety.gapMin.min, 2);
       assert.equal(s.safety.gapMin.max, 2);
       assert.equal(s.safety.maxConsecutiveFailures, HARD.maxPostFailures);
       assert.equal(s.cleanup.afterDays, 7);
       assert.equal(s.cleanup.dailyLimit, 30);
-      assert.equal(s.groups.A.dailyLimit, 30);
+      assert.equal(s.groups.A.dailyLimit, 100);
       assert.equal(s.groups.B.dailyLimit, 0);
       assert.equal(s.quality.maxChars, HARD.maxCommentChars);
       assert.equal(s.watch.checkIntervalSec.min, HARD.minCheckIntervalSec);
       assert.equal(s.watch.checkIntervalSec.max, HARD.minCheckIntervalSec);
     });
 
+    test("settings saved with the first safety defaults move to the current ones; hand-made values stay", () => {
+      const old = { safety: { ramp: [10, 20, 30], gapMin: { min: 3, max: 12 }, breaks: { enabled: true, afterMin: 3, afterMax: 6, minutesMin: 20, minutesMax: 60 }, activeHours: { enabled: true, start: "10:00", end: "00:00" }, perTargetDay: 1, perTargetWeek: 3, like: { enabled: false, dailyLimit: 20 }, readDelaySec: { min: 4, max: 12 } } };
+      const s = sanitizeSettings(old);
+      assert.deepEqual(s.safety.ramp, [200, 200, 200]);
+      assert.equal(s.safety.perTargetDay, 2);
+      assert.equal(s.safety.perTargetWeek, 14);
+      assert.equal(s.safety.like.enabled, true);
+      assert.deepEqual(s.safety.gapMin, { min: 2, max: 6 });
+      assert.equal(s.safety.activeHours.enabled, false);
+      assert.equal(s.safetyRev, 2);
+      const mine = sanitizeSettings({ safety: { ramp: [15, 25, 40], activeHours: { enabled: true, start: "09:00", end: "23:00" }, like: { enabled: false, dailyLimit: 5 } } });
+      assert.deepEqual(mine.safety.ramp, [15, 25, 40]);
+      assert.equal(mine.safety.activeHours.enabled, true);
+      assert.equal(mine.safety.like.enabled, false);
+      const after = sanitizeSettings({ safetyRev: 2, safety: { perTargetDay: 1, activeHours: { enabled: true, start: "10:00", end: "00:00" } } });
+      assert.equal(after.safety.perTargetDay, 1, "after the upgrade, choosing 1 per account sticks");
+      assert.equal(after.safety.activeHours.enabled, true);
+    });
+
     test("gap min 0 is raised to the 2 minute floor, garbage numbers fall back", () => {
       const s = sanitizeSettings({ safety: { gapMin: { min: 0, max: 12 }, ramp: ["x", null, 15.6] } });
       assert.equal(s.safety.gapMin.min, 2);
       assert.equal(s.safety.gapMin.max, 12);
-      assert.deepEqual(s.safety.ramp, [10, 0, 16]); // "x" -> default, null -> 0 (Number(null)), 15.6 rounds
+      assert.deepEqual(s.safety.ramp, [200, 0, 16]); // "x" -> default, null -> 0 (Number(null)), 15.6 rounds
     });
 
     test("invalid timezone / mode / strategy fall back to defaults", () => {
@@ -235,9 +259,9 @@ describe("store.js", () => {
     test("getSettings / saveSettings sanitise", async () => {
       const s = await store.getSettings();
       assert.equal(s.timezone, "Asia/Dhaka");
-      const saved = await store.saveSettings({ safety: { ramp: [40, 40, 40] } });
-      assert.deepEqual(saved.safety.ramp, [30, 30, 30]);
-      assert.deepEqual((await store.getSettings()).safety.ramp, [30, 30, 30]);
+      const saved = await store.saveSettings({ safety: { ramp: [400, 400, 400] } });
+      assert.deepEqual(saved.safety.ramp, [200, 200, 200]);
+      assert.deepEqual((await store.getSettings()).safety.ramp, [200, 200, 200]);
     });
 
     test("state / secrets / targets accessors", async () => {

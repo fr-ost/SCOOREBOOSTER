@@ -34,7 +34,8 @@ try {
   const pFrank = M.addPost("frank", "Shipping a new rollup explorer today, feedback welcome from anyone who builds on L2s.", 3);
   const pGina = M.addPost("gina", "Thread on why most token unlock schedules are designed backwards and what to do instead.", 3);
 
-  await setup(H, { learning: { abTesting: false } }); // tone defaults are checked below
+  // 1 comment per account and likes off here: this test checks the per-account cap and plain replies.
+  await setup(H, { learning: { abTesting: false }, safety: { perTargetDay: 1, like: { enabled: false } } }); // tone defaults are checked below
   let r = await H.msg("start");
   assert(r && r.ok === false && /target/i.test(r.error), "start refuses without targets: " + (r && r.error));
   r = await H.msg("targetsUpsert", { rows: ["@bigbob"], defaults: { group: "B", tier: 1 } });

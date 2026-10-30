@@ -66,10 +66,14 @@ export default {
     const watchSec = section({ title: "Watching for new posts", hint: "How ScoreX finds fresh posts from your targets." },
       strategyHost,
       listUrls);
-    const windowSec = section({ title: "Comment window", hint: "Reply this many minutes after a post. Early replies get seen most." },
+    const windowSec = section({ title: "Comment window", hint: "New posts get a reply this many minutes after they appear. Early replies get seen most." },
       h("div", { class: "form-row" },
         f({ path: "watch.minPostAgeMin", type: "number", label: "From (min)", min: 0, max: 30, hint: "Never instantly" }),
-        f({ path: "watch.maxPostAgeMin", type: "number", label: "Until (min)", min: 5, max: 180 })));
+        f({ path: "watch.maxPostAgeMin", type: "number", label: "Until (min)", min: 5, max: 180 })),
+      f({ path: "watch.catchUp.enabled", type: "toggle", label: "Also comment on each account's latest earlier posts (catch-up)", hint: "Posts from before ScoreX ran, or that it missed. Uses the posts already read from their profiles; every limit still applies, and new posts always go first." }),
+      h("div", { class: "form-row" },
+        f({ path: "watch.catchUp.perTarget", type: "number", label: "Latest posts per account", min: 1, max: 3 }),
+        f({ path: "watch.catchUp.maxAgeHours", type: "number", label: "Not older than (hours)", min: 1, max: 168 })));
     const watchMoreSec = section({ hint: "Fine-tuning for the search and rotation strategies." },
       h("div", { class: "form-row" },
         f({ path: "watch.searchBatchSize", type: "number", label: "Search batch size", min: 1, max: 20, hint: "Targets per search (search mode)" }),

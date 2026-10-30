@@ -1,6 +1,7 @@
-// Safety tab. Essentials: daily ramp, gap between comments, active hours + time zone, like-before-reply,
-// skip-rule toggles. Advanced: breaks, per-account caps, typing and reading speed, failure limit,
-// keyword lists, bringing the X tab to the front. Plus the read-only list of auto-stop triggers.
+// Safety tab. Essentials: daily limit (optional weekly ramp), per-account and accounts-per-day caps, gap
+// between comments, active hours + time zone, like-before-reply, skip-rule toggles. Advanced: breaks, weekly
+// per-account cap, typing and reading speed, failure limit, keyword lists, bringing the X tab to the front.
+// Plus the read-only list of auto-stop triggers.
 // Every value is clamped by sanitizeSettings.
 
 import { K, HARD, STOP_LABEL } from "../../lib/constants.js";
@@ -61,7 +62,7 @@ export default {
       const stage = rampStage(state);
       const ah = (() => { try { return activeHours(s); } catch (_) { return null; } })();
       fill(statusHost,
-        h("span", null, "Today: ", h("strong", null, `${dailyLimit(s, state)} comments`), ` (ramp week ${stage + 1}${stage >= 2 ? "+" : ""})`),
+        h("span", null, "Today: ", h("strong", null, `${dailyLimit(s, state)} comments`), ` (week ${stage + 1}${stage >= 2 ? "+" : ""})`, ` · ${s.safety.accountsPerDay} accounts · ${s.safety.perTargetDay} per account`),
         h("span", null, "Up to ", h("strong", null, String(generationLimit(s, state))), " generations"),
         h("span", null, "Hard cap ", h("strong", null, `${HARD.dailyComments}/day`)),
         h("span", null, "Active hours: ", h("strong", null, s.safety.activeHours.enabled ? `${s.safety.activeHours.start}-${s.safety.activeHours.end}` : "all day"),
@@ -72,23 +73,24 @@ export default {
 
     root.append(statusHost);
     root.append(
-      section({ title: "Daily ramp", hint: `Start slow on a main account. Values above ${HARD.dailyComments} are lowered to ${HARD.dailyComments}.` },
+      section({ title: "Daily limits", hint: `Comments per 24 hours (hard cap ${HARD.dailyComments}). Set lower numbers for week 1 and 2 if you want a ramp.` },
         h("div", { class: "form-row" },
           f({ path: "safety.ramp.0", type: "number", label: "Week 1", min: 0, max: HARD.dailyComments, suffix: "/day" }),
           f({ path: "safety.ramp.1", type: "number", label: "Week 2", min: 0, max: HARD.dailyComments, suffix: "/day" }),
-          f({ path: "safety.ramp.2", type: "number", label: "Week 3+", min: 0, max: HARD.dailyComments, suffix: "/day" }))),
+          f({ path: "safety.ramp.2", type: "number", label: "Week 3+", min: 0, max: HARD.dailyComments, suffix: "/day" })),
+        h("div", { class: "form-row" },
+          f({ path: "safety.accountsPerDay", type: "number", label: "Different accounts / day", min: 1, max: HARD.accountsPerDay, hint: `Cap ${HARD.accountsPerDay}` }),
+          f({ path: "safety.perTargetDay", type: "number", label: "Comments per account / day", min: 0, max: HARD.perTargetDay, hint: `Cap ${HARD.perTargetDay}` }))),
       section({ title: "Gap between comments", hint: `A random gap each time, never below ${HARD.minGapMin} minutes.` },
         range("Gap between comments", "safety.gapMin", { min: HARD.minGapMin, max: 240, unit: "minutes" })),
-      section({ title: "Active hours", hint: "ScoreX sleeps outside this window." },
+      section({ title: "Active hours", hint: "Off by default: ScoreX works around the clock. Turn it on to sleep outside this window." },
         f({ path: "safety.activeHours.enabled", type: "toggle", label: "Only work inside active hours" }),
         h("div", { class: "form-row" },
           f({ path: "safety.activeHours.start", type: "time", label: "Start" }),
           f({ path: "safety.activeHours.end", type: "time", label: "End", hint: "00:00 = midnight" }),
           f({ path: "timezone", type: "select", label: "Time zone", options: tzOptions }))),
-      section({ title: "Like before replying", hint: "Likes the post first, like a person would." },
-        h("div", { class: "form-row" },
-          f({ path: "safety.like.enabled", type: "toggle", label: "Like the post, then reply" }),
-          f({ path: "safety.like.dailyLimit", type: "number", label: "Likes per day", min: 0, max: HARD.dailyLikes, hint: `Cap ${HARD.dailyLikes}` }))),
+      section({ title: "Like before replying", hint: "Likes every post right before replying to it. No separate like limit: at most one like per comment." },
+        f({ path: "safety.like.enabled", type: "toggle", label: "Like the post, then reply" })),
       section({ title: "Skip rules", hint: "Posts ScoreX never replies to." },
         h("div", { class: "toggle-grid" },
           f({ path: "safety.skip.ads", type: "toggle", label: "Ads / promoted posts" }),
@@ -101,11 +103,10 @@ export default {
         section({ title: "Long breaks", hint: "Pauses after a few comments, like a person stepping away." },
           f({ path: "safety.breaks.enabled", type: "toggle", label: "Take long breaks" }),
           h("div", { class: "form-row" },
-            pair("After every", "safety.breaks.afterMin", "safety.breaks.afterMax", "comments", { min: 1, max: 50 }),
+            pair("After every", "safety.breaks.afterMin", "safety.breaks.afterMax", "comments", { min: 1, max: 100 }),
             pair("Break length", "safety.breaks.minutesMin", "safety.breaks.minutesMax", "minutes", { min: 5, max: 480 }))),
-        section({ title: "Caps per account", hint: "Spread replies so no one sees too many." },
+        section({ title: "Weekly cap and generation budget", hint: "Spread replies so no one sees too many." },
           h("div", { class: "form-row" },
-            f({ path: "safety.perTargetDay", type: "number", label: "Per account / day", min: 0, max: HARD.perTargetDay, hint: `Cap ${HARD.perTargetDay}` }),
             f({ path: "safety.perTargetWeek", type: "number", label: "Per account / week", min: 0, max: HARD.perTargetWeek, hint: `Cap ${HARD.perTargetWeek}` }),
             f({ path: "safety.generationFactor", type: "number", label: "Generation factor", min: 1, max: 5, step: 0.5, hint: "Generations/day = limit x this" }))),
         section({ title: "Human-like timing", hint: "How the X tab reads and types." },

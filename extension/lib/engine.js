@@ -7,7 +7,7 @@ import { getSettings, getSecrets, getState, patchState, getTargets, updateTarget
 import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
-import { effectiveMode, dailyLimit, generationLimit, likeLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
+import { effectiveMode, dailyLimit, generationLimit, likeLimit, accountsLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
 import { skipReason } from "./filters.js";
 import { effectiveTone, effectivePreset, isActive, followStatus, FS } from "./targets.js";
 import { generate } from "./generator.js";
@@ -19,6 +19,7 @@ import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
 import { followStep } from "./follow.js";
+import { catchUpCandidates, catchUpMaxAgeMin } from "./catchup.js";
 import { cancelDiscovery } from "./discovery.js";
 
 // Background X jobs started outside the tick (profile refreshes) check this flag; Pause/Stop set it.
@@ -159,6 +160,10 @@ export async function computeCounts(settings, ts = now()) {
     if (r.status === HS.PENDING_REVIEW) c.pendingReview++;
     if (r.status === HS.QUEUED || r.status === HS.APPROVED) c.queued++;
   }
+  // Different accounts commented on in the last 24 hours (and including accounts with a waiting comment).
+  const ts2 = Object.values(c.targets);
+  c.accountsToday = ts2.filter((x) => x.day > 0).length;
+  c.accountsOpen = ts2.filter((x) => x.day > 0 || x.open > 0).length;
   return c;
 }
 
@@ -187,6 +192,7 @@ export async function getStatus() {
       posted: c.postedToday, limit: total,
       generated: c.generatedToday, generationLimit: generationLimit(settings, state, ts),
       liked: c.likedToday, likeLimit: likeLimit(settings), skipped: c.skippedToday, failed: c.failedToday,
+      accounts: c.accountsToday, accountsLimit: accountsLimit(settings),
       cost: b.today || c.costToday,
     },
     month: { cost: b.spent, budget: b.limit, pct: b.pct, reached: b.reached, warn: b.warn },
@@ -341,7 +347,8 @@ async function expireQueue(settings, ts = now()) {
     }
     if (r.status === HS.PENDING_REVIEW && ts - r.createdAt > settings.review.pendingMaxAgeMin * MIN) why = "Expired while waiting for review";
     if (r.status === HS.APPROVED && ts - (r.approvedAt || r.createdAt) > settings.review.approvedMaxAgeMin * MIN) why = "Approved but expired before a posting slot";
-    if (r.status === HS.QUEUED && r.postCreatedAt && ts - r.postCreatedAt > (settings.watch.maxPostAgeMin + 25) * MIN) why = "Too late to post (post is no longer fresh)";
+    const maxQueuedAge = r.catchUp ? catchUpMaxAgeMin(settings) : settings.watch.maxPostAgeMin + 25;
+    if (r.status === HS.QUEUED && r.postCreatedAt && ts - r.postCreatedAt > maxQueuedAge * MIN) why = r.catchUp ? "Too late to post (older than the catch-up window)" : "Too late to post (post is no longer fresh)";
     if (r.status === HS.POSTING && ts - (r.attemptAt || r.updatedAt) > 10 * MIN) why = "Interrupted while posting - check the post manually";
     if (why) await H.patch(r.id, (cur) => (cur.status === r.status ? { status: r.status === HS.POSTING ? HS.FAILED : HS.SKIPPED, reason: why, maybePosted: r.status === HS.POSTING } : null));
   }
@@ -404,14 +411,14 @@ async function tickBody(settings, secrets, reason = "timer") {
       await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: why } : null));
       continue;
     }
-    const gate = postGate(settings, state, { postedToday: counts.postedToday, target: counts.targets[item.target] }, target, ts);
+    const gate = postGate(settings, state, { postedToday: counts.postedToday, accountsToday: counts.accountsToday, target: counts.targets[item.target] }, target, ts);
     if (gate.ok) {
       const res = await postOne(item, { tabId, settings, me, counts });
       if (res === "stopped") return null;
       if (res === "aborted" || res === "moved" || res === "gone") continue;
       return { delay: humanDelay(40 * 1000, 120 * 1000), why: "after post" };
     }
-    if (gate.reason === "target_day" || gate.reason === "target_week") {
+    if (gate.reason === "target_day" || gate.reason === "target_week" || gate.reason === "accounts_limit") {
       await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: GATE_LABEL[gate.reason] } : null));
       continue;
     }
@@ -459,6 +466,23 @@ async function tickBody(settings, secrets, reason = "timer") {
     }
   }
 
+  // 2b) Catch-up: comment on accounts' latest earlier posts (from before ScoreX ran, or missed) when the
+  //     queue is nearly empty, so generation happens just in time and fresh posts always go first.
+  if (settings.watch.catchUp.enabled && (await stillRunning())) {
+    const c2 = await computeCounts(settings, now());
+    if (c2.openQueue < 3 && c2.pendingReview < settings.review.maxPending) {
+      const cands = [];
+      for (const p of catchUpCandidates(await getTargets(), settings, now())) {
+        if (cands.length >= 12) break;
+        if (!(await H.byPostId(p.id)).length) cands.push(p);
+      }
+      if (cands.length) {
+        await handleFresh(cands, { settings, secrets, mode, counts: c2, tabId, me, limit: 1 });
+        if (!(await stillRunning())) return null;
+      }
+    }
+  }
+
   // 3) Background work when idle: queued profile refreshes, follow checks, learning checks, optional cleanup.
   let bg = null;
   if (await stillRunning()) {
@@ -475,7 +499,7 @@ async function tickBody(settings, secrets, reason = "timer") {
   const counts2 = await computeCounts(settings, now());
   const tg2 = await getTargets();
   const postable = open2.filter((r) => (r.status === HS.APPROVED || (r.status === HS.QUEUED && mode === MODE.AUTO)) && tg2[r.target]).filter((r) => {
-    const g = postGate(settings, { ...st2, nextCommentAt: 0, breakUntil: 0, lastCommentAt: 0 }, { postedToday: counts2.postedToday, target: counts2.targets[r.target] }, tg2[r.target], now());
+    const g = postGate(settings, { ...st2, nextCommentAt: 0, breakUntil: 0, lastCommentAt: 0 }, { postedToday: counts2.postedToday, accountsToday: counts2.accountsToday, target: counts2.targets[r.target] }, tg2[r.target], now());
     return g.ok || g.reason === "outside_active_hours";
   });
   const nextDue = postable.map((r) => Math.max(r.scheduledFor || 0, st2.nextCommentAt || 0, st2.breakUntil || 0)).sort((a, b) => a - b)[0];
@@ -527,6 +551,7 @@ function scorePost(p, t, ts) {
 
 async function handleFresh(posts, ctx) {
   const { settings, secrets, mode, tabId, me } = ctx;
+  const maxGen = ctx.limit || 2;
   let counts = ctx.counts;
   const ts = now();
   const targets = await getTargets();
@@ -534,11 +559,11 @@ async function handleFresh(posts, ctx) {
   const ranked = posts.map((p) => ({ p, t: Object.hasOwn(targets, p.author) ? targets[p.author] : null })).filter((x) => x.t).sort((a, b) => scorePost(b.p, b.t, ts) - scorePost(a.p, a.t, ts));
   let generatedThisTick = 0;
   for (const { p, t } of ranked) {
-    if (generatedThisTick >= 2) break;
+    if (generatedThisTick >= maxGen) break;
     if (!(await stillRunning())) return;
     const already = await H.byPostId(p.id);
     if (already.length) continue;
-    const skip = skipReason(p, settings, { ts: now() });
+    const skip = skipReason(p, settings, { ts: now(), maxAgeMin: p.catchUp ? (settings.watch.catchUp.maxAgeHours || 48) * 60 : undefined });
     if (skip) {
       await H.put(H.newRecord({ status: HS.SKIPPED, reason: skip.text, mode, ...postFields(p, t), attempts: 0 }));
       continue;
@@ -549,7 +574,7 @@ async function handleFresh(posts, ctx) {
       continue;
     }
     // In auto mode, do not pay for a comment that could only be posted after the freshness window.
-    if (mode === MODE.AUTO) {
+    if (mode === MODE.AUTO && !p.catchUp) {
       const earliest = Math.max(now() + MIN, state.nextCommentAt || 0, state.breakUntil || 0);
       if (p.createdAt && earliest - p.createdAt > (settings.watch.maxPostAgeMin + 10) * MIN) continue;
     }
@@ -562,7 +587,7 @@ async function handleFresh(posts, ctx) {
 
 function postFields(p, t) {
   return {
-    target: p.author, targetName: p.authorName || t.name || "", group: t.group, tier: t.tier,
+    target: p.author, targetName: p.authorName || t.name || "", group: t.group, tier: t.tier, catchUp: !!p.catchUp,
     postId: p.id, postUrl: p.url, postText: truncate(p.text, 1200), postLang: p.lang || "", postCreatedAt: p.createdAt || null,
     postMetrics: p.metrics || null, postHasMedia: !!p.hasMedia, postIsQuote: !!p.isQuote,
   };

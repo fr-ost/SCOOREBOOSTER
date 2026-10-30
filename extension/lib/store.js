@@ -83,6 +83,8 @@ export const DEFAULT_SETTINGS = {
     maxPostAgeMin: 20, // aim to comment within the first 10-20 minutes
     includeQuotes: true,
     scrolls: 1, // light scroll on watch pages to load a few more posts
+    // Also comment on each account's latest posts from before ScoreX ran (or that it missed).
+    catchUp: { enabled: true, perTarget: 2, maxAgeHours: 48 },
   },
 
   // Legacy per-group settings (before follow tracking): only read to migrate an old tone into prompt.tone.
@@ -136,17 +138,19 @@ export const DEFAULT_SETTINGS = {
 
   budget: { monthlyUsd: 0, warnAtPct: 80 }, // 0 = no limit
 
+  safetyRev: 2, // revision of the safety defaults these settings have seen
   safety: {
-    ramp: [10, 20, 30], // daily comment limit: week 1, week 2, week 3+ (each clamped to HARD.dailyComments)
-    gapMin: { min: 3, max: 12 }, // random minutes between comments
-    breaks: { enabled: true, afterMin: 3, afterMax: 6, minutesMin: 20, minutesMax: 60 },
-    activeHours: { enabled: true, start: "10:00", end: "00:00" },
-    perTargetDay: 1,
-    perTargetWeek: 3,
+    ramp: [200, 200, 200], // daily comment limit: week 1, week 2, week 3+ (each clamped to HARD.dailyComments)
+    gapMin: { min: 2, max: 6 }, // random minutes between comments
+    breaks: { enabled: true, afterMin: 10, afterMax: 15, minutesMin: 8, minutesMax: 15 },
+    activeHours: { enabled: false, start: "10:00", end: "00:00" }, // off = ScoreX may work around the clock
+    perTargetDay: 2, // comments per account per 24 hours
+    perTargetWeek: 14,
+    accountsPerDay: 100, // different accounts commented on per 24 hours
     generationFactor: 2, // max generations per day = daily limit x this (protects your OpenAI spend)
-    like: { enabled: false, dailyLimit: 20 },
+    like: { enabled: true }, // like every post right before replying to it (no separate like limit)
     typingCpm: { min: 170, max: 320 }, // characters per minute
-    readDelaySec: { min: 4, max: 12 }, // "reading" the post before replying
+    readDelaySec: { min: 3, max: 8 }, // "reading" the post before replying
     maxConsecutiveFailures: 2,
     bringTabToFront: false,
     skip: {
@@ -265,22 +269,38 @@ export function sanitizeSettings(raw) {
   w.minPostAgeMin = clamp(num(w.minPostAgeMin, 2), 0, 30);
   w.maxPostAgeMin = clamp(num(w.maxPostAgeMin, 20), Math.max(5, w.minPostAgeMin + 1), 180);
   w.scrolls = clamp(Math.round(num(w.scrolls, 1)), 0, 4);
+  w.catchUp = { enabled: !(w.catchUp && w.catchUp.enabled === false), perTarget: clamp(Math.round(num(w.catchUp && w.catchUp.perTarget, 2)), 1, 3), maxAgeHours: clamp(num(w.catchUp && w.catchUp.maxAgeHours, 48), 1, 168) };
 
   const sf = s.safety;
+  // Settings saved with the first safety defaults (10/20/30 ramp, 1 per account, likes off, active hours on)
+  // move to the owner's current defaults; values that were changed by hand are kept.
+  if (!(Number(raw && raw.safetyRev) >= 2) && raw && raw.safety) {
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    if (same(sf.ramp, [10, 20, 30])) sf.ramp = [200, 200, 200];
+    if (num(sf.perTargetDay) === 1) sf.perTargetDay = 2;
+    if (num(sf.perTargetWeek) === 3) sf.perTargetWeek = 14;
+    if (sf.like && sf.like.enabled === false && num(sf.like.dailyLimit) === 20) sf.like.enabled = true;
+    if (same(sf.gapMin, { min: 3, max: 12 })) sf.gapMin = { min: 2, max: 6 };
+    if (sf.breaks && sf.breaks.afterMin === 3 && sf.breaks.afterMax === 6 && sf.breaks.minutesMin === 20 && sf.breaks.minutesMax === 60) Object.assign(sf.breaks, { afterMin: 10, afterMax: 15, minutesMin: 8, minutesMax: 15 });
+    if (sf.activeHours && sf.activeHours.enabled === true && sf.activeHours.start === "10:00" && sf.activeHours.end === "00:00") sf.activeHours.enabled = false;
+    if (same(sf.readDelaySec, { min: 4, max: 12 })) sf.readDelaySec = { min: 3, max: 8 };
+  }
+  s.safetyRev = 2;
   sf.ramp = [0, 1, 2].map((i) => clamp(Math.round(num(sf.ramp && sf.ramp[i], DEFAULT_SETTINGS.safety.ramp[i])), 0, HARD.dailyComments));
-  sf.gapMin = range(sf.gapMin, HARD.minGapMin, 240, 3, 12);
-  sf.breaks.afterMin = clamp(Math.round(num(sf.breaks.afterMin, 3)), 1, 50);
-  sf.breaks.afterMax = clamp(Math.round(num(sf.breaks.afterMax, 6)), sf.breaks.afterMin, 50);
-  const bm = range({ min: sf.breaks.minutesMin, max: sf.breaks.minutesMax }, 5, 480, 20, 60);
+  sf.gapMin = range(sf.gapMin, HARD.minGapMin, 240, 2, 6);
+  sf.breaks.afterMin = clamp(Math.round(num(sf.breaks.afterMin, 10)), 1, 100);
+  sf.breaks.afterMax = clamp(Math.round(num(sf.breaks.afterMax, 15)), sf.breaks.afterMin, 100);
+  const bm = range({ min: sf.breaks.minutesMin, max: sf.breaks.minutesMax }, 5, 480, 8, 15);
   sf.breaks.minutesMin = bm.min; sf.breaks.minutesMax = bm.max;
   if (parseHHMM(sf.activeHours.start) == null) sf.activeHours.start = "10:00";
   if (parseHHMM(sf.activeHours.end) == null) sf.activeHours.end = "00:00";
-  sf.perTargetDay = clamp(Math.round(num(sf.perTargetDay, 1)), 0, HARD.perTargetDay);
-  sf.perTargetWeek = clamp(Math.round(num(sf.perTargetWeek, 3)), 0, HARD.perTargetWeek);
+  sf.perTargetDay = clamp(Math.round(num(sf.perTargetDay, 2)), 0, HARD.perTargetDay);
+  sf.perTargetWeek = clamp(Math.round(num(sf.perTargetWeek, 14)), sf.perTargetDay, HARD.perTargetWeek);
+  sf.accountsPerDay = clamp(Math.round(num(sf.accountsPerDay, 100)), 1, HARD.accountsPerDay);
   sf.generationFactor = clamp(num(sf.generationFactor, 2), 1, 5);
-  sf.like.dailyLimit = clamp(Math.round(num(sf.like.dailyLimit, 20)), 0, HARD.dailyLikes);
+  sf.like = { enabled: !!(sf.like && sf.like.enabled) }; // no separate like limit: one like per comment at most
   sf.typingCpm = range(sf.typingCpm, 60, 600, 170, 320);
-  sf.readDelaySec = range(sf.readDelaySec, 1, 120, 4, 12);
+  sf.readDelaySec = range(sf.readDelaySec, 1, 120, 3, 8);
   sf.maxConsecutiveFailures = clamp(Math.round(num(sf.maxConsecutiveFailures, 2)), 1, HARD.maxPostFailures);
   sf.skip.minChars = clamp(Math.round(num(sf.skip.minChars, 20)), 0, 280);
   for (const k of ["languages", "politicalKeywords", "blockedWords"]) {

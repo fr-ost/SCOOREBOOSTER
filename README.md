@@ -8,6 +8,9 @@ you would (content scripts in a pinned X tab).
 > **Read this first: no guarantees.**
 > * X's rules restrict automated replies. Every safety feature below lowers the risk, but none of them makes
 >   automation undetectable or risk-free. Review mode (the default) is the safest way to use ScoreX.
+> * The default volume is high (up to 200 replies a day, each with a like, around the clock). That is your
+>   choice as the account owner; a lower daily limit, a weekly ramp and active hours (Safety tab) lower the
+>   risk of X limiting the account. ScoreX stops at the first warning, captcha or rate-limit message.
 > * Nothing here can guarantee more follow-backs or a higher Kaito / Sorsa score. Good replies help, but
 >   results depend on your content and on the accounts you reply to.
 > * X changes its page markup from time to time. When that happens ScoreX stops itself ("X page changed")
@@ -54,18 +57,20 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
 ## 3. How it works
 
 ```
- every 2.5-6 min (random, only in active hours)
+ every 2.5-6 min (random; around the clock unless you turn on active hours)
    watch page (X List / Latest search / profiles) in the pinned X tab
      -> new original post by a target, 2-20 min old?
      -> skip rules (ads, link-only, political/controversial, giveaways, "gm", language...)
      -> only targets that don't follow you (new targets are checked first)
-     -> limits (daily ramp, 1 per target per day, 3 per week, budget)
+     -> limits (200 per 24 h, 2 per account per day, 100 accounts per day, budget)
      -> OpenAI: post + bio + 2-3 recent posts + your Tone prompt -> reply (JSON)
      -> rule check + quality model check (generic? off-topic? repeated vs your last 50?) -> regenerate once or skip
    Review mode: reply waits in the Review Queue (edit / approve / regenerate / skip)
    Full auto:   reply is queued with a human delay
      -> open the post, "read" it, scroll, optional like, type at a human speed, verify, submit, confirm
-     -> random 3-12 min gap (and longer breaks) before the next comment
+     -> random 2-6 min gap (and longer breaks) before the next comment
+ catch-up: when the queue is nearly empty, each account's latest 2 earlier posts (up to 48 h old) get
+ comments too, so posts from before ScoreX ran are not missed
  background when idle: follow checks (your followers list + profiles), follow-backs, removal after
  14 days without a follow-back, engagement checks, optional cleanup
 ```
@@ -82,7 +87,7 @@ everything else is in collapsed **Advanced** sections (their open/closed state i
 | **Review Queue** | Every generated reply with the post, the author, the model, the cost and quality notes. Edit, Approve, Regenerate (costs another call), Skip. Approved replies post one by one in their own time slots. |
 | **Models & Costs** | API key, model list with **editable model names** and **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort Low / Medium / High, fallback models, preset per tier, quality checker, cost estimator, budget, totals per model / day / week / month, performance per model and tone. |
 | **Tone & Prompts** | Your **Tone prompt** (the one input that sets how replies sound) and a prompt preview. Advanced: extra rules, learning from your best-performing replies, built-in and custom tones (per-target overrides), A/B testing settings, results and suggestions. |
-| **Safety** | Ramp limits, gaps and breaks, active hours and time zone (default 10:00-00:00 Asia/Dhaka), per-target caps, like + comment combo, typing speed, skip rules, failure limit, the list of auto-stop triggers. |
+| **Safety** | Daily limits (optional weekly ramp), comments per account, different accounts per day, gaps and breaks, active hours and time zone (off by default), like before replying, typing speed, skip rules, failure limit, the list of auto-stop triggers. |
 | **History** | Every reply attempt: date, target, tier, post link, model, reasoning level, tokens, cost, comment, status (posted / skipped / failed + reason) and results (liked, reply likes, replies, author replied, followed back). Filters, totals, CSV export. |
 | **Settings** | Account, watch strategy, comment window (default 2-20 min after a post), review expiry, learning, cleanup, Sorsa, worker tab mode, selector overrides, theme, export / import JSON, history CSV, reset. |
 
@@ -117,12 +122,13 @@ The estimator in Models & Costs uses your own average token usage once you have 
 
 | Rule | Default | Hard cap |
 |---|---|---|
-| Comments per 24 hours (rolling): week 1 / week 2 / week 3+ | 10 / 20 / 30 | 30 |
-| Gap between comments | random 3-12 min | never below 2 min |
-| Long breaks | after every 3-6 comments, 20-60 min | - |
-| Active hours | 10:00-00:00 Asia/Dhaka | - |
-| Same target | 1 per 24 hours, 3 per 7 days | 1 / 3 |
-| Likes (like + comment combo) | off, 20/day when on | 50 |
+| Comments per 24 hours (rolling) | 200 (set lower week 1 / week 2 numbers for a ramp) | 200 |
+| Different accounts per 24 hours | 100 | 200 |
+| Same account | 2 per 24 hours, 14 per 7 days | 2 / 14 |
+| Gap between comments | random 2-6 min | never below 2 min |
+| Long breaks | after every 10-15 comments, 8-15 min | - |
+| Active hours | off (works around the clock); optional window, e.g. 10:00-00:00 Asia/Dhaka | - |
+| Likes | on: every post is liked right before the reply, no separate limit | one per comment |
 | Generations per 24 hours | 2 x the comment limit (protects your OpenAI spend) | - |
 | Unfollow cleanup | off, 10/day when on, min 7 days | 30/day |
 
@@ -229,9 +235,10 @@ Load the extension (section 1), add your API key, then:
    **Models & Costs** totals and the estimator update; skipped posts (giveaways, links, too old) show a reason.
 
 **Phase 2: full auto and safety**
-1. **Safety** shows the ramp (10/day in week 1). Try a narrow active-hours window: the status says "Sleeping".
-2. Switch to Full auto on the Dashboard and check that replies are posted with 3-12 minute gaps, at most
-   1 per target per 24 hours.
+1. **Safety** shows the daily limits (200/day, 2 per account, 100 accounts). Try a narrow active-hours window:
+   the status says "Sleeping".
+2. Switch to Full auto on the Dashboard and check that replies are posted with 2-6 minute gaps, at most
+   2 per account per 24 hours, each post liked first.
 3. Safe things to try: close the pinned X tab (it comes back), restart Chrome (it resumes by itself), log
    out of X in that profile (ScoreX stops with "Logged out", notifies you and shows a red badge).
 

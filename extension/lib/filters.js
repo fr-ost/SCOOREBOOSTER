@@ -24,7 +24,8 @@ function hasKeyword(text, list) {
   return "";
 }
 
-// Returns null when the post is fine, else { code, text }. ctx.ts overrides "now".
+// Returns null when the post is fine, else { code, text }. ctx.ts overrides "now"; ctx.maxAgeMin overrides
+// the live comment window (catch-up comments on older posts).
 export function skipReason(post, settings, ctx = {}) {
   const sk = settings.safety.skip;
   const w = settings.watch;
@@ -55,7 +56,8 @@ export function skipReason(post, settings, ctx = {}) {
   }
   if (post.createdAt) {
     const ageMin = (t - post.createdAt) / MIN;
-    if (ageMin > w.maxPostAgeMin) return { code: "stale", text: `Post is ${Math.round(ageMin)} min old (max ${w.maxPostAgeMin})` };
+    const max = ctx.maxAgeMin || w.maxPostAgeMin;
+    if (ageMin > max) return { code: "stale", text: `Post is ${Math.round(ageMin)} min old (max ${Math.round(max)})` };
   }
   return null;
 }

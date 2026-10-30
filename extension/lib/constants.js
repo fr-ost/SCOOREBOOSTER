@@ -159,12 +159,13 @@ export const ALARM = Object.freeze({
 
 // Absolute safety caps. Settings are clamped to these and cannot be raised from the UI.
 export const HARD = Object.freeze({
-  dailyComments: 30,
-  dailyLikes: 50,
+  dailyComments: 200,
+  dailyLikes: 200, // likes only happen right before a comment, so they never exceed the comments
   dailyUnfollows: 30,
   minGapMin: 2, // never two comments closer than this
-  perTargetDay: 1,
-  perTargetWeek: 3,
+  perTargetDay: 2,
+  perTargetWeek: 14,
+  accountsPerDay: 200, // different accounts commented on per 24 hours
   maxCommentChars: 280,
   maxPostFailures: 5,
   minCheckIntervalSec: 90,

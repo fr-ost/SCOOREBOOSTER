@@ -11,6 +11,8 @@ import { boot, setup, assert, log, sleep, passCount } from "./harness.mjs";
 const SEED = Number(process.env.SX_SEED) || 1337;
 const CYCLES = Number(process.env.SX_CYCLES) || 30;
 const DAILY = 8;
+const PER_TARGET = 2; // the default: 2 comments per account per 24 hours
+const ACCOUNTS = 6; // different accounts per 24 hours (set low here so the cap is exercised)
 const MIN = 60000;
 let seed = SEED;
 const rand = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
@@ -54,7 +56,9 @@ function checkInvariants(where) {
     if (removedAt[author] && r.at > removedAt[author] + 60000) violations.push(`${where}: reply to @${author} after it was removed/blacklisted`);
     for (const [a, b] of pauses) if (r.at > a + 5000 && r.at < b) violations.push(`${where}: reply at ${new Date(r.at).toISOString()} while paused`);
   }
-  for (const [h, n] of Object.entries(byTarget)) if (n > 1) violations.push(`${where}: ${n} replies to @${h} within 24h`);
+  for (const [h, n] of Object.entries(byTarget)) if (n > PER_TARGET) violations.push(`${where}: ${n} replies to @${h} within 24h (max ${PER_TARGET})`);
+  if (Object.keys(byTarget).length > ACCOUNTS) violations.push(`${where}: replies to ${Object.keys(byTarget).length} different accounts (max ${ACCOUNTS})`);
+  for (const id of M.likes) { const p = M.posts.find((x) => x.id === id); if (p && (FOLLOWERS.includes(p.author) || OTHERS.includes(p.author))) violations.push(`${where}: liked a post by @${p.author}`); }
   for (const [p, n] of Object.entries(byPost)) if (n > 1) violations.push(`${where}: ${n} replies to post ${p}`);
   if (M.replies.length > DAILY) violations.push(`${where}: ${M.replies.length} replies > daily limit ${DAILY}`);
 }
@@ -72,7 +76,7 @@ try {
 
   await setup(H, {
     mode: "auto",
-    safety: { ramp: [DAILY, DAILY, DAILY], like: { enabled: true, dailyLimit: 5 }, breaks: { enabled: true, afterMin: 3, afterMax: 4, minutesMin: 5, minutesMax: 6 } },
+    safety: { ramp: [DAILY, DAILY, DAILY], accountsPerDay: ACCOUNTS, like: { enabled: true }, breaks: { enabled: true, afterMin: 3, afterMax: 4, minutesMin: 5, minutesMax: 6 } },
     learning: { abTesting: false },
     follow: { checksPerRun: 8 },
   });

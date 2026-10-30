@@ -13,7 +13,7 @@ const xTab = async () => (await H.ctx.pages()).find((p) => /^https:\/\/x\.com\//
 try {
   M.addUser("bigbob", { name: "Big Bob", verified: true, followers: 250000 });
   M.addUser("alice", { name: "Alice", followers: 8200 });
-  await setup(H, { mode: "auto", safety: { like: { enabled: true, dailyLimit: 5 } } });
+  await setup(H, { mode: "auto", safety: { like: { enabled: true }, ramp: [10, 20, 30] } }); // a ramp, to test ramp stages
   await H.msg("targetsUpsert", { rows: ["bigbob"], defaults: { tier: 1 } });
   await H.msg("targetsUpsert", { rows: ["alice"], defaults: { tier: 2 } });
 
@@ -36,9 +36,10 @@ try {
   await H.patchState({ firstStartedAt: Date.now() - 15 * DAY });
   s = (await H.msg("getStatus")).status;
   assert(s.today.limit === 30 && s.rampStage === 2, "week 3+ daily limit is 30");
-  await H.settings({ safety: { ramp: [10, 20, 99] } });
+  await H.settings({ safety: { ramp: [10, 20, 999] } });
   s = (await H.msg("getStatus")).status;
-  assert(s.today.limit === 30, "ramp is clamped to the hard cap of 30");
+  assert(s.today.limit === 200, "ramp is clamped to the hard cap of 200");
+  assert(s.today.likeLimit === 200 && s.today.accountsLimit === 100, "no separate like limit (one like per comment), 100 accounts per day");
 
   // ---- full auto: generate -> queue -> post with like ----
   const p2 = M.addPost("alice", "We cut our signup form from 9 fields to 3 and conversion jumped. Asking for company size later worked fine.", 2);
@@ -189,6 +190,28 @@ try {
   await H.runNow();
   const sg = await H.waitFor(async () => (await H.history()).find((x) => x.id === qg.id && x.status === "skipped"), "thread reply skipped", 120000);
   assert(/reply_in_thread/.test(sg.reason) && !M.replies.some((r) => r.inReplyTo === pg.id), "replies inside threads are skipped at posting time");
+
+  // ---- catch-up: an account's latest earlier posts (from before ScoreX ran) get comments too ----
+  M.addUser("ivy", { followers: 30000 });
+  const old1 = M.addPost("ivy", "Thread on why most L2 bridges still lose users at the approval step, and what fixes it.", 180);
+  const old2 = M.addPost("ivy", "Our retention went up 9 points after we removed the email step from onboarding entirely.", 600);
+  const old3 = M.addPost("ivy", "Pricing experiment: annual plans converted better when the monthly price was shown next to them.", 1500);
+  await H.msg("targetsUpsert", { rows: ["ivy"], defaults: { tier: 2 } });
+  await H.untilChecked(["ivy"]); // the real follow check reads ivy's profile, including her latest posts
+  const tIvy = (await H.store("sx.targets")).ivy;
+  assert(tIvy.recentPosts.length === 3, "profile check cached ivy's 3 latest posts (" + tIvy.recentPosts.length + ")");
+  const catchRecs = await H.waitFor(async () => {
+    await H.patchState({ nextCommentAt: 0, lastCommentAt: 0, consecutiveFailures: 0 });
+    for (const x of (await H.history()).filter((x) => x.status === "queued")) await H.patchHistory(x.id, { scheduledFor: 0 });
+    await H.runNow();
+    await sleep(4000);
+    const h = (await H.history()).filter((x) => x.target === "ivy");
+    return h.filter((x) => x.catchUp && x.status === "posted").length >= 2 ? h : null;
+  }, "2 catch-up comments posted for ivy", 300000, 2000);
+  const ivyPosted = catchRecs.filter((x) => x.status === "posted").map((x) => x.postId);
+  assert(ivyPosted.includes(old1.id) && ivyPosted.includes(old2.id), "catch-up commented on ivy's 2 latest earlier posts");
+  assert(!catchRecs.some((x) => x.postId === old3.id), "only the 2 latest per account (setting), the 25 h old one is left alone");
+  assert(M.replies.filter((r) => r.inReplyTo === old1.id || r.inReplyTo === old2.id).length === 2, "both catch-up replies are on X");
 
   log(`\nPhase 2 e2e: ${passCount()} checks passed`);
 } catch (e) {
