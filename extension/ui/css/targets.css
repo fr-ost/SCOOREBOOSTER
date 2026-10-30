@@ -1,3 +1,113 @@
 /* ScoreX - Targets (#targets): status chips, toolbar, table, bulk bar, Add targets / Edit rules sheets, target drawer.
    Screen-specific styles only. Tokens, the shell and shared components live in ../dashboard.css (use its
    custom properties: --text*, --border*, --lime, --mark-edge, --accent-text, --amber*, --red*, --viz-1..6, --fs-*, --s1..s7). */
+
+.tg-main, .tg-bl { display: flex; flex-direction: column; min-width: 0; }
+
+/* header: status switch with counts, Find new targets, Blacklist N, Add targets */
+.tg-head { gap: 8px 10px; margin-bottom: 12px; }
+.tg-head > .btn { flex: none; }
+.tg-status .ct.summary-num { font: 600 11px/1 var(--mono); color: inherit; }
+.tg-bl-btn .ct { font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
+
+/* toolbar: search, tier switch, High value, Columns */
+.tg-tools { gap: 8px 10px; margin-bottom: 12px; }
+.tg-tools .search { flex: 1 1 220px; max-width: 320px; }
+.tg-chip { gap: 6px; }
+.tg-chip .ct { font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
+.tg-chip .ct:empty { display: none; }
+.tg-chip[aria-pressed="true"], .tg-chip[aria-pressed="true"]:hover { background: var(--invert-bg); color: var(--invert-text); border-color: var(--invert-bg); }
+.tg-tip { white-space: nowrap; }
+
+/* table cells */
+#targetsTable .cell-handle .handle { font-weight: 650; }
+.tg-x { display: inline-flex; color: var(--text-3); opacity: 0.55; }
+.tg-x:hover, .tg-x:focus-visible { color: var(--text); opacity: 1; }
+.tg-x svg { width: 12px; height: 12px; }
+.table tbody tr:hover .tg-x { opacity: 1; }
+.tg-th-prov { display: inline-flex; align-items: center; gap: 6px; }
+.tg-value.is-high { font-weight: 700; color: var(--text); }
+.tg-value.is-high::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; vertical-align: 1px; border-radius: 1px; background: var(--lime); box-shadow: inset 0 0 0 1px var(--mark-edge); }
+#targetsTable .col-follow { min-width: 150px; }
+
+/* sticky bulk bar under the table */
+.tg-bulk { position: sticky; bottom: 0; z-index: 6; margin-top: 8px; gap: 6px 8px; }
+.tg-bulk .input-sm { height: 28px; min-width: 0; max-width: 150px; }
+.tg-bulk-n { font: 600 var(--fs-s)/1 var(--mono); font-variant-numeric: tabular-nums; margin-right: 4px; white-space: nowrap; }
+
+/* footer line: counts, rules, Edit rules */
+.tg-foot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; margin-top: 10px; font-size: var(--fs-s); color: var(--text-2); }
+.tg-foot .sep { color: var(--text-3); }
+
+/* inline Add targets (no targets yet) and the Add targets sheet */
+.tg-empty { border: 1px dashed var(--border-strong); border-radius: var(--r); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px; }
+.tg-empty-head { display: flex; flex-direction: column; gap: 4px; }
+.tg-add { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.tg-add-inline { display: grid; grid-template-columns: minmax(0, 3fr) minmax(220px, 2fr); gap: 18px 28px; align-items: start; }
+.tg-add-inline .tg-add-note { grid-column: 1 / -1; }
+.tg-add textarea { width: 100%; resize: vertical; font-family: var(--mono); font-size: var(--fs-s); }
+.tg-add-file { border-top: 1px solid var(--border); padding-top: 14px; }
+.tg-add-inline .tg-add-file { border-top: 0; padding-top: 0; }
+.tg-add-note { margin: 0; }
+
+/* Edit rules sheet */
+.tg-rules-sec { display: flex; flex-direction: column; gap: 10px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.tg-rules-sec:last-child { border-bottom: 0; }
+.tg-rules-sec > p { margin: 0; }
+.tg-rules-link { align-self: flex-start; }
+
+/* target drawer */
+.tg-dw-title { display: flex; align-items: center; gap: 10px; min-width: 0; font-size: var(--fs-m); }
+.tg-avatar { width: 36px; height: 36px; font-size: 15px; }
+.tg-dw-id { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.tg-dw-line { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tg-dw-line .handle { font-size: 16px; }
+.tg-dw-bio { font-size: var(--fs-s); font-weight: 400; color: var(--text-2); line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.tg-dw-status { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; }
+.tg-day { color: var(--text-2); }
+.tg-day.is-near { color: var(--amber-text); }
+.tg-flags { display: flex; gap: 6px; flex-wrap: wrap; }
+.drawer-sec > p { margin: 0; }
+.tg-sec-head { display: flex; align-items: center; gap: 8px; }
+.tg-of { color: var(--text-3); font-weight: 500; }
+.tg-age { text-align: right; white-space: nowrap; }
+.tg-rank { display: flex; flex-direction: column; gap: 5px; margin-top: 4px; }
+.tg-val { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.tg-why { flex: 1 0 100%; }
+.tg-tl { margin-top: 2px; }
+.tg-tl-text { color: var(--text-2); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.tg-tl-link { color: var(--text-2); }
+.tg-tl .tg-tl-more::before { display: none; }
+.tg-edit-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.tg-edit-grid output { color: var(--text); margin-left: 4px; }
+.tg-edit-grid input[type="range"] { width: 100%; accent-color: var(--text); }
+.tg-edit textarea { resize: vertical; }
+.tg-actions .toolbar { gap: 8px; }
+
+/* blacklist sub-view */
+.tg-bl-top { margin-bottom: 6px; }
+.tg-back { padding-left: 6px; }
+.tg-bl-head { gap: 6px 12px; margin-bottom: 4px; }
+.tg-bl-head .sec-title:focus { outline: none; }
+.tg-bl-head .sec-title:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.tg-bl > p { margin: 0 0 14px; }
+.tg-bl-add { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; max-width: 720px; }
+.tg-bl-add-row { display: flex; gap: 8px; align-items: flex-start; }
+.tg-bl-add-row textarea { flex: 1 1 auto; min-width: 0; resize: vertical; }
+.tg-bl-bar { margin-bottom: 8px; }
+
+@media (max-width: 900px) {
+  .tg-tip { display: none; }
+  .tg-add-inline { grid-template-columns: minmax(0, 1fr); }
+  .tg-add-inline .tg-add-file { border-top: 1px solid var(--border); padding-top: 14px; }
+}
+@media (max-width: 720px) {
+  .tg-head .spacer { display: none; }
+  .tg-tools .search { max-width: none; flex-basis: 100%; }
+  .tg-edit-grid { grid-template-columns: minmax(0, 1fr); }
+  .tg-bl-add-row { flex-direction: column; align-items: stretch; }
+  .tg-bulk .input-sm { max-width: none; }
+}
+#targetsTable .cell-handle { line-height: 18px; }
+#targetsTable .cell-sub { line-height: 16px; }
+.tg-dw-status > .switch { margin-left: auto; }
