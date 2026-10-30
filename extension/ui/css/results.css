@@ -1,3 +1,48 @@
-/* ScoreX - Results (#history, alias #results): Overview (funnel, daily bars, heatmap, conversion, histogram), Comments, Spend.
-   Screen-specific styles only. Tokens, the shell and shared components live in ../dashboard.css (use its
-   custom properties: --text*, --border*, --lime, --mark-edge, --accent-text, --amber*, --red*, --viz-1..6, --fs-*, --s1..s7). */
+/* ScoreX - Results (#results / #history): Overview (funnel, every day, views per reply, conversion, days to a
+   follow-back, who responds, A/B summary) | Comments (history table + drawer, totals, retention, clear) | Spend.
+   Screen-specific styles only; tokens and shared components live in ../dashboard.css. */
+
+.res-bar { padding-bottom: 16px; border-bottom: 1px solid var(--border); margin-bottom: 4px; gap: 8px 10px; }
+.res-pane[hidden] { display: none; }
+.res-pane > .sec:first-child { border-top: none; }
+#resultsOverview { gap: 0; }
+
+/* funnel + every day */
+.res-branches { margin-top: 2px; }
+.res-branches b.mono, .res-pane .fig-sub b.mono, .res-pane .small b.mono { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.legend .key { width: 9px; height: 9px; border-radius: 1px; display: inline-block; }
+.legend .key-bar { background: var(--bar-ink); }
+.legend .key-fb { background: var(--lime); box-shadow: inset 0 0 0 1px var(--mark-edge); }
+.daily-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 32px; align-items: end; }
+.heat-col { display: flex; flex-direction: column; gap: 6px; }
+.res-caveat { margin: 0; font-style: italic; }
+
+/* conversion tables (bar-in-cell rates) */
+.res-conv { row-gap: 22px; }
+.cap-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 22px; }
+.seg-sm .seg-btn { height: 22px; padding: 0 8px; font-size: 12px; }
+.mini-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.mini-table td { padding: 0 8px; height: 36px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.mini-table td:first-child { padding-left: 2px; white-space: normal; overflow-wrap: anywhere; }
+.mini-table td:last-child { padding-right: 0; }
+.mini-table .r { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.mini-table tr:hover td { background: var(--hover); }
+.res-quote { overflow-wrap: anywhere; }
+
+/* comments */
+.res-filters { display: flex; flex-direction: column; gap: 10px; padding: 14px 0 6px; }
+.res-filters .filters-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(128px, 1fr)); gap: 8px 12px; align-items: end; }
+.res-filters .filters-grid .input, .res-filters .filters-grid select { width: 100%; }
+#historyTable .col-text { min-width: 280px; width: 46%; }
+#historyTable .status-cell { display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+#historyTable .reason-text { font-size: 11.5px; color: var(--text-2); white-space: normal; max-width: 220px; line-height: 1.3; }
+#historyDrawer .res-text, .res-text { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; font-size: var(--fs-m); line-height: 1.5; }
+#historyDrawer .kv dd { overflow-wrap: anywhere; }
+
+@media (max-width: 1100px) {
+  .daily-grid { grid-template-columns: minmax(0, 1fr); gap: 18px; }
+}
+@media (max-width: 720px) {
+  .res-bar .spacer { display: none; }
+  #historyTable .col-text { min-width: 220px; }
+}

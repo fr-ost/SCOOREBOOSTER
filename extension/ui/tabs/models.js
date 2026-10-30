@@ -1,15 +1,14 @@
-// Models & Costs tab. Essentials: OpenAI key + test, the three presets, the preset per tier, the cost
+// Models & costs tab. Essentials: OpenAI key + test, the three presets, the preset per tier, the cost
 // estimator and the monthly budget. Advanced: editable model/price table, fallback models, quality checker.
-// Reports: totals and performance (computed from IndexedDB history).
+// Spend reports (totals per model / day / week / month, performance per model and tone) live in Results > Spend.
 
 import { K, EFFORTS, PRESET_KEYS } from "../../lib/constants.js";
 import { getSecrets, setSecrets } from "../../lib/store.js";
-import { estimate, usageStats, aggregate, performance, budgetStatus, ASSUME } from "../../lib/costs.js";
+import { estimate, usageStats, budgetStatus, ASSUME } from "../../lib/costs.js";
 import { dailyLimit } from "../../lib/safety.js";
 import * as history from "../../lib/history.js";
 import { num } from "../../lib/util.js";
-import { h, clear, section, sub, advanced, btn, busy, toast, icon, renderTable, selectEl, labeled, confirmDialog, segmented, progressBar, maskKey, getPath, setPath, fmtUsd, fmtPct, fmtTokens, fmtNum, uidShort, badge, add, fill } from "../components.js";
-import { toneLabel } from "./targets.js";
+import { h, clear, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, progressBar, maskKey, getPath, setPath, fmtUsd, fmtTokens, fmtNum, uidShort, badge, debounce, add, fill } from "../components.js";
 
 export const PRESET_LABEL = { high: "High quality", balanced: "Balanced", cheap: "Cheap" };
 const effortOpts = EFFORTS.map((e) => [e, e.charAt(0).toUpperCase() + e.slice(1)]);
@@ -65,7 +64,7 @@ export function secretField(ctx, { key, label, placeholder, hint, id, onChange }
 
 export default {
   id: "models",
-  title: "Models & Costs",
+  title: "Models & costs",
   hint: "Your OpenAI key, which model writes for whom, and what it costs.",
   async render(root, ctx) {
     let records = [];
@@ -226,78 +225,16 @@ export default {
         ctx.field({ path: "budget.warnAtPct", type: "number", label: "Warn at (%)", min: 10, max: 100, step: 5 })),
       budgetStatusHost);
 
-    // ------------------------------------------------ totals + performance
-    let totalsView = "model";
-    const totalsHost = h("div", { id: "totalsTable" });
-    const totalsSeg = segmented([["model", "Per model"], ["day", "Per day"], ["week", "Per week"], ["month", "Per month"]], totalsView, (v) => { totalsView = v; drawTotals(); }, { label: "Totals view" });
-    const totalsSummary = h("div", { class: "summary-row" });
-    function drawTotals() {
-      const agg = aggregate(records, ctx.settings.timezone);
-      fill(totalsSummary, 
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, fmtUsd(agg.total.cost)), h("span", { class: "muted" }, "total spend")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, String(agg.total.comments)), h("span", { class: "muted" }, "generated")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, String(agg.total.posted)), h("span", { class: "muted" }, "posted")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, fmtTokens(agg.total.tokens)), h("span", { class: "muted" }, "tokens")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, agg.total.posted ? fmtUsd(agg.total.cost / agg.total.posted) : "-"), h("span", { class: "muted" }, "per posted comment")));
-      let table;
-      if (totalsView === "model") {
-        table = renderTable({
-          columns: [
-            { key: "key", label: "Model", render: (r) => h("span", { class: "mono" }, r.key) },
-            { key: "calls", label: "Calls", align: "right" },
-            { key: "input", label: "Input tokens", align: "right", render: (r) => fmtTokens(r.input) },
-            { key: "output", label: "Output tokens", align: "right", render: (r) => fmtTokens(r.output) },
-            { key: "reasoning", label: "Reasoning tokens", align: "right", render: (r) => fmtTokens(r.reasoning) },
-            { key: "cost", label: "Cost", align: "right", render: (r) => fmtUsd(r.cost) },
-          ],
-          rows: agg.byModel, rowKey: (r) => r.key, sortState: { key: "cost", dir: "desc" }, empty: "No API calls recorded yet.",
-        });
-      } else {
-        const rows = totalsView === "day" ? agg.byDay : totalsView === "week" ? agg.byWeek : agg.byMonth;
-        table = renderTable({
-          columns: [
-            { key: "key", label: totalsView === "day" ? "Day" : totalsView === "week" ? "Week" : "Month" },
-            { key: "comments", label: "Generated", align: "right" },
-            { key: "posted", label: "Posted", align: "right" },
-            { key: "skipped", label: "Skipped", align: "right" },
-            { key: "failed", label: "Failed", align: "right" },
-            { key: "tokens", label: "Tokens", align: "right", render: (r) => fmtTokens(r.tokens) },
-            { key: "cost", label: "Cost", align: "right", render: (r) => fmtUsd(r.cost) },
-            { key: "cpp", label: "Per posted", align: "right", render: (r) => (r.posted ? fmtUsd(r.cost / r.posted) : "-"), sort: (r) => (r.posted ? r.cost / r.posted : null) },
-          ],
-          rows, rowKey: (r) => r.key, sortState: { key: "key", dir: "desc" }, maxRows: 60, empty: "No history yet.",
-        });
-      }
-      clear(totalsHost).appendChild(table);
-    }
-    const perfHost = h("div", { class: "stack", id: "perfTables" });
-    function drawPerf() {
-      const p = performance(records);
-      const cols = (first) => [
-        { key: "key", label: first, render: (r) => (first === "Tone" ? toneLabel(r.key, ctx.settings) : h("span", { class: "mono" }, r.key)) },
-        { key: "posted", label: "Posted", align: "right" },
-        { key: "costPerComment", label: "Cost / comment", align: "right", render: (r) => fmtUsd(r.costPerComment) },
-        { key: "avgLikes", label: "Avg likes", align: "right", render: (r) => r.avgLikes.toFixed(1) },
-        { key: "avgReplies", label: "Avg replies", align: "right", render: (r) => r.avgReplies.toFixed(1) },
-        { key: "authorReplies", label: "Author replies", align: "right" },
-        { key: "followBacks", label: "Follow-backs", align: "right" },
-        { key: "followBackRate", label: "Follow-back rate", align: "right", render: (r) => fmtPct(r.followBackRate * 100, 1) },
-        { key: "costPerFollowBack", label: "Cost / follow-back", align: "right", render: (r) => (r.costPerFollowBack == null ? "-" : fmtUsd(r.costPerFollowBack)) },
-      ];
-      fill(perfHost,
-        sub("Per model", renderTable({ columns: cols("Model"), rows: p.byModel, rowKey: (r) => r.key, sortState: { key: "posted", dir: "desc" }, empty: "No posted comments yet." })),
-        sub("Per tone", renderTable({ columns: cols("Tone"), rows: p.byTone, rowKey: (r) => r.key, sortState: { key: "posted", dir: "desc" }, empty: "No posted comments yet." })));
-    }
+    // ------------------------------------------------ spend reports (moved to Results > Spend)
+    const reportsSec = section({ title: "Spend reports", hint: "Totals per model, day, week and month and performance per model and tone are in Results." },
+      h("p", { class: "small muted" }, "See what each model and tone costs per posted comment and per follow-back, next to the daily cost chart and your budget."),
+      h("a", { href: "#results?view=spend", class: "btn btn-sm", id: "spendReportsLink" }, "Open Results › Spend"));
 
-    const totalsSec = section({ wide: true, title: "Totals", hint: "Real cost from the token usage of every call, fallbacks and checks included.", actions: totalsSeg }, totalsSummary, totalsHost);
-    const perfSec = section({ wide: true, title: "Performance", hint: "Likes, replies, author replies and follow-backs per model and tone." }, perfHost);
-
-    add(root, keySec, presetsSec, matrixSec, estSec, budgetSec,
+    add(root, keySec, presetsSec, matrixSec, estSec, budgetSec, reportsSec,
       advanced({ key: "models.advanced", desc: "Model and price table, fallback models, quality checker" },
         modelsSec,
         section({ title: "Fallback", hint: "Used when the preset's model errors out." }, fallbackHost),
-        section({ title: "Quality checker", hint: "Rule checks always run; this adds a model check." }, qualityBox)),
-      advanced({ key: "models.reports", title: "Reports", desc: "Spend per model, day, week and month; performance per model and tone" }, totalsSec, perfSec));
+        section({ title: "Quality checker", hint: "Rule checks always run; this adds a model check." }, qualityBox)));
 
     let modelSig = "";
     const modelsSignature = (s) => JSON.stringify(s.models.map((m) => [m.id, m.label, m.name]));
@@ -313,7 +250,7 @@ export default {
     const idsSig = (s) => s.models.map((m) => m.id).join(",");
     let lastIds = idsSig(ctx.settings);
     modelSig = modelsSignature(ctx.settings);
-    drawModels(); drawPresets(); drawEstimate(); drawBudget(); drawTotals(); drawPerf();
+    drawModels(); drawPresets(); drawEstimate(); drawBudget();
 
     ctx.on("settings", (s) => {
       const ids = idsSig(s);
@@ -327,6 +264,8 @@ export default {
       drawEstimate(); drawBudget();
     });
     ctx.on(K.spend, drawBudget);
-    ctx.on("tick", async () => { await loadRecords(); drawEstimate(); drawTotals(); drawPerf(); });
+    // The estimator learns from real usage: re-read history only when it changed (new items in the queue), not on every tick.
+    const reloadRecords = debounce(async () => { await loadRecords(); if (!estOut.contains(document.activeElement)) drawEstimate(); }, 2000);
+    ctx.on("counts", reloadRecords);
   },
 };
