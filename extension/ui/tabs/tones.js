@@ -1,11 +1,12 @@
-// Tone & Prompts tab: group default tones, built-in tone texts, custom tones, style examples, extra rules,
-// prompt preview and A/B testing (settings + learningSummary results).
+// Tone & Prompts tab. Essentials: group default tones, style examples, extra rules + prompt preview.
+// Advanced: built-in tone texts, custom tones, example sampling, the fixed comment rules.
+// A/B testing (settings + learningSummary results) in its own collapsed section.
 
 import { K, BUILTIN_TONES, PRESET_KEYS } from "../../lib/constants.js";
 import { DEFAULT_TONES } from "../../lib/store.js";
 import { allToneKeys } from "../../lib/targets.js";
 import { num } from "../../lib/util.js";
-import { h, clear, card, btn, busy, toast, icon, renderTable, selectEl, labeled, confirmDialog, modal, groupBadge, fmtUsd, fmtPct, sectionTitle, uidShort, add, fill } from "../components.js";
+import { h, clear, section, sub, advanced, btn, busy, toast, icon, renderTable, selectEl, labeled, confirmDialog, modal, groupBadge, quotaBar, fmtUsd, fmtPct, sectionTitle, uidShort, add, fill } from "../components.js";
 import { toneLabel } from "./targets.js";
 import { PRESET_LABEL } from "./models.js";
 
@@ -28,7 +29,7 @@ const RULES = [
 export default {
   id: "tones",
   title: "Tone & Prompts",
-  icon: "tones",
+  hint: "How the replies sound: a tone per group, your own past comments as style examples, extra rules.",
   async render(root, ctx) {
     const toneSelectOptions = (s) => [
       ...BUILTIN_TONES.map((k) => [k, toneLabel(k, s)]),
@@ -43,18 +44,19 @@ export default {
       fill(groupHost, ...["A", "B"].map((g) => {
         const custom = ctx.field({ path: `groups.${g}.customTone`, type: "textarea", label: "Custom tone text", rows: 3, placeholder: "Describe the voice in one or two sentences" });
         custom.hidden = s.groups[g].tone !== "custom";
-        const preview = h("p", { class: "muted small tone-preview" });
+        const preview = h("p", { class: "tone-preview" });
         const syncPreview = () => {
           const k = ctx.settings.groups[g].tone;
           custom.hidden = k !== "custom";
           const c = k && k.startsWith("custom:") ? (ctx.settings.customTones || []).find((x) => "custom:" + x.id === k) : null;
           preview.textContent = k === "custom" ? "" : c ? c.text : ctx.settings.tones[k] || "";
+          preview.hidden = !preview.textContent;
         };
         syncPreview();
         ctx.addRefresher(() => { if (!preview.isConnected) return false; syncPreview(); return true; });
-        return h("div", { class: "subpanel" },
-          h("h3", { class: "subpanel-title" }, groupBadge(g), g === "A" ? " Group A - follows you (keep warm)" : " Group B - does not follow you (get noticed)"),
-          ctx.field({ path: `groups.${g}.tone`, type: "select", label: "Default tone", options: toneSelectOptions(s) }),
+        return h("div", { class: "sub" },
+          h("h3", { class: "sub-title" }, g === "A" ? "Group A · follows you" : "Group B · to win over"),
+          ctx.field({ path: `groups.${g}.tone`, type: "select", label: `Group ${g} tone`, options: toneSelectOptions(s) }),
           preview, custom);
       }));
     }
@@ -110,9 +112,12 @@ export default {
     // ------------------------------------------------ style examples
     const exHost = h("div", { class: "stack", id: "styleExamples" });
     const exCount = h("span", { class: "count-chip" });
+    const exProgress = h("div", { class: "ex-progress", id: "exProgress" });
     function drawExamples() {
       const list = ctx.settings.prompt.styleExamples || [];
       exCount.textContent = String(list.length);
+      const filled = list.filter((x) => String(x || "").trim()).length;
+      fill(exProgress, quotaBar(Math.min(filled, 5), 5, { label: "Style examples (5 recommended)" }), filled >= 5 ? `${filled} examples` : `${filled} / 5`);
       clear(exHost);
       list.forEach((_, i) => {
         const f = ctx.field({
@@ -134,7 +139,7 @@ export default {
         if (again) again.focus();
       };
       newEx.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); add(); } });
-      exHost.appendChild(h("div", { class: "example-row example-new" }, h("span", { class: "example-num" }, "+"), labeled("New example", newEx), btn("Add", add, { iconName: "plus", id: "addExampleBtn" })));
+      exHost.appendChild(h("div", { class: "example-row example-new" }, h("span", { class: "example-num", "aria-hidden": "true" }, "+"), labeled("New example (Ctrl+Enter adds it)", newEx), btn("Add", add, { iconName: "plus", id: "addExampleBtn" })));
     }
 
     // ------------------------------------------------ preview
@@ -186,10 +191,10 @@ export default {
     const abSettings = h("div", { class: "stack" },
       h("div", { class: "form-row" },
         ctx.field({ path: "learning.abTesting", type: "toggle", label: "A/B test tones and presets" }),
-        ctx.field({ path: "learning.explore", type: "percent", label: "Exploration share", min: 0, max: 60, step: 5, suffix: "%", hint: "Share of comments used to test alternatives (max 60%)" }),
+        ctx.field({ path: "learning.explore", type: "percent", label: "Exploration share", min: 0, max: 60, step: 5, suffix: "%", hint: "Comments used to test alternatives" }),
         ctx.field({ path: "learning.minSamples", type: "number", label: "Min samples per variant", min: 2, max: 100 })),
-      chipsField("learning.abTones.A", () => allToneKeys(ctx.settings).map((k) => [k, toneLabel(k, ctx.settings)]), "Group A tones to test (the group default is always included)"),
-      chipsField("learning.abTones.B", () => allToneKeys(ctx.settings).map((k) => [k, toneLabel(k, ctx.settings)]), "Group B tones to test (the group default is always included)"),
+      chipsField("learning.abTones.A", () => allToneKeys(ctx.settings).map((k) => [k, toneLabel(k, ctx.settings)]), "Group A tones to test (plus the group default)"),
+      chipsField("learning.abTones.B", () => allToneKeys(ctx.settings).map((k) => [k, toneLabel(k, ctx.settings)]), "Group B tones to test (plus the group default)"),
       chipsField("learning.abPresets", () => PRESET_KEYS.map((k) => [k, PRESET_LABEL[k]]), "Presets to test (none = only the matrix preset)"));
 
     const abResults = h("div", { class: "stack", id: "abResults" });
@@ -232,30 +237,34 @@ export default {
     }
 
     // ------------------------------------------------ layout
-    add(root, 
-      card({ title: "Group default tones", subtitle: "Each target uses its group's tone unless it has its own override (Targets tab)." }, groupHost),
-      h("div", { class: "grid-2" },
-        card({ title: "Built-in tones", subtitle: "Edit how each tone is described to the model." }, builtinHost),
-        card({ title: "Custom tones", subtitle: "Your own voices, usable everywhere a tone can be picked." }, customHost)),
-      card({ title: h("span", null, "Style examples ", exCount), subtitle: "Paste 5-10 of your best past comments. The model copies their length, casing and punctuation - not their content." },
-        h("div", { class: "form-row" },
-          ctx.field({ path: "prompt.styleExampleCount", type: "number", label: "Examples per prompt", min: 0, max: 10, hint: "Sampled at random from the pool each time" }),
-          ctx.field({ path: "prompt.autoStyleFromHistory", type: "toggle", label: "Also use my best-performing posted comments" })),
-        exHost),
-      h("div", { class: "grid-2" },
-        card({ title: "Extra rules", subtitle: "Added to the instructions for every comment." },
-          ctx.field({ path: "prompt.extraRules", type: "textarea", rows: 5, ariaLabel: "Extra rules", placeholder: "e.g. Never use the word 'game-changer'. Prefer lowercase. Mention numbers when the post has data." }),
-          h("div", { class: "toolbar toolbar-end" }, labeled("Preview for", previewTarget), previewBtn)),
-        card({ title: "Comment rules", subtitle: "Always applied (rule checks + optional model check)." },
+    const abActions = [
+      btn("Refresh results", (e) => { const b = e.currentTarget; busy(b, () => loadAb(true)); }, { size: "sm", iconName: "refresh" }),
+      btn("Reset A/B data", async () => {
+        if (!(await confirmDialog("Forget all A/B results and start learning again?", { title: "Reset A/B data", okLabel: "Reset", danger: true }))) return;
+        const r = await ctx.send("abReset", {}, { label: "Reset A/B data" });
+        if (r) { toast("A/B data reset"); loadAb(false); }
+      }, { size: "sm", kind: "ghost-danger" })];
+
+    add(root,
+      section({ title: "Group default tones", hint: "A target uses its group's tone unless it has its own (Targets tab)." }, groupHost),
+      section({ title: h("span", null, "Style examples ", exCount), hint: "Paste 5-10 of your best past comments. The model copies their length, casing and punctuation, not their content.", actions: exProgress }, exHost),
+      section({ title: "Extra rules", hint: "Added to the instructions for every comment." },
+        ctx.field({ path: "prompt.extraRules", type: "textarea", rows: 4, ariaLabel: "Extra rules", placeholder: "e.g. Never use the word 'game-changer'. Prefer lowercase. Mention numbers when the post has data." }),
+        h("div", { class: "toolbar toolbar-end" }, labeled("Preview the prompt for", previewTarget), previewBtn)),
+
+      advanced({ key: "tones.advanced", desc: "Built-in tone texts, custom tones, example sampling, fixed comment rules" },
+        section({ title: "Built-in tones", hint: "How each tone is described to the model." }, builtinHost),
+        section({ title: "Custom tones", hint: "Your own voices, usable wherever a tone can be picked." }, customHost),
+        section({ title: "Example sampling" },
+          h("div", { class: "form-row" },
+            ctx.field({ path: "prompt.styleExampleCount", type: "number", label: "Examples per prompt", min: 0, max: 10, hint: "Picked at random each time" }),
+            ctx.field({ path: "prompt.autoStyleFromHistory", type: "toggle", label: "Also use my best-performing posted comments" }))),
+        section({ title: "Comment rules", hint: "Always applied: rule checks plus the optional model check." },
           h("ul", { class: "check-list" }, RULES.map((r) => h("li", null, icon("check"), h("span", null, r)))))),
-      card({ title: "A/B testing", subtitle: "Learns which tone and preset get the most responses per group (Thompson sampling).", actions: [
-        btn("Refresh results", (e) => { const b = e.currentTarget; busy(b, () => loadAb(true)); }, { size: "sm", iconName: "refresh" }),
-        btn("Reset A/B data", async () => {
-          if (!(await confirmDialog("Forget all A/B results and start learning again?", { title: "Reset A/B data", okLabel: "Reset", danger: true }))) return;
-          const r = await ctx.send("abReset", {}, { label: "Reset A/B data" });
-          if (r) { toast("A/B data reset"); loadAb(false); }
-        }, { size: "sm", kind: "ghost-danger" })] },
-        abSettings, sectionTitle("Results"), abResults));
+
+      advanced({ key: "tones.ab", title: "A/B testing", desc: "Learns which tone and preset get the most responses per group" },
+        section({ title: "Settings", hint: "Thompson sampling over tones and presets." }, abSettings),
+        section({ wide: true, title: "Results", actions: abActions }, abResults)));
 
     drawGroups(); drawBuiltins(); drawCustom(); drawExamples(); fillPreviewTargets();
     drawAb(null);

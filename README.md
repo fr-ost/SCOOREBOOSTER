@@ -69,6 +69,9 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
 
 ## 4. Dashboard guide
 
+The Dashboard shows a short setup checklist until ScoreX is ready. Every tab shows the essentials first;
+everything else is in collapsed **Advanced** sections (their open/closed state is remembered).
+
 | Tab | What you do there |
 |---|---|
 | **Dashboard** | Status (Running / Paused / Stopped with the reason), today's counters vs limits, cost today / this month, Review / Full auto switch, recent activity, "Run a check now". A red banner appears after an auto-stop. |

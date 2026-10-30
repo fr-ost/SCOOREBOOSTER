@@ -1,18 +1,19 @@
-// History tab: every generated comment with filters, totals, CSV export and "Clear history".
-// Reads IndexedDB through lib/history.js; never writes it (clearing goes through historyClear).
+// History tab: every generated comment with filters, summary, CSV export; totals by period and
+// "Clear history" are collapsed. Reads IndexedDB through lib/history.js; never writes it (clearing goes
+// through historyClear).
 
 import { HS } from "../../lib/constants.js";
 import * as history from "../../lib/history.js";
 import { aggregate } from "../../lib/costs.js";
 import { num, zonedTime } from "../../lib/util.js";
-import { h, clear, card, btn, toast, icon, renderTable, selectEl, labeled, confirmDialog, download, stamp, groupBadge, tierBadge, statusBadge, badge, xLink, link, fmtUsd, fmtDateTime, fmtTokens, truncate, debounce, segmented, add, fill } from "../components.js";
+import { h, clear, section, advanced, btn, toast, icon, renderTable, selectEl, labeled, confirmDialog, download, stamp, groupBadge, tierBadge, statusBadge, badge, xLink, link, fmtUsd, fmtDateTime, fmtTokens, truncate, debounce, segmented, add, fill } from "../components.js";
 
 const STATUS_OPTS = [["", "All statuses"], [HS.POSTED, "Posted"], [HS.PENDING_REVIEW, "Pending review"], [HS.APPROVED, "Approved"], [HS.QUEUED, "Queued"], [HS.POSTING, "Posting"], [HS.SKIPPED, "Skipped"], [HS.FAILED, "Failed"]];
 
 export default {
   id: "history",
   title: "History",
-  icon: "history",
+  hint: "Every generated comment with its model, cost, status and results.",
   async render(root, ctx) {
     const f = { from: "", to: "", status: "", group: "", model: "", text: "" };
     const sortState = { key: "createdAt", dir: "desc" };
@@ -26,7 +27,7 @@ export default {
     const fModel = selectEl([["", "All models"]], "", { id: "hModel" });
     const fText = h("input", { type: "search", class: "input", id: "hText", placeholder: "Search comment or post text" });
 
-    const summary = h("div", { class: "summary-row", id: "historySummary" });
+    const summary = h("div", { class: "summary-row", id: "historySummary", "aria-live": "polite" });
     const tableHost = h("div", { id: "historyTable" });
     const quickHost = h("div", { id: "historyQuick" });
     let quickView = "day";
@@ -64,11 +65,11 @@ export default {
     function results(r) {
       const res = r.results || {};
       const parts = [];
-      if (r.liked) parts.push(badge("liked post", "grey", "ScoreX liked the post before replying"));
-      if (res.likes != null) parts.push(h("span", { class: "small", title: "Likes on your reply" }, `${res.likes} like${res.likes === 1 ? "" : "s"}`));
-      if (res.replies != null) parts.push(h("span", { class: "small", title: "Replies to your reply" }, `${res.replies} repl${res.replies === 1 ? "y" : "ies"}`));
+      if (r.liked) parts.push(badge("liked", "grey", "ScoreX liked the post before replying"));
+      if (res.likes != null) parts.push(h("span", { class: "small tnum", title: "Likes on your reply" }, `${res.likes}\u2665`));
+      if (res.replies != null) parts.push(h("span", { class: "small tnum", title: "Replies to your reply" }, `${res.replies} repl${res.replies === 1 ? "y" : "ies"}`));
       if (res.authorReplied) parts.push(badge("author replied", "green"));
-      if (res.followedBack) parts.push(badge("followed back", "violet"));
+      if (res.followedBack) parts.push(badge("followed back", "green"));
       if (!parts.length) return r.status === HS.POSTED ? h("span", { class: "muted small" }, res.checkedAt ? "no response" : "not checked yet") : "-";
       return h("div", { class: "chips-inline" }, parts);
     }
@@ -78,11 +79,11 @@ export default {
       const posted = rows.filter((r) => r.status === HS.POSTED).length;
       const tokens = rows.reduce((a, r) => a + num(r.tokens && r.tokens.input) + num(r.tokens && r.tokens.output), 0);
       fill(summary, 
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num", id: "historyCount" }, String(rows.length)), h("span", { class: "muted" }, "records")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, String(posted)), h("span", { class: "muted" }, "posted")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, fmtUsd(cost)), h("span", { class: "muted" }, "cost")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, fmtTokens(tokens)), h("span", { class: "muted" }, "tokens")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, posted ? fmtUsd(cost / posted) : "-"), h("span", { class: "muted" }, "per posted")));
+        h("span", { class: "summary-item" }, h("span", { class: "summary-num", id: "historyCount" }, String(rows.length)), "records"),
+        h("span", { class: "summary-item" }, h("span", { class: "summary-num" }, String(posted)), "posted"),
+        h("span", { class: "summary-item" }, h("span", { class: "summary-num" }, fmtUsd(cost)), "cost"),
+        h("span", { class: "summary-item" }, h("span", { class: "summary-num" }, fmtTokens(tokens)), "tokens"),
+        h("span", { class: "summary-item" }, h("span", { class: "summary-num" }, posted ? fmtUsd(cost / posted) : "-"), "per posted"));
 
       clear(tableHost).appendChild(renderTable({
         columns: [
@@ -137,31 +138,30 @@ export default {
       if (!rows.length) { toast("Nothing to export with these filters.", { type: "warn" }); return; }
       download(`scorex-history-${stamp()}.csv`, history.toCsvText(rows), "text/csv");
       toast(`Exported ${rows.length} rows`, { type: "success" });
-    }, { iconName: "download", id: "historyExportBtn" });
+    }, { iconName: "download", size: "sm", id: "historyExportBtn" });
     const resetBtn = btn("Reset filters", () => {
       Object.assign(f, { from: "", to: "", status: "", group: "", model: "", text: "" });
       fFrom.value = fTo.value = fText.value = ""; fStatus.value = fGroup.value = fModel.value = "";
       load();
-    }, { kind: "ghost" });
+    }, { kind: "ghost", size: "sm" });
     const clearBtn = btn("Clear history", async () => {
       if (!(await confirmDialog("Delete the comment history (costs, results)? Comments posted in the last 8 days and items still in the queue are kept, because the daily and per-account safety limits depend on them. Targets and settings stay. This cannot be undone - export a CSV first if you need it.", { title: "Clear history", okLabel: "Delete history", danger: true }))) return;
       const r = await ctx.send("historyClear", {}, { label: "Clear history" });
       if (r) { toast(`History cleared (${num(r.removed)} removed, ${num(r.kept)} kept for safety limits)`); load(); ctx.refreshCounts(); }
-    }, { kind: "ghost-danger", iconName: "trash", id: "historyClearBtn" });
+    }, { kind: "danger-soft", iconName: "trash", id: "historyClearBtn" });
 
     const quickSeg = segmented([["day", "Per day"], ["week", "Per week"], ["month", "Per month"]], quickView, (v) => { quickView = v; drawQuick(ctx.settings.timezone); }, { label: "Totals period" });
 
-    add(root, 
-      card({ title: "Filters", actions: [resetBtn, exportBtn] },
+    add(root,
+      h("div", { class: "stack-sm", style: "padding-bottom:18px" },
         h("div", { class: "filters-grid" },
           labeled("From", fFrom), labeled("To", fTo), labeled("Status", fStatus), labeled("Group", fGroup), labeled("Model", fModel), labeled("Search", fText)),
-        summary),
-      card({ title: "Comments", subtitle: "Newest first. Hover a status for its reason." }, tableHost),
-      h("div", { class: "grid-2-1" },
-        card({ title: "Totals", subtitle: "All history, by period", actions: quickSeg }, quickHost),
-        card({ title: "Danger zone" },
-          h("p", { class: "muted small" }, "Clearing history also empties the review queue and resets cost totals shown here (the monthly budget ledger is kept by the worker)."),
-          clearBtn)));
+        h("div", { class: "toolbar" }, summary, h("span", { class: "spacer" }), resetBtn, exportBtn)),
+      section({ wide: true, title: "Comments", hint: "Newest first. Hover a status for its reason." }, tableHost),
+      advanced({ key: "history.totals", title: "Totals by period", desc: "Generated, posted, skipped, failed and cost per day, week or month" },
+        section({ wide: true, title: "All history", actions: quickSeg }, quickHost)),
+      advanced({ key: "history.clear", title: "Clear history", desc: "Delete old records (recent posts and the open queue are kept for the safety limits)" },
+        section({ title: "Danger zone", hint: "Also empties the review queue and resets the cost totals shown here. The monthly budget ledger is kept." }, clearBtn)));
 
     await load();
     ctx.on("counts", reload);

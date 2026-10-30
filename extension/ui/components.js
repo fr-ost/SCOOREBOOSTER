@@ -92,6 +92,8 @@ const P = {
   key: '<circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M17 6l3 3M15 8l2 2"/>',
   eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
   logo: '<path d="M5 5l14 14M19 5L5 19"/>',
+  chevron: '<path d="M9 6l6 6-6 6"/>',
+  arrow: '<path d="M5 12h14M13 6l6 6-6 6"/>',
 };
 export function icon(name, cls = "") {
   const path = P[name] || P.info;
@@ -267,44 +269,116 @@ const HS_INFO = {
   [HS.SKIPPED]: ["Skipped", "grey"],
   [HS.FAILED]: ["Failed", "red"],
 };
+// History status: a small coloured square followed by the word (no pills).
 export function statusBadge(status, reason) {
   const [label, color] = HS_INFO[status] || [status || "-", "grey"];
-  return h("span", { class: ["badge", "badge-" + color], title: reason || label }, label);
+  return h("span", { class: ["hs", "hs-" + color], title: reason || label }, label);
 }
 export function badge(text, color = "grey", title) { return h("span", { class: ["badge", "badge-" + color], title: title || null }, text); }
 
-// Engine status -> pill info. Safety stops (anything but "user") are red.
+// Engine status -> display info. Safety stops (anything but "user") are red.
 export function statusInfo(state) {
   const st = (state && state.status) || STATUS.STOPPED;
   if (st === STATUS.RUNNING) return { kind: "running", label: "Running", reason: "" };
   if (st === STATUS.PAUSED) return { kind: "paused", label: "Paused", reason: state.stopDetail || "" };
   const r = state && state.stopReason;
   const reason = r ? STOP_LABEL[r] || String(r) : "";
-  return { kind: r && r !== "user" ? "danger" : "stopped", label: "Stopped", reason, detail: (state && state.stopDetail) || "" };
+  return { kind: r && r !== "user" ? "danger" : "stopped", label: "Stopped", reason: r === "user" ? "" : reason, detail: (state && state.stopDetail) || "" };
 }
+// The one primary engine action for the current state: [label, message, icon].
+export function primaryAction(state) {
+  const st = (state && state.status) || STATUS.STOPPED;
+  if (st === STATUS.RUNNING) return ["Pause", "pause", "pause"];
+  if (st === STATUS.PAUSED) return ["Resume", "resume", "play"];
+  if (state && state.stopReason && state.stopReason !== "user") return ["Resume", "resume", "play"];
+  return ["Start", "start", "play"];
+}
+// Status dot + label ("Running", "Paused", "Stopped (reason)").
 export function statusPill(state, { large = false } = {}) {
   const i = statusInfo(state);
-  return h("span", { class: ["status-pill", "status-" + i.kind, large && "status-pill-lg"], title: [i.label, i.reason].filter(Boolean).join(" - ") },
-    h("span", { class: "dot", "aria-hidden": "true" }), i.label, i.reason && i.kind !== "running" ? h("span", { class: "status-reason" }, `(${i.reason})`) : null);
+  return h("span", { class: ["status", "status-" + i.kind, large && "status-lg"], title: [i.label, i.reason, i.detail].filter(Boolean).join(" - ") },
+    h("span", { class: "dot", "aria-hidden": "true" }),
+    h("span", { class: "status-label" }, i.label),
+    i.reason && i.kind !== "running" ? h("span", { class: "status-reason" }, `(${i.reason})`) : null);
 }
 
+// Thin flat bar. kind: amber | red | grey (anything else = accent).
 export function progressBar(pct, { kind } = {}) {
   const p = Math.max(0, Math.min(100, num(pct)));
-  const k = kind || (p >= 100 ? "red" : p >= 80 ? "amber" : "accent");
+  const k = ["amber", "red", "grey"].includes(kind) ? kind : !kind && p >= 100 ? "red" : !kind && p >= 80 ? "amber" : "accent";
   return h("div", { class: ["progress", "progress-" + k], role: "progressbar", "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(Math.round(p)) },
     h("div", { class: "progress-bar", style: { width: p + "%" } }));
+}
+
+// Segmented quota bar: one segment per unit up to 60, a continuous bar above that.
+export function quotaBar(value, limit, { label } = {}) {
+  const v = Math.max(0, num(value));
+  const lim = Math.max(0, Math.round(num(limit)));
+  const attrs = { role: "meter", "aria-valuemin": "0", "aria-valuemax": String(lim), "aria-valuenow": String(Math.min(v, lim || v)), "aria-label": label || "Quota" };
+  if (lim > 0 && lim <= 60) {
+    const segs = [];
+    for (let i = 0; i < lim; i++) segs.push(h("span", { class: ["quota-seg", i < v && "on"] }));
+    return h("div", { class: ["quota", v >= lim && "is-full"], ...attrs }, segs);
+  }
+  const pct = lim ? Math.min(100, (v / lim) * 100) : 0;
+  return h("div", { class: ["quota", "quota-cont", lim && v >= lim && "is-full"], ...attrs },
+    h("span", { class: "quota-seg" }), h("span", { class: "quota-fill", style: { width: pct + "%" } }));
 }
 
 export function emptyState(title, text, action) {
   return h("div", { class: "empty" }, h("div", { class: "empty-title" }, title), text ? h("p", null, text) : null, action || null);
 }
 
+// Flat section separated by a hairline. Default layout: title + hint column on the left, content on the right.
+// wide: header above the content (tables, lists).
+export function section({ title, hint, actions, id, className, wide = false } = {}, ...children) {
+  return h("section", { class: ["sec", wide && "sec-wide", className], id: id || null },
+    title || hint || actions ? h("header", { class: "sec-head" },
+      h("div", { class: "sec-titles" }, title ? h("h2", { class: "sec-title" }, title) : null, hint ? h("p", { class: "sec-hint" }, hint) : null),
+      actions ? h("div", { class: "sec-actions" }, actions) : null) : null,
+    h("div", { class: "sec-body" }, children));
+}
+// Backwards-compatible alias: a wide section.
 export function card({ title, subtitle, actions, className, id } = {}, ...children) {
-  return h("section", { class: ["card", className], id: id || null },
-    title || actions ? h("div", { class: "card-header" },
-      h("div", { class: "card-titles" }, title ? h("h2", { class: "card-title" }, title) : null, subtitle ? h("p", { class: "card-sub" }, subtitle) : null),
-      actions ? h("div", { class: "card-actions" }, actions) : null) : null,
-    h("div", { class: "card-body" }, children));
+  return section({ title, hint: subtitle, actions, className, id, wide: true }, ...children);
+}
+// Small labelled group inside a section.
+export function sub(title, ...children) {
+  return h("div", { class: "sub" }, title ? h("h3", { class: "sub-title" }, title) : null, children);
+}
+
+// Collapsed <details> group. Open/closed state is remembered per key in localStorage ("sx.adv.<key>").
+function readAdv(key) { try { return window.localStorage.getItem("sx.adv." + key); } catch (_) { return null; } }
+function writeAdv(key, open) { try { window.localStorage.setItem("sx.adv." + key, open ? "1" : "0"); } catch (_) { /* storage blocked */ } }
+export function advanced({ key, title = "Advanced", desc, tag, id, open = false } = {}, ...children) {
+  const stored = key ? readAdv(key) : null;
+  const descEl = h("span", { class: "adv-desc" }, desc || "");
+  const tagEl = h("span", { class: "adv-tag", hidden: !tag }, tag || "");
+  const d = h("details", { class: "adv", id: id || null, dataset: key ? { adv: key } : undefined, open: stored == null ? !!open : stored === "1" },
+    h("summary", null, icon("chevron", "adv-caret"), h("span", { class: "adv-title" }, title), tagEl, descEl),
+    h("div", { class: "adv-body" }, children));
+  // Persist on the click itself (the toggle event fires a task later) and on any other toggle.
+  d.firstChild.addEventListener("click", () => { if (key) writeAdv(key, !d.open); });
+  d.addEventListener("toggle", () => { if (key) writeAdv(key, d.open); });
+  d.setDesc = (text) => { descEl.textContent = text || ""; };
+  d.setTag = (text) => { tagEl.textContent = text || ""; tagEl.hidden = !text; };
+  return d;
+}
+
+// Instrument strip: cells separated by hairlines that wrap cleanly.
+export function panel(cls, ...cells) {
+  return h("div", { class: ["panel", cls] }, h("div", { class: "panel-in" }, cells));
+}
+// One compact figure: label, mono value (with optional " / of"), sub line.
+export function fig({ label, value, of, sub: subText, href, id, cls, title } = {}) {
+  const kids = [
+    h("span", { class: "fig-label" }, label),
+    h("span", { class: "fig-value", id: id || null }, value, of != null ? h("span", { class: "fig-of" }, ` / ${of}`) : null),
+    subText ? h("span", { class: "fig-sub" }, subText) : null,
+  ];
+  return href
+    ? h("a", { class: ["cell", "fig", cls], href, title: title || null }, kids)
+    : h("div", { class: ["cell", "fig", cls], title: title || null }, kids);
 }
 
 export function btn(label, onClick, { kind = "", size = "", iconName, title, disabled, type = "button", id } = {}) {
@@ -598,8 +672,8 @@ export function segmented(options, value, onChange, { label, cls } = {}) {
   return wrap;
 }
 
-// Section heading inside cards.
-export function sectionTitle(text, extra) { return h("div", { class: "section-title" }, h("h3", null, text), extra || null); }
+// Small uppercase heading inside a section.
+export function sectionTitle(text, extra) { return h("div", { class: "toolbar" }, h("h3", { class: "sub-title" }, text), extra || null); }
 export function kv(rows) {
   return h("dl", { class: "kv" }, rows.filter(Boolean).map(([k, v]) => [h("dt", null, k), h("dd", null, v == null || v === "" ? "-" : v)]));
 }

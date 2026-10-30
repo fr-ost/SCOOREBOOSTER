@@ -1,13 +1,13 @@
-// ScoreX dashboard - app shell, hash router, header (status pill, Start/Pause/Resume/Stop, theme),
-// shared context for the tabs. Storage rules: the UI reads everything, but writes only
-// settings (sanitized), secrets and selector overrides. Everything else goes through messages.
+// ScoreX dashboard - app shell, hash router, top app bar (tab strip, engine status + one primary
+// Start/Pause/Resume button, Stop, theme), shared context for the tabs. Storage rules: the UI reads
+// everything, but writes only settings (sanitized), secrets and selector overrides. Everything else
+// goes through messages.
 
-import { K, MODE, STOP_LABEL, VERSION } from "../lib/constants.js";
+import { K, STATUS, STOP_LABEL, VERSION } from "../lib/constants.js";
 import { getSettings, saveSettings, sanitizeSettings, DEFAULT_STATE } from "../lib/store.js";
 import { deepClone } from "../lib/util.js";
-import { warmup } from "../lib/safety.js";
 import * as history from "../lib/history.js";
-import { h, clear, icon, btn, busy, send, toast, statusPill, statusInfo, segmented, boundField, setTz, debounce, fmtDateTime, fmtAgo, add, fill } from "./components.js";
+import { h, clear, icon, btn, busy, send, toast, statusPill, statusInfo, primaryAction, segmented, boundField, setTz, debounce, fmtDateTime, fmtAgo, add, fill } from "./components.js";
 
 import overview from "./tabs/overview.js";
 import targets from "./tabs/targets.js";
@@ -18,7 +18,8 @@ import safety from "./tabs/safety.js";
 import historyTab from "./tabs/history.js";
 import settingsTab from "./tabs/settings.js";
 
-const TABS = [overview, targets, review, models, tones, safety, historyTab, settingsTab];
+// Tab strip order.
+const TABS = [overview, review, targets, models, tones, safety, historyTab, settingsTab];
 const WATCH = [K.state, K.targets, K.candidates, K.discovery, K.logs, K.spend, K.learning];
 
 // ---------------------------------------------------------------- event bus + scopes
@@ -141,27 +142,30 @@ const refreshStatusSoon = debounce(refreshStatus, 300);
 
 const view = document.getElementById("view");
 const nav = document.getElementById("nav");
-const topbar = document.getElementById("topbar");
 const alertSlot = document.getElementById("alertSlot");
 
 function buildNav() {
   clear(nav);
   for (const t of TABS) {
-    nav.appendChild(h("a", { href: "#" + t.id, class: "nav-link", dataset: { tab: t.id } },
-      icon(t.icon || t.id), h("span", { class: "nav-label" }, t.title), h("span", { class: "nav-badge", hidden: true })));
+    nav.appendChild(h("a", { href: "#" + t.id, class: "tab", dataset: { tab: t.id } },
+      h("span", { class: "tab-label" }, t.title),
+      t.id === "review" ? h("span", { class: "tab-count", hidden: true }) : null,
+      t.id === "overview" ? h("span", { class: "tab-alert", hidden: true, role: "img", "aria-label": "Safety alert" }) : null));
   }
-  const foot = document.getElementById("sidebarFoot");
-  clear(foot).appendChild(h("div", { class: "muted small" }, `ScoreX v${VERSION}`));
+  fill(document.getElementById("foot"), `ScoreX v${VERSION}`);
 }
 function updateNavBadges() {
-  const b = nav.querySelector('[data-tab="review"] .nav-badge');
-  if (b) { b.hidden = !ctx.counts.pending; b.textContent = String(ctx.counts.pending || ""); b.title = `${ctx.counts.pending} waiting for review`; }
-  const a = nav.querySelector('[data-tab="overview"] .nav-badge');
-  if (a) { const al = ctx.state.alert; a.hidden = !al; a.textContent = al ? "!" : ""; a.classList.toggle("nav-badge-danger", !!al); a.title = al ? "Safety alert" : ""; }
+  const b = nav.querySelector('[data-tab="review"] .tab-count');
+  if (b) {
+    const n = ctx.counts.pending || 0;
+    b.hidden = !n; b.textContent = String(n || "");
+    b.setAttribute("aria-label", `${n} waiting for review`);
+  }
+  const a = nav.querySelector('[data-tab="overview"] .tab-alert');
+  if (a) a.hidden = !ctx.state.alert;
 }
 
 function buildHeader() {
-  clear(topbar);
   const themeSeg = segmented(
     [["system", icon("monitor"), false, "System theme"], ["light", icon("sun"), false, "Light theme"], ["dark", icon("moon"), false, "Dark theme"]],
     (window.sxTheme && window.sxTheme.get()) || "system",
@@ -173,24 +177,24 @@ function buildHeader() {
   themeSeg.id = "themeSwitch";
   for (const b of themeSeg.querySelectorAll("button")) b.setAttribute("aria-label", b.title);
   window.addEventListener("sx-theme", (e) => themeSeg.set(e.detail.pref));
-
-  add(topbar, 
-    h("div", { class: "topbar-left" },
-      h("h1", { class: "page-title", id: "pageTitle" }, ""),
-      h("span", { class: "save-ind", id: "saveInd", "aria-live": "polite" })),
-    h("div", { class: "topbar-right" },
-      h("div", { class: "engine", id: "engineBox" }),
-      themeSeg));
+  fill(document.getElementById("themeSlot"), themeSeg);
   updateHeader(true);
+}
+
+function engineAction(label, msg, iconName, kind, extra = {}) {
+  return btn(label, (e) => {
+    const b = e.currentTarget;
+    busy(b, async () => {
+      const r = await send(msg, {}, { label });
+      if (r) { toast(`${label}: done`, { type: "success" }); refreshStatus(); }
+    });
+  }, { kind, iconName, size: "sm", id: "btn-" + msg, ...extra });
 }
 
 let headerSig = "";
 function updateHeader(force) {
   const state = ctx.state;
-  const s = ctx.settings || {};
-  const wu = (ctx.status && ctx.status.warmup) || warmup(state);
-  const eff = (ctx.status && ctx.status.effectiveMode) || (s.mode === MODE.AUTO && !wu.active ? MODE.AUTO : MODE.REVIEW);
-  const sig = JSON.stringify([state.status, state.stopReason, state.stopDetail, s.mode, eff, !!state.alert]);
+  const sig = JSON.stringify([state.status, state.stopReason, state.stopDetail, !!state.alert]);
   updateNavBadges();
   renderAlert();
   if (!force && sig === headerSig) return;
@@ -198,22 +202,12 @@ function updateHeader(force) {
   const box = document.getElementById("engineBox");
   if (!box) return;
   const info = statusInfo(state);
-  const modeLabel = eff === MODE.AUTO ? "Full auto" : s.mode === MODE.AUTO ? "Review (warm-up)" : "Review mode";
-  const controls = h("div", { class: "engine-controls" });
-  const act = (label, msg, iconName, kind) => btn(label, (e) => {
-    const b = e.currentTarget;
-    busy(b, async () => {
-      const r = await send(msg, {}, { label });
-      if (r) { toast(`${label}: done`, { type: "success" }); refreshStatus(); }
-    });
-  }, { kind, iconName, size: "sm", id: "btn-" + msg });
-  if (state.status === "running") add(controls, act("Pause", "pause", "pause"), act("Stop", "stop", "stop", "ghost"));
-  else if (state.status === "paused") add(controls, act("Resume", "resume", "play", "primary"), act("Stop", "stop", "stop", "ghost"));
-  else if (state.stopReason && state.stopReason !== "user") add(controls, act("Resume", "resume", "play", "primary"));
-  else add(controls, act("Start", "start", "play", "primary"));
-  fill(box, 
-    h("div", { class: "engine-status" }, statusPill(state), h("span", { class: ["mode-chip", eff === MODE.AUTO && "mode-auto"], title: "Mode" }, modeLabel)),
-    controls);
+  const [label, msg, ic] = primaryAction(state);
+  const canStop = state.status === STATUS.RUNNING || state.status === STATUS.PAUSED;
+  fill(box,
+    statusPill(state),
+    engineAction(label, msg, ic, "primary"),
+    engineAction("Stop", "stop", "stop", "quiet", { disabled: !canStop, title: canStop ? "Stop the engine" : "Already stopped" }));
   box.title = [info.label, info.reason, info.detail].filter(Boolean).join(" - ");
 }
 
@@ -230,7 +224,7 @@ function renderAlert() {
     h("div", { class: "alert-text" },
       h("strong", null, reason),
       al.detail ? h("div", null, al.detail) : null,
-      h("div", { class: "alert-time" }, `${fmtDateTime(al.at)} (${fmtAgo(al.at)}) · ScoreX stopped and will not continue until you resume.`)),
+      h("div", { class: "alert-time" }, `${fmtDateTime(al.at)} (${fmtAgo(al.at)}). ScoreX stopped and waits until you resume.`)),
     h("div", { class: "alert-actions" },
       btn("I checked my account - resume", (e) => {
         const b = e.currentTarget;
@@ -254,23 +248,27 @@ async function route() {
   view.removeAttribute("data-ready");
   clear(view);
   view.dataset.tab = tab.id;
-  const title = document.getElementById("pageTitle");
-  if (title) title.textContent = tab.title;
   document.title = `${tab.title} · ScoreX`;
-  for (const a of nav.querySelectorAll(".nav-link")) {
+  for (const a of nav.querySelectorAll(".tab")) {
     const on = a.dataset.tab === tab.id;
     a.classList.toggle("active", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    // Keep the active tab visible in the (horizontally scrolling) strip without moving focus or the page.
+    if (on && nav.scrollWidth > nav.clientWidth) {
+      const d = a.getBoundingClientRect().left - nav.getBoundingClientRect().left;
+      if (d < 0 || d + a.offsetWidth > nav.clientWidth) nav.scrollLeft += d - 16;
+    }
   }
   // Each render gets its own host inside the view. Navigating clears the view, which detaches the old host,
   // so a slow tab that is still awaiting can only append into its own detached host, never the next tab.
   const host = h("div", { class: "tab-host" });
   view.appendChild(host);
+  if (tab.hint) host.appendChild(h("div", { class: "page-head" }, h("h1", { class: "page-title" }, tab.title), h("p", { class: "page-hint" }, tab.hint)));
   try {
     await tab.render(host, ctx);
   } catch (e) {
     console.error("[ScoreX UI] tab render failed", tab.id, e);
-    host.appendChild(h("div", { class: "card" }, h("div", { class: "card-body" }, h("strong", null, "This tab failed to render. "), String((e && e.message) || e))));
+    host.appendChild(h("div", { class: "banner banner-danger" }, h("strong", null, "This tab failed to render. "), String((e && e.message) || e)));
   }
   if (seq === renderSeq) view.dataset.ready = tab.id;
 }
@@ -323,12 +321,12 @@ async function init() {
     refreshCounts();
   }, 5000);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { refreshStatus(); refreshCounts(); } });
-  // Countdown texts (warm-up, next check) tick once a minute.
+  // Relative times (next check, last check) refresh twice a minute.
   setInterval(() => emit("tick"), 30000);
 }
 
 init().catch((e) => {
   console.error("[ScoreX UI] init failed", e);
-  view.appendChild(h("div", { class: "card" }, h("div", { class: "card-body" }, "ScoreX could not start the dashboard: " + ((e && e.message) || e))));
+  view.appendChild(h("div", { class: "banner banner-danger" }, "ScoreX could not start the dashboard: " + ((e && e.message) || e)));
 });
 

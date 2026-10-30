@@ -1,5 +1,6 @@
-// Models & Costs tab: OpenAI key + test, editable model/price table, presets, fallback, preset matrix,
-// quality checker, cost estimator, budget, totals and performance (computed from IndexedDB history).
+// Models & Costs tab. Essentials: OpenAI key + test, the three presets, the group x tier matrix, the cost
+// estimator and the monthly budget. Advanced: editable model/price table, fallback models, quality checker.
+// Reports: totals and performance (computed from IndexedDB history).
 
 import { K, EFFORTS, PRESET_KEYS } from "../../lib/constants.js";
 import { getSecrets, setSecrets } from "../../lib/store.js";
@@ -7,7 +8,7 @@ import { estimate, usageStats, aggregate, performance, budgetStatus, ASSUME } fr
 import { dailyLimit } from "../../lib/safety.js";
 import * as history from "../../lib/history.js";
 import { num } from "../../lib/util.js";
-import { h, clear, card, btn, busy, toast, icon, renderTable, selectEl, labeled, confirmDialog, segmented, progressBar, maskKey, getPath, setPath, fmtUsd, fmtPct, fmtTokens, fmtNum, uidShort, sectionTitle, badge, add, fill } from "../components.js";
+import { h, clear, section, sub, advanced, btn, busy, toast, icon, renderTable, selectEl, labeled, confirmDialog, segmented, progressBar, maskKey, getPath, setPath, fmtUsd, fmtPct, fmtTokens, fmtNum, uidShort, badge, add, fill } from "../components.js";
 import { toneLabel } from "./targets.js";
 
 export const PRESET_LABEL = { high: "High quality", balanced: "Balanced", cheap: "Cheap" };
@@ -65,7 +66,7 @@ export function secretField(ctx, { key, label, placeholder, hint, id, onChange }
 export default {
   id: "models",
   title: "Models & Costs",
-  icon: "models",
+  hint: "Your OpenAI key, which model writes for whom, and what it costs.",
   async render(root, ctx) {
     let records = [];
     const loadRecords = async () => { try { records = await history.all(); } catch (_) { records = []; } };
@@ -89,16 +90,13 @@ export default {
             h("span", null, `input ${fmtTokens(u.input)}`), h("span", null, `cached ${fmtTokens(u.cached)}`), h("span", null, `output ${fmtTokens(u.output)}`), h("span", null, `reasoning ${fmtTokens(u.reasoning)}`),
             h("strong", null, fmtUsd(r.cost)), h("span", null, `${fmtNum(r.ms)} ms`)));
       });
-    }, { kind: "primary", iconName: "bolt", id: "testOpenAIBtn", title: "Sends one tiny request (costs a fraction of a cent)" });
+    }, { iconName: "bolt", id: "testOpenAIBtn", title: "Sends one tiny request (costs a fraction of a cent)" });
 
-    const keyCard = card({ title: "OpenAI API key", subtitle: "Stored only in this browser (chrome.storage.local). Never exported, never logged." },
-      h("div", { class: "grid-2" },
-        secretField(ctx, { key: "openaiKey", label: "API key", placeholder: "sk-...", id: "openaiKeyField", hint: h("span", null, "Create one at ", h("a", { href: "https://platform.openai.com/api-keys", target: "_blank", rel: "noopener noreferrer" }, "platform.openai.com/api-keys"), ". Set a monthly limit there too.") }),
-        h("div", { class: "subpanel" },
-          h("h3", { class: "subpanel-title" }, "Test the key"),
-          h("div", { class: "form-row" }, labeled("Model", testModel), labeled("Reasoning effort", testEffort)),
-          h("div", { class: "toolbar" }, testBtn),
-          testOut)));
+    const keySec = section({ title: "OpenAI API key", hint: "Stored only in this browser. Never exported or logged." },
+      secretField(ctx, { key: "openaiKey", label: "API key", placeholder: "sk-...", id: "openaiKeyField", hint: h("span", null, "Create one at ", h("a", { href: "https://platform.openai.com/api-keys", target: "_blank", rel: "noopener noreferrer" }, "platform.openai.com/api-keys"), " and set a monthly limit there too.") }),
+      sub("Test the key",
+        h("div", { class: "toolbar toolbar-end" }, labeled("Model", testModel), labeled("Reasoning effort", testEffort), testBtn),
+        testOut));
 
     // ------------------------------------------------ models table
     const modelsHost = h("div", { id: "modelsTable" });
@@ -139,46 +137,44 @@ export default {
             await ctx.save((d) => { d.models.push({ id, label: "New model", name: "", reasoning: true, maxOutputTokens: 1500, prices: { input: 0, cachedInput: 0, cacheWrite: 0, output: 0 } }); });
             const inp = modelsHost.querySelector(`tr[data-model-id="${id}"] td:nth-child(2) input`);
             if (inp) inp.focus();
-          }, { iconName: "plus", id: "addModelBtn" }),
-          h("span", { class: "muted small" }, "Type any model name the OpenAI Responses API accepts - new models work without an update. Prices are USD per 1M tokens; reasoning tokens are billed as output.")));
+          }, { iconName: "plus", size: "sm", id: "addModelBtn" })));
     }
-    const modelsCard = card({ title: "Models and prices", subtitle: "Used to pick models and to compute the real cost of every call from the returned token usage." }, modelsHost);
+    const modelsSec = section({ wide: true, title: "Models and prices", hint: "Any model name the OpenAI Responses API accepts. Prices are USD per 1M tokens; reasoning is billed as output." }, modelsHost);
 
     // ------------------------------------------------ presets / fallback / matrix / quality
-    const presetsHost = h("div", { class: "grid-4", id: "presetsGrid" });
+    const presetsHost = h("div", { id: "presetsGrid" });
+    const fallbackHost = h("div", { class: "stack" });
     function drawPresets() {
       const s = ctx.settings;
-      const presetCards = PRESET_KEYS.map((k) => h("div", { class: "subpanel" },
-        h("h3", { class: "subpanel-title" }, PRESET_LABEL[k]),
-        ctx.field({ path: `presets.${k}.modelId`, type: "select", label: "Model", options: modelOpts(s) }),
-        ctx.field({ path: `presets.${k}.effort`, type: "select", label: "Reasoning effort", options: effortOpts })));
-      const fb = h("div", { class: "subpanel" },
-        h("h3", { class: "subpanel-title" }, "Fallback"),
+      fill(presetsHost, h("table", { class: "preset-table" },
+        h("thead", null, h("tr", null, h("th", { scope: "col" }, "Preset"), h("th", { scope: "col" }, "Model"), h("th", { scope: "col" }, "Reasoning effort"))),
+        h("tbody", null, PRESET_KEYS.map((k) => h("tr", null,
+          h("th", { scope: "row" }, PRESET_LABEL[k]),
+          h("td", null, ctx.field({ path: `presets.${k}.modelId`, type: "select", options: modelOpts(s), ariaLabel: `${PRESET_LABEL[k]} model`, cls: "field-tight" })),
+          h("td", null, ctx.field({ path: `presets.${k}.effort`, type: "select", options: effortOpts, ariaLabel: `${PRESET_LABEL[k]} reasoning effort`, cls: "field-tight" })))))));
+      fill(fallbackHost,
         ctx.field({ path: "fallback.enabled", type: "toggle", label: "Retry with a fallback model on errors" }),
-        ctx.field({ path: "fallback.modelId", type: "select", label: "Fallback model", options: modelOpts(s) }),
-        ctx.field({ path: "fallback.effort", type: "select", label: "Fallback effort", options: effortOpts }),
-        ctx.field({ path: "fallback.secondModelId", type: "select", label: "Second fallback (optional)", options: modelOpts(s, true) }));
-      fill(presetsHost, ...presetCards, fb);
+        h("div", { class: "form-row" },
+          ctx.field({ path: "fallback.modelId", type: "select", label: "Fallback model", options: modelOpts(s) }),
+          ctx.field({ path: "fallback.effort", type: "select", label: "Fallback effort", options: effortOpts }),
+          ctx.field({ path: "fallback.secondModelId", type: "select", label: "Second fallback (optional)", options: modelOpts(s, true) })));
     }
     const presetOpts = PRESET_KEYS.map((k) => [k, PRESET_LABEL[k]]);
     const matrix = h("table", { class: "matrix" },
-      h("thead", null, h("tr", null, h("th", null, ""), h("th", { scope: "col" }, "Tier 1 - big influencer"), h("th", { scope: "col" }, "Tier 2 - smart account"))),
+      h("thead", null, h("tr", null, h("th", null, ""), h("th", { scope: "col" }, "Tier 1 · big influencer"), h("th", { scope: "col" }, "Tier 2 · smart account"))),
       h("tbody", null,
         ["A", "B"].map((g) => h("tr", null,
-          h("th", { scope: "row" }, g === "A" ? "Group A - follows you" : "Group B - get noticed"),
+          h("th", { scope: "row" }, g === "A" ? "Group A · follows you" : "Group B · to win over"),
           [1, 2].map((t) => h("td", null, ctx.field({ path: `presetMatrix.${g}${t}`, type: "select", options: presetOpts, ariaLabel: `Preset for group ${g} tier ${t}`, cls: "field-tight" })))))));
     const qualityBox = h("div", { class: "stack" },
-      ctx.field({ path: "quality.modelCheck", type: "toggle", label: "Second model call checks every comment", hint: "Catches generic, off-topic or wrong-language replies before you see them." }),
-      ctx.field({ path: "quality.checkerPreset", type: "select", label: "Checker preset", options: presetOpts }),
+      ctx.field({ path: "quality.modelCheck", type: "toggle", label: "A second model call checks every comment", hint: "Catches generic, off-topic or wrong-language replies before you see them." }),
       h("div", { class: "form-row" },
+        ctx.field({ path: "quality.checkerPreset", type: "select", label: "Checker preset", options: presetOpts }),
         ctx.field({ path: "quality.minChars", type: "number", label: "Min length", min: 1, max: 200 }),
         ctx.field({ path: "quality.maxChars", type: "number", label: "Max length", min: 20, max: 280, hint: "X allows 280" })));
 
-    const presetsCard = card({ title: "Presets", subtitle: "Three model + effort combinations. Each target uses the preset from the matrix unless it has an override." },
-      presetsHost,
-      h("div", { class: "grid-2 mt" },
-        h("div", { class: "subpanel" }, h("h3", { class: "subpanel-title" }, "Preset matrix"), h("p", { class: "muted small" }, "Which preset each group/tier gets by default."), matrix),
-        h("div", { class: "subpanel" }, h("h3", { class: "subpanel-title" }, "Quality checker"), qualityBox)));
+    const presetsSec = section({ title: "Presets", hint: "Three model + effort combinations to choose from." }, presetsHost);
+    const matrixSec = section({ title: "Preset per group and tier", hint: "Which preset each kind of target gets. A per-target override wins (Targets tab)." }, matrix);
 
     // ------------------------------------------------ estimator + budget
     const estPerDay = h("input", { type: "number", class: "input", min: "0", max: "500", step: "1", id: "estPerDay", value: String(dailyLimit(ctx.settings, ctx.state) || 10) });
@@ -204,10 +200,10 @@ export default {
         h("p", { class: "estimate-text", id: "estimateText" },
           `${perDay} comment${perDay === 1 ? "" : "s"} per day on ${e.model || "(no model name)"} (${e.effort}) will cost about `,
           h("strong", null, fmtUsd(e.perDay)), " per day and ", h("strong", null, fmtUsd(e.perMonth)), " per month."),
-        h("p", { class: "muted small" }, `About ${fmtUsd(e.perComment)} per comment, ~${fmtNum(e.tokensPerComment)} tokens each${s.quality.modelCheck ? ", including the quality check" : ""} and ~${Math.round(ASSUME.regenRate * 100)}% regenerations.`),
-        h("p", { class: "muted small" }, e.fromHistory
-          ? `Based on your real token usage from history (${calls} successful calls).`
-          : `Based on assumptions (no history for this model + effort yet): ~${fmtNum(ASSUME.genInput)} input tokens, ~${ASSUME.genOutputVisible} visible output tokens plus reasoning (low ${ASSUME.reasoning.low}, medium ${fmtNum(ASSUME.reasoning.medium)}, high ${fmtNum(ASSUME.reasoning.high)}). It becomes exact after a few real comments.`));
+        h("p", { class: "muted small" }, `About ${fmtUsd(e.perComment)} per comment, ~${fmtNum(e.tokensPerComment)} tokens each${s.quality.modelCheck ? " with the quality check" : ""}, ~${Math.round(ASSUME.regenRate * 100)}% regenerations. `,
+          e.fromHistory
+            ? `From your real usage (${calls} calls).`
+            : h("span", { title: `~${fmtNum(ASSUME.genInput)} input tokens, ~${ASSUME.genOutputVisible} visible output tokens plus reasoning (low ${ASSUME.reasoning.low}, medium ${fmtNum(ASSUME.reasoning.medium)}, high ${fmtNum(ASSUME.reasoning.high)}).` }, "Estimated until a few real comments exist.")));
     }
     for (const el of [estPerDay, estBasis, estModel, estEffort]) el.addEventListener(el.tagName === "INPUT" ? "input" : "change", drawEstimate);
 
@@ -215,20 +211,19 @@ export default {
     function drawBudget() {
       const b = budgetStatus(ctx.settings, ctx.data[K.spend]);
       fill(budgetStatusHost, 
-        h("div", null, "This month: ", h("strong", null, fmtUsd(b.spent)), b.limit ? ` of ${fmtUsd(b.limit, 2)} (${Math.round(b.pct)}%)` : " (no limit)", " · today ", fmtUsd(b.today)),
+        h("div", { class: "small" }, "This month: ", h("strong", { class: "tnum" }, fmtUsd(b.spent)), b.limit ? ` of ${fmtUsd(b.limit, 2)} (${Math.round(b.pct)}%)` : " (no limit)", " · today ", h("span", { class: "tnum" }, fmtUsd(b.today))),
         b.limit ? progressBar(b.pct, { kind: b.reached ? "red" : b.warn ? "amber" : "accent" }) : null,
         b.reached ? h("div", { class: "small text-red" }, "Budget reached: ScoreX stops generating until next month or until you raise the budget.") : b.warn ? h("div", { class: "small text-amber" }, "Warning level reached.") : null);
     }
-    const estCard = h("div", { class: "grid-2" },
-      card({ title: "Cost estimator", subtitle: "What a daily volume costs on a preset or model." },
-        h("div", { class: "form-row" }, labeled("Comments per day", estPerDay), labeled("Based on", estBasis)),
-        estCustom,
-        estOut),
-      card({ title: "Monthly budget", subtitle: "ScoreX stops generating when the month's real spend reaches the limit." },
-        h("div", { class: "form-row" },
-          ctx.field({ path: "budget.monthlyUsd", type: "number", label: "Monthly budget (USD)", min: 0, step: 1, hint: "0 = no limit" }),
-          ctx.field({ path: "budget.warnAtPct", type: "number", label: "Warn at (%)", min: 10, max: 100, step: 5 })),
-        budgetStatusHost));
+    const estSec = section({ title: "Cost estimator", hint: "What a daily volume costs on a preset or model." },
+      h("div", { class: "form-row" }, labeled("Comments per day", estPerDay), labeled("Based on", estBasis)),
+      estCustom,
+      estOut);
+    const budgetSec = section({ title: "Monthly budget", hint: "ScoreX stops generating when the month's real spend reaches it." },
+      h("div", { class: "form-row" },
+        ctx.field({ path: "budget.monthlyUsd", type: "number", label: "Monthly budget (USD)", min: 0, step: 1, hint: "0 = no limit" }),
+        ctx.field({ path: "budget.warnAtPct", type: "number", label: "Warn at (%)", min: 10, max: 100, step: 5 })),
+      budgetStatusHost);
 
     // ------------------------------------------------ totals + performance
     let totalsView = "model";
@@ -288,17 +283,20 @@ export default {
         { key: "followBackRate", label: "Follow-back rate", align: "right", render: (r) => fmtPct(r.followBackRate * 100, 1) },
         { key: "costPerFollowBack", label: "Cost / follow-back", align: "right", render: (r) => (r.costPerFollowBack == null ? "-" : fmtUsd(r.costPerFollowBack)) },
       ];
-      fill(perfHost, 
-        sectionTitle("Per model"),
-        renderTable({ columns: cols("Model"), rows: p.byModel, rowKey: (r) => r.key, sortState: { key: "posted", dir: "desc" }, empty: "No posted comments yet." }),
-        sectionTitle("Per tone"),
-        renderTable({ columns: cols("Tone"), rows: p.byTone, rowKey: (r) => r.key, sortState: { key: "posted", dir: "desc" }, empty: "No posted comments yet." }));
+      fill(perfHost,
+        sub("Per model", renderTable({ columns: cols("Model"), rows: p.byModel, rowKey: (r) => r.key, sortState: { key: "posted", dir: "desc" }, empty: "No posted comments yet." })),
+        sub("Per tone", renderTable({ columns: cols("Tone"), rows: p.byTone, rowKey: (r) => r.key, sortState: { key: "posted", dir: "desc" }, empty: "No posted comments yet." })));
     }
 
-    const totalsCard = card({ title: "Totals", subtitle: "Real cost from the token usage OpenAI returned for every call (fallbacks and quality checks included).", actions: totalsSeg }, totalsSummary, totalsHost);
-    const perfCard = card({ title: "Performance", subtitle: "What each model and tone gets you: likes and replies on your comments, author replies and follow-backs." }, perfHost);
+    const totalsSec = section({ wide: true, title: "Totals", hint: "Real cost from the token usage of every call, fallbacks and checks included.", actions: totalsSeg }, totalsSummary, totalsHost);
+    const perfSec = section({ wide: true, title: "Performance", hint: "Likes, replies, author replies and follow-backs per model and tone." }, perfHost);
 
-    add(root, keyCard, modelsCard, presetsCard, estCard, totalsCard, perfCard);
+    add(root, keySec, presetsSec, matrixSec, estSec, budgetSec,
+      advanced({ key: "models.advanced", desc: "Model and price table, fallback models, quality checker" },
+        modelsSec,
+        section({ title: "Fallback", hint: "Used when the preset's model errors out." }, fallbackHost),
+        section({ title: "Quality checker", hint: "Rule checks always run; this adds a model check." }, qualityBox)),
+      advanced({ key: "models.reports", title: "Reports", desc: "Spend per model, day, week and month; performance per model and tone" }, totalsSec, perfSec));
 
     let modelSig = "";
     const modelsSignature = (s) => JSON.stringify(s.models.map((m) => [m.id, m.label, m.name]));
@@ -322,7 +320,7 @@ export default {
       const sig = modelsSignature(s);
       if (sig !== modelSig) {
         modelSig = sig;
-        if (!presetsHost.contains(document.activeElement)) drawPresets();
+        if (!presetsHost.contains(document.activeElement) && !fallbackHost.contains(document.activeElement)) drawPresets();
         syncModelSelects();
       }
       drawEstimate(); drawBudget();

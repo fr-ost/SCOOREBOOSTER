@@ -1,6 +1,8 @@
 // ScoreX UI smoke test: loads the unpacked extension in headless Chromium, seeds fake data, opens every
 // dashboard tab + the popup in light and dark mode, fails on any page error or console error, and
-// exercises settings persistence/clamping, masked API keys, the cost estimator and the theme switch.
+// exercises the top bar (tab strip, status, primary engine button), the setup checklist, the always-usable
+// Review/Full auto switch, collapsed Advanced sections (remembered per tab), settings persistence/clamping,
+// masked API keys, the cost estimator, the theme switch and the narrow layout.
 //
 // Run: node tests/e2e/ui_smoke.mjs     Screenshots: tests/e2e/out/
 import { createRequire } from "module";
@@ -14,7 +16,8 @@ const { chromium } = require("playwright");
 
 const EXT = "/home/user/SCOOREBOOSTER/extension";
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "out");
-const TABS = ["overview", "targets", "review", "models", "tones", "safety", "history", "settings"];
+const TABS = ["overview", "review", "targets", "models", "tones", "safety", "history", "settings"];
+const TAB_TITLES = ["Dashboard", "Review Queue", "Targets", "Models & Costs", "Tone & Prompts", "Safety", "History", "Settings"];
 const FAKE_KEY = "sk-test-UIsmoke1234567890abcdWXYZ";
 
 fs.mkdirSync(OUT, { recursive: true });
@@ -189,18 +192,42 @@ try {
 
   console.log("content");
   await openTab(page, base, "overview");
-  check(/Paused/.test(await page.locator("#heroStatus").innerText()) && (await page.locator(".topbar .status-paused").count()) === 1, "overview + header show Paused (amber)");
-  check((await page.locator("#btn-resume").count()) === 1 && (await page.locator("#btn-stop").count()) === 1, "header offers Resume + Stop while paused");
-  check(/Full auto unlocks in \d+d \d+h - first 3 days are review only/.test(await page.locator("#warmupNote").innerText()), "full auto locked with warm-up countdown");
-  check(await page.locator('#modeSwitch [data-value="auto"]').isDisabled(), "Full auto button disabled during warm-up");
-  check((await page.locator("#pendingCount").innerText()).trim() === "3", "pending review count is 3");
+  const titles = await page.locator("#nav .tab .tab-label").allInnerTexts();
+  check(JSON.stringify(titles) === JSON.stringify(TAB_TITLES), "top tab strip lists the 8 tabs in order: " + titles.join(", "));
+  check((await page.locator(".sidebar, #sidebar").count()) === 0, "no sidebar");
+  check((await page.locator('#nav .tab.active[aria-current="page"]').innerText()).trim() === "Dashboard", "active tab is marked with aria-current");
+  await page.waitForFunction(() => document.querySelector('#nav [data-tab="review"] .tab-count')?.textContent === "3", null, { timeout: 8000 });
+  check(true, "Review Queue tab shows a count of 3");
+  check(/Paused/.test(await page.locator("#heroStatus").innerText()) && (await page.locator("#engineBox .status-paused").count()) === 1, "dashboard + top bar show Paused (amber)");
+  check((await page.locator("#engineBox .btn-primary").count()) === 1 && (await page.locator("#btn-resume.btn-primary").count()) === 1, "one primary engine button: Resume while paused");
+  check((await page.locator("#btn-stop").count()) === 1 && !(await page.locator("#btn-stop").isDisabled()), "small Stop button is enabled while paused");
+  check(!/warm-?up|unlocks in|first 3 days/i.test(await page.locator("body").innerText()), "no warm-up text on the dashboard");
+  check(!(await page.locator('#modeSwitch [data-value="auto"]').isDisabled()), "Full auto is selectable right away");
+  await page.click('#modeSwitch [data-value="auto"]');
+  await waitSaved(page);
+  check((await savedSettings(page)).mode === "auto" && (await page.locator('#modeSwitch [data-value="auto"]').getAttribute("aria-checked")) === "true", "Full auto click saves settings.mode = auto");
+  await page.click('#modeSwitch [data-value="review"]');
+  await waitSaved(page);
+  check((await savedSettings(page)).mode === "review", "switching back to Review saves settings.mode = review");
+  check(await page.locator("#setupChecklist").isVisible(), "setup checklist is shown while setup is incomplete");
+  const stepDone = async (k) => (await page.locator(`#setupChecklist [data-step="${k}"]`).getAttribute("class")).includes("is-done");
+  check(!(await stepDone("key")) && !(await stepDone("handle")) && (await stepDone("targets")) && !(await stepDone("examples")) && (await stepDone("start")), "checklist: targets + start done; key, handle, examples open");
+  check((await page.locator("#setupChecklist .checklist-count").innerText()).trim() === "2 / 5", "checklist counts 2 / 5");
+  await page.click('#setupChecklist [data-step="handle"] button:has-text("Confirm")');
+  await page.waitForFunction(() => document.querySelector('#setupChecklist [data-step="handle"]')?.classList.contains("is-done"), null, { timeout: 5000 });
+  check(true, "confirming the X handle ticks checklist step 2");
+  check((await page.locator("#pendingCount").innerText()).trim() === "3", "waiting-for-review count is 3");
+  check((await page.locator("#reviewPreview .pv").count()) === 3, "review preview lists 3 pending comments");
   check((await page.locator("#activityLog .log").count()) === 8, "recent activity lists 8 log lines");
   check(await page.locator("#runNowBtn").isDisabled(), "Run a check now is disabled while the engine is not running");
 
   await openTab(page, base, "targets");
   check((await page.locator("#targetsTable tbody tr").count()) === 8, "targets table has 8 rows");
   check((await page.locator("#candidatesTable tbody tr").count()) === 4, "candidates table has 4 rows");
-  check(/followers of @karpathy: 64 accounts/.test(await page.locator("#discProgress").innerText()), "discovery progress shown from sx.discovery");
+  check(/followers of @karpathy: 64 accounts/.test(await page.locator("#discProgress").textContent()), "discovery progress shown from sx.discovery");
+  const disc = page.locator('details[data-adv="targets.discovery"]');
+  check(!(await disc.evaluate((d) => d.open)) && /4 candidates waiting/.test(await disc.locator("summary").innerText()), "Discovery is collapsed and its summary shows 4 candidates waiting");
+  check((await page.locator("#addHandles").boundingBox()).y < (await page.locator("#targetsTable").boundingBox()).y, "Add targets sits above the table");
   await page.fill("#targetSearch", "naval");
   await page.waitForTimeout(400);
   check((await page.locator("#targetsTable tbody tr").count()) === 1, "target search filters the table");
@@ -300,7 +327,8 @@ try {
   await openTab(page, base, "overview");
   await page.waitForSelector(".alert-banner", { timeout: 5000 });
   check(/Captcha/.test(await page.locator(".alert-banner").innerText()), "red alert banner with reason");
-  check(/Stopped/.test(await page.locator("#heroStatus").innerText()) && (await page.locator(".topbar .status-danger").count()) === 1, "status pill red: Stopped (safety reason)");
+  check(/Stopped/.test(await page.locator("#heroStatus").innerText()) && (await page.locator("#engineBox .status-danger").count()) === 1, "status red: Stopped (safety reason)");
+  check(/Stopped\s*\(Captcha/.test(await page.locator("#engineBox .status").innerText()) && (await page.locator("#btn-resume.btn-primary").count()) === 1, "top bar: Stopped (reason) + primary Resume");
   check((await page.locator(".alert-banner button:has-text('I checked my account - resume')").count()) === 1, "resume button in the alert");
   await page.screenshot({ path: path.join(OUT, "light-overview-alert.png"), fullPage: false });
   await setTheme(page, "dark");
@@ -312,7 +340,8 @@ try {
     await chrome.storage.local.set({ "sx.state": { ...st, status: "running", stopReason: null, stopDetail: "", alert: null, nextTickAt: Date.now() + 150000, nextCommentAt: Date.now() + 360000 } });
   });
   await page.waitForFunction(() => /Running/.test(document.getElementById("heroStatus")?.textContent || ""), null, { timeout: 5000 });
-  check((await page.locator(".topbar .status-running").count()) === 1 && (await page.locator(".alert-banner").count()) === 0, "Running shows a green pill and the alert clears");
+  check((await page.locator("#engineBox .status-running").count()) === 1 && (await page.locator(".alert-banner").count()) === 0, "Running shows the lime status and the alert clears");
+  check((await page.locator("#btn-pause.btn-primary").count()) === 1 && !(await page.locator("#runNowBtn").isDisabled()), "while running the primary button is Pause and Run a check now is enabled");
   await page.screenshot({ path: path.join(OUT, "light-overview-running.png"), fullPage: false });
   await page.evaluate(async () => {
     const st = (await chrome.storage.local.get("sx.state"))["sx.state"];
@@ -320,17 +349,67 @@ try {
   });
 
   console.log("narrow layout");
-  await page.setViewportSize({ width: 760, height: 1000 });
+  await page.setViewportSize({ width: 800, height: 1000 });
+  await openTab(page, base, "overview");
+  await page.screenshot({ path: path.join(OUT, "narrow-overview.png"), fullPage: false });
+  const navInfo = () => page.evaluate(() => { const n = document.getElementById("nav"); const tabs = [...n.querySelectorAll(".tab")]; return { sw: n.scrollWidth, cw: n.clientWidth, ox: getComputedStyle(n).overflowX, rows: new Set(tabs.map((t) => Math.round(t.getBoundingClientRect().top))).size }; });
+  let nav = await navInfo();
+  check(nav.ox === "auto" && nav.rows === 1, "tab strip stays one row and is horizontally scrollable at 800px");
+  const pageOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  check(pageOverflow <= 0, "no horizontal page scroll at 800px (overflow " + pageOverflow + "px)");
+  await page.setViewportSize({ width: 560, height: 1000 });
+  await page.waitForTimeout(150);
+  nav = await navInfo();
+  check(nav.sw > nav.cw && nav.rows === 1, `tab strip scrolls instead of wrapping when it does not fit (${nav.sw} > ${nav.cw})`);
+  check((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, "no horizontal page scroll at 560px");
+  await page.screenshot({ path: path.join(OUT, "narrow-560-overview.png"), fullPage: false });
+  await page.setViewportSize({ width: 800, height: 1000 });
   await openTab(page, base, "review");
   await page.screenshot({ path: path.join(OUT, "narrow-review.png"), fullPage: false });
-  const sideH = await page.evaluate(() => document.getElementById("sidebar").getBoundingClientRect().height);
-  check(sideH < 120, "sidebar collapses to a top bar under 900px");
+  await openTab(page, base, "settings");
+  await page.screenshot({ path: path.join(OUT, "narrow-settings.png"), fullPage: false });
+  check((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, "no horizontal page scroll on Settings at 800px");
   await page.setViewportSize({ width: 1360, height: 900 });
+
+  console.log("advanced sections");
+  await openTab(page, base, "models");
+  const adv = page.locator('details[data-adv="models.advanced"]');
+  check(!(await adv.evaluate((d) => d.open)), "Models: Advanced is collapsed by default");
+  await adv.locator("summary").click();
+  await page.waitForFunction(() => localStorage.getItem("sx.adv.models.advanced") === "1", null, { timeout: 3000 });
+  await page.reload();
+  await page.waitForSelector('#view[data-ready="models"]');
+  check(await page.locator('details[data-adv="models.advanced"]').evaluate((d) => d.open), "Models: Advanced stays open after reload (localStorage)");
+  check((await page.locator('details[data-adv="models.advanced"] #modelsTable tbody tr').count()) >= 3, "Models: the model/price table lives in Advanced");
+  await page.locator('details[data-adv="models.advanced"] summary').click();
+  for (const [tab, keys] of [["safety", ["safety.advanced"]], ["settings", ["settings.review", "settings.cleanup", "settings.data"]], ["tones", ["tones.advanced", "tones.ab"]], ["history", ["history.totals"]]]) {
+    await openTab(page, base, tab);
+    for (const k of keys) check((await page.locator(`details[data-adv="${k}"]`).count()) === 1 && !(await page.locator(`details[data-adv="${k}"]`).evaluate((d) => d.open)), `${tab}: "${k}" is a collapsed section`);
+  }
+  await openTab(page, base, "safety");
+  check(!/warm-?up/i.test(await page.locator("#view").textContent()), "no warm-up on Safety");
+  await openTab(page, base, "settings");
+  check(!/warm-?up/i.test(await page.locator("#view").textContent()), "no warm-up on Settings");
+  check((await page.locator("#cleanupEnabled").isChecked()) === false, "cleanup stays OFF by default");
+  // Screenshots with every collapsed section open (to review the hidden parts), then close them again.
+  for (const tab of ["models", "safety", "settings", "tones", "targets"]) {
+    await openTab(page, base, tab);
+    await page.evaluate(() => { for (const d of document.querySelectorAll("#view details.adv")) d.open = true; });
+    await page.waitForTimeout(150);
+    await shot(page, `light-${tab}-open.png`);
+    await page.evaluate(() => { for (const d of document.querySelectorAll("#view details.adv")) d.open = false; });
+  }
+  await setTheme(page, "dark");
+  await openTab(page, base, "settings");
+  await page.evaluate(() => { for (const d of document.querySelectorAll("#view details.adv")) d.open = true; });
+  await shot(page, "dark-settings-open.png");
+  await page.evaluate(() => { for (const d of document.querySelectorAll("#view details.adv")) d.open = false; });
+  await setTheme(page, "light");
 
   console.log("popup");
   const popup = await ctx.newPage();
   watch(popup, "popup");
-  await popup.setViewportSize({ width: 360, height: 560 });
+  await popup.setViewportSize({ width: 340, height: 560 });
   for (const theme of ["light", "dark"]) {
     await popup.goto(base + "popup.html");
     await popup.evaluate((v) => window.sxTheme.set(v), theme);
@@ -342,6 +421,9 @@ try {
   }
   check((await popup.locator("#p-resume").count()) === 1, "popup offers Resume after a safety stop");
   check(/Captcha/.test(await popup.locator("#pAlert").innerText()), "popup shows the alert message");
+  check((await popup.locator("#pControls .btn-primary").count()) === 1, "popup has one primary engine button");
+  check(/\d+ \/ \d+/.test(await popup.locator("#pQuota").innerText()) && (await popup.locator("#pQuota .quota").count()) === 1, "popup shows the 24h quota bar");
+  check(!/warm-?up/i.test(await popup.locator("body").innerText()), "no warm-up text in the popup");
 } catch (e) {
   failed++;
   console.log("  FAIL exception: " + (e && e.stack ? e.stack : e));

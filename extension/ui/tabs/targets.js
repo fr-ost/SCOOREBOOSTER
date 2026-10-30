@@ -1,10 +1,11 @@
-// Targets tab: add / import / export targets, the targets table with inline edits and bulk actions,
-// discovery of new accounts and the candidates list. All target changes go through messages.
+// Targets tab: "Add targets" (paste box, group, tier, import file, export) on top, the targets table with
+// inline edits and bulk actions below, and Discovery + the candidates list in a collapsed section.
+// All target changes go through messages.
 
 import { K, PRESET_KEYS } from "../../lib/constants.js";
 import { parseHandleList, toCsv, num } from "../../lib/util.js";
 import { parseImport, allToneKeys } from "../../lib/targets.js";
-import { h, clear, card, btn, busy, toast, icon, renderTable, groupBadge, tierBadge, badge, xLink, selectEl, toggleEl, labeled, confirmDialog, download, readFileText, stamp, progressBar, fmtCount, fmtAgo, fmtDate, fmtDateTime, debounce, truncate, add, fill } from "../components.js";
+import { h, clear, section, sub, advanced, btn, busy, toast, icon, renderTable, groupBadge, tierBadge, badge, xLink, selectEl, toggleEl, labeled, confirmDialog, download, readFileText, stamp, progressBar, fmtCount, fmtAgo, fmtDate, fmtDateTime, debounce, truncate, add, fill } from "../components.js";
 
 // Values match lib/discovery.js sourceUrls().
 const SOURCES = [
@@ -43,7 +44,7 @@ const C = {
 export default {
   id: "targets",
   title: "Targets",
-  icon: "targets",
+  hint: "The accounts ScoreX replies to. Group A follows you (keep warm), group B does not yet (get noticed).",
   async render(root, ctx) {
     const selected = new Set();
     const candSelected = new Set();
@@ -56,9 +57,9 @@ export default {
     const summary = h("div", { class: "summary-row", id: "targetsSummary" });
 
     // ------------------------------------------------ add / import / export
-    const addText = h("textarea", { class: "input", id: "addHandles", rows: 4, placeholder: "@naval\nhttps://x.com/balajis\nvitalikbuterin, paulg" });
-    const addGroup = selectEl([["B", "Group B - does not follow me (get noticed)"], ["A", "Group A - follows me (keep warm)"]], "B", { id: "addGroup" });
-    const addTier = selectEl([["2", "Tier 2 - smart account"], ["1", "Tier 1 - big influencer"]], "2", { id: "addTier" });
+    const addText = h("textarea", { class: "input", id: "addHandles", rows: 3, placeholder: "@naval\nhttps://x.com/balajis\nvitalikbuterin, paulg" });
+    const addGroup = selectEl([["B", "B · does not follow me"], ["A", "A · follows me"]], "B", { id: "addGroup" });
+    const addTier = selectEl([["2", "Tier 2 · smart account"], ["1", "Tier 1 · big influencer"]], "2", { id: "addTier" });
     const addCount = h("span", { class: "muted small" });
     addText.addEventListener("input", () => { const n = parseHandleList(addText.value).length; addCount.textContent = n ? `${n} account${n === 1 ? "" : "s"} recognised` : ""; });
     const addBtn = btn("Add", async (e) => {
@@ -104,23 +105,17 @@ export default {
       download(`scorex-targets-${stamp()}.csv`, toCsv(list.sort((a, b) => a.handle.localeCompare(b.handle)), cols), "text/csv");
     };
 
-    const addCard = card({ title: "Add targets", subtitle: "Accounts ScoreX comments on. Group A follows you (keep warm), group B does not (get noticed)." },
-      h("div", { class: "grid-2" },
-        h("div", { class: "stack" },
-          labeled("Handles or profile links (one per line, or separated by commas)", addText),
-          h("div", { class: "form-row" }, labeled("Group", addGroup), labeled("Tier", addTier)),
-          h("div", { class: "toolbar" }, addBtn, addCount)),
-        h("div", { class: "stack" },
-          h("div", { class: "subpanel" },
-            h("h3", { class: "subpanel-title" }, "Import a file"),
-            h("p", { class: "muted small" }, "CSV (columns: handle, group, tier, tone, notes - header optional), JSON (array of handles or objects) or a plain text list. Missing group/tier use the selects on the left."),
-            h("div", { class: "toolbar" },
-              h("label", { class: "btn", for: "importFile", tabindex: "0", onKeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } } }, icon("upload"), h("span", null, "Choose file…")),
-              fileInput)),
-          h("div", { class: "subpanel" },
-            h("h3", { class: "subpanel-title" }, "Export"),
-            h("p", { class: "muted small" }, "Download all targets with their scores and stats as CSV."),
-            btn("Export targets CSV", exportCsv, { iconName: "download", id: "exportTargetsBtn" })))));
+    const importLabel = h("label", { class: "btn btn-sm", for: "importFile", tabindex: "0", onKeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } } }, icon("upload"), h("span", null, "Import file…"));
+    const addSec = section({ title: "Add targets", hint: "Paste @handles or x.com profile links, one per line or separated by commas." },
+      h("div", { class: "add-box" },
+        h("div", { class: "stack-sm" },
+          h("label", { class: "sr-only", for: "addHandles" }, "Handles or profile links"),
+          addText,
+          h("div", { class: "toolbar toolbar-end" }, labeled("Group", addGroup), labeled("Tier", addTier), addBtn, addCount)),
+        h("div", { class: "stack-sm" },
+          sub("From a file",
+            h("p", { class: "small muted" }, "CSV (handle, group, tier, tone, notes), JSON or a plain list. Missing group/tier use the selects."),
+            h("div", { class: "toolbar" }, importLabel, fileInput, btn("Export CSV", exportCsv, { iconName: "download", size: "sm", id: "exportTargetsBtn", title: "All targets with scores and stats" }))))));
 
     // ------------------------------------------------ targets table
     const search = h("input", { class: "input", type: "search", placeholder: "Search handle, name or bio", id: "targetSearch", "aria-label": "Search targets" });
@@ -135,8 +130,8 @@ export default {
     const bulkBar = h("div", { class: "bulk-bar", hidden: true, id: "bulkBar" });
     const tableHost = h("div", { id: "targetsTable" });
 
-    const tableCard = card({ title: "Your targets", subtitle: "Edits save immediately. Click a column title to sort." },
-      h("div", { class: "toolbar filters" }, h("div", { class: "search-wrap" }, icon("search"), search), fGroup, fTier, fEnabled),
+    const tableSec = section({ wide: true, title: "Your targets", actions: summary },
+      h("div", { class: "toolbar filters" }, h("div", { class: "search-wrap" }, icon("search"), search), fGroup, fTier, fEnabled, h("span", { class: "spacer" }), h("span", { class: "small muted" }, "Edits save at once. Click a column to sort.")),
       bulkBar,
       tableHost);
 
@@ -252,13 +247,13 @@ export default {
     function drawSummary() {
       const list = ctx.targetList();
       const by = (fn) => list.filter(fn).length;
-      fill(summary, 
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, String(list.length)), h("span", { class: "muted" }, "targets")),
-        h("div", { class: "summary-item" }, groupBadge("A"), h("span", { class: "summary-num" }, String(by((t) => t.group === "A"))), h("span", { class: "muted" }, "follow you")),
-        h("div", { class: "summary-item" }, groupBadge("B"), h("span", { class: "summary-num" }, String(by((t) => t.group === "B"))), h("span", { class: "muted" }, "to win")),
-        h("div", { class: "summary-item" }, tierBadge(1), h("span", { class: "summary-num" }, String(by((t) => Number(t.tier) === 1))), h("span", { class: "muted" }, "influencers")),
-        h("div", { class: "summary-item" }, tierBadge(2), h("span", { class: "summary-num" }, String(by((t) => Number(t.tier) !== 1))), h("span", { class: "muted" }, "smart accounts")),
-        h("div", { class: "summary-item" }, h("span", { class: "summary-num" }, String(by((t) => t.enabled !== false))), h("span", { class: "muted" }, "enabled")));
+      const item = (n, label, lead) => h("span", { class: "summary-item" }, lead || null, h("span", { class: "summary-num" }, String(n)), label);
+      fill(summary,
+        item(list.length, "targets"),
+        item(by((t) => t.group === "A"), "follow you", groupBadge("A")),
+        item(by((t) => t.group === "B"), "to win over", groupBadge("B")),
+        item(by((t) => Number(t.tier) === 1), "tier 1"),
+        item(by((t) => t.enabled !== false), "on"));
     }
 
     let pendingDraw = false;
@@ -277,7 +272,7 @@ export default {
         sortState,
         maxRows: 150,
         rowClass: (t) => (t.enabled === false ? "is-disabled" : ""),
-        empty: ctx.targetList().length ? "No targets match these filters." : "No targets yet. Add handles above, import a file, or use Discovery below.",
+        empty: ctx.targetList().length ? "No targets match these filters." : "No targets yet. Paste handles above, import a file, or use Discovery below.",
         caption: "Targets",
       }));
       drawBulk();
@@ -289,9 +284,9 @@ export default {
     const dHandles = h("input", { class: "input", id: "discHandles", placeholder: "@naval, @balajis" });
     const dQuery = h("input", { class: "input", id: "discQuery", placeholder: "e.g. onchain analyst, AI researcher" });
     const dMax = h("input", { class: "input", type: "number", min: "10", max: "1000", step: "10", id: "discMax", value: String(disc.maxUsers || 150) });
-    const dEnrich = toggleEl("Visit profiles to score them (slower, more accurate)", true, null, { id: "discEnrich" });
-    const handlesField = labeled("Accounts", dHandles, "One or more @handles, separated by commas.");
-    const queryField = labeled("Search words", dQuery, "Finds people whose name or bio matches.");
+    const dEnrich = toggleEl("Visit profiles to score them (slower, better)", true, null, { id: "discEnrich" });
+    const handlesField = labeled("Accounts", dHandles, "One or more @handles, comma separated.");
+    const queryField = labeled("Search words", dQuery, "Matches names and bios.");
     const syncSourceFields = () => {
       const v = dSource.value;
       handlesField.hidden = !["followersOf", "followingOf", "common"].includes(v);
@@ -314,14 +309,14 @@ export default {
         const r = await ctx.send("discoveryStart", { source, handles, query, maxUsers: Math.max(10, Math.min(1000, Number(dMax.value) || 150)), enrich: dEnrich.input.checked }, { label: "Discovery" });
         if (r) toast("Discovery started - it runs in the X tab, progress shows below.", { type: "success" });
       });
-    }, { kind: "primary", iconName: "search", id: "discStartBtn" });
+    }, { iconName: "search", id: "discStartBtn" });
     const discCancel = btn("Cancel", async () => { const r = await ctx.send("discoveryCancel", {}, { label: "Cancel discovery" }); if (r) toast("Discovery cancelled"); }, { id: "discCancelBtn" });
 
     // sx.discovery (lib/discovery.js): { status, source, step, message, found, progress: {done,total}, startedAt, finishedAt }
     function drawDiscovery() {
       const d = ctx.data[K.discovery];
       clear(progressHost);
-      if (!d || typeof d !== "object" || (!d.status && !d.startedAt)) { progressHost.appendChild(h("p", { class: "muted small" }, "No discovery run yet.")); discCancel.disabled = true; discStart.disabled = false; return; }
+      if (!d || typeof d !== "object" || (!d.status && !d.startedAt)) { progressHost.appendChild(h("p", { class: "muted small" }, "No discovery run yet.")); discCancel.disabled = true; discStart.disabled = false; drawDiscDesc(); return; }
       const running = ["running", "queued", "waiting", "cancelling"].includes(d.status);
       discCancel.disabled = !running || d.status === "cancelling";
       discStart.disabled = running; // one discovery at a time
@@ -344,6 +339,7 @@ export default {
         d.message ? h("div", { class: ["small", d.status === "error" && "text-red"] }, d.message) : null,
         facts.length ? h("div", { class: "muted small" }, facts.join(" · ")) : null,
         d.error ? h("div", { class: "small text-red" }, String(d.error)) : null);
+      drawDiscDesc();
     }
 
     const discFilters = h("div", { class: "form-grid" },
@@ -355,16 +351,12 @@ export default {
       ctx.field({ path: "discovery.enrichMax", type: "number", label: "Profiles scored per run", min: 0, max: 200 }),
       ctx.field({ path: "discovery.skipBots", type: "toggle", label: "Skip bots and spam accounts" }));
 
-    const discCard = card({ title: "Find new targets", subtitle: "Discovery reads lists on X in your worker tab and collects candidates. Nothing is followed or posted." },
-      h("div", { class: "grid-2" },
-        h("div", { class: "stack" },
-          labeled("Source", dSource),
-          handlesField, queryField,
-          h("div", { class: "form-row" }, labeled("Max users", dMax)),
-          dEnrich,
-          h("div", { class: "toolbar" }, discStart, discCancel),
-          progressHost),
-        h("div", { class: "subpanel" }, h("h3", { class: "subpanel-title" }, "Discovery filters"), h("p", { class: "muted small" }, "Candidates outside these filters are marked as not passing (you can still add them)."), discFilters)));
+    const discSec = section({ title: "Find new targets", hint: "Reads lists on X in the worker tab and collects candidates. Nothing is followed or posted." },
+      h("div", { class: "form-row" }, labeled("Source", dSource), handlesField, queryField, labeled("Max users", dMax)),
+      dEnrich,
+      h("div", { class: "toolbar" }, discStart, discCancel),
+      progressHost);
+    const discFiltersSec = section({ title: "Discovery filters", hint: "Candidates outside these are marked as not passing; you can still add them." }, discFilters);
 
     // ------------------------------------------------ candidates
     const candSearch = h("input", { class: "input", type: "search", placeholder: "Search candidates", "aria-label": "Search candidates" });
@@ -403,7 +395,7 @@ export default {
         h("span", { class: "muted small" }, n ? `${n} selected` : "Select candidates to add them"),
         candTier,
         btn("Add to group A", () => addCandidates("A"), { size: "sm", disabled: !n, title: "Accounts that follow you - keep warm" }),
-        btn("Add to group B", () => addCandidates("B"), { size: "sm", disabled: !n, kind: "primary", title: "Accounts that don't follow you - get noticed" }),
+        btn("Add to group B", () => addCandidates("B"), { size: "sm", disabled: !n, title: "Accounts that don't follow you - get noticed" }),
         btn("Remove", async () => { const r = await ctx.send("candidatesRemove", { handles: [...candSelected] }, { label: "Remove candidates" }); if (r) { candSelected.clear(); drawCandidates(true); } }, { size: "sm", disabled: !n, kind: "ghost" }),
         btn("Clear all", async () => {
           if (!(await confirmDialog("Remove every candidate from the list?", { title: "Clear candidates", okLabel: "Clear", danger: true }))) return;
@@ -446,7 +438,7 @@ export default {
       }));
     }
 
-    const candCard = card({ title: "Candidates", subtitle: "Accounts found by discovery. Pick the good ones and add them to a group." }, candBar, candHost);
+    const candSec = section({ wide: true, title: "Candidates", hint: "Accounts found by discovery. Pick the good ones and add them to a group." }, candBar, candHost);
 
     // ------------------------------------------------ explanation + watch summary
     const watchHost = h("div");
@@ -461,25 +453,36 @@ export default {
           h("dt", null, "Check every"), h("dd", null, `${Math.round(w.checkIntervalSec.min / 6) / 10}-${Math.round(w.checkIntervalSec.max / 6) / 10} min`),
           h("dt", null, "Comment window"), h("dd", null, `${w.minPostAgeMin}-${w.maxPostAgeMin} min after a post`),
           h("dt", null, "Quote posts"), h("dd", null, w.includeQuotes ? "Included" : "Ignored")),
-        h("a", { href: "#settings", class: "btn btn-sm" }, "Edit in Settings"));
+        h("a", { href: "#settings", class: "btn btn-sm", style: "align-self:flex-start" }, "Edit in Settings"));
     }
-    const infoCards = h("div", { class: "grid-2" },
-      card({ title: "How accounts are ranked" },
-        h("ul", { class: "plain-list" },
-          h("li", null, h("strong", null, "ScoreX rank"), " - own formula from followers, engagement rate, activity and quality (0-100). Always available; bots and spam accounts are heavily penalised."),
-          h("li", null, h("strong", null, "Sorsa Score"), " - shown when you enable it in ", h("a", { href: "#settings" }, "Settings"), " (your own Sorsa API key)."),
-          h("li", null, h("strong", null, "Kaito Yaps"), " - not available: Kaito shut down Yaps in Jan 2026.")),
-        h("p", { class: "muted small" }, "Tier 1 = big influencer, Tier 2 = smart account. Priority (0-100) decides who gets a comment first when several targets post at once.")),
-      card({ title: "Watching for new posts" }, watchHost));
+    const aboutSec = section({ title: "How accounts are ranked" },
+      h("ul", { class: "plain-list small" },
+        h("li", null, h("strong", null, "ScoreX rank"), ": own 0-100 score from followers, engagement rate, activity and quality. Bots and spam are penalised."),
+        h("li", null, h("strong", null, "Sorsa Score"), ": shown when enabled in ", h("a", { href: "#settings" }, "Settings"), " with your own Sorsa key."),
+        h("li", null, h("strong", null, "Kaito Yaps"), ": not available (Kaito shut Yaps down in Jan 2026).")),
+      h("p", { class: "muted small" }, "Tier 1 = big influencer, tier 2 = smart account. Priority (0-100) decides who goes first when several targets post at once."));
+    const watchSec = section({ title: "Watching for new posts" }, watchHost);
 
-    add(root, summary, addCard, tableCard, discCard, candCard, infoCards);
+    const discAdv = advanced({ key: "targets.discovery", title: "Discovery", desc: "" }, discSec, discFiltersSec, candSec);
+    function drawDiscDesc() {
+      const d = ctx.data[K.discovery];
+      const n = Object.values(ctx.data[K.candidates] || {}).filter((c) => c && c.handle).length;
+      const running = d && ["running", "queued", "waiting", "cancelling"].includes(d.status);
+      const label = d && SOURCES.find((x) => x[0] === d.source);
+      const parts = [running ? `Running: ${d.step || (label ? label[1] : "discovery")}` : "Find new accounts from followers, follows or search"];
+      if (n) parts.push(`${n} candidate${n === 1 ? "" : "s"} waiting`);
+      discAdv.setDesc(parts.join(" · "));
+    }
+
+    add(root, addSec, tableSec, discAdv,
+      advanced({ key: "targets.about", title: "About ranking and watching", desc: "How the scores work and how new posts are found" }, aboutSec, watchSec));
     drawSummary();
     drawTable(true);
     drawDiscovery();
     drawCandidates(true);
     drawWatch();
     ctx.on(K.targets, () => { drawSummary(); drawTable(); drawCandidates(); });
-    ctx.on(K.candidates, () => drawCandidates());
+    ctx.on(K.candidates, () => { drawCandidates(); drawDiscDesc(); });
     ctx.on(K.discovery, drawDiscovery);
     ctx.on("settings", () => { drawWatch(); drawTable(); });
   },

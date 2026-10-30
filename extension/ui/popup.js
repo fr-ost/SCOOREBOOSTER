@@ -1,12 +1,13 @@
-// ScoreX popup: status, mode, today's numbers, pending review, costs, alert, engine controls.
+// ScoreX popup: status line, the one primary Start/Pause/Resume button (+ Stop), 24h quota bar,
+// pending review count (opens the Review Queue), cost today / month, alert line, Open dashboard.
 
 import { K, MODE, STATUS, STOP_LABEL } from "../lib/constants.js";
 import { getSettings, DEFAULT_STATE } from "../lib/store.js";
 import { budgetStatus } from "../lib/costs.js";
-import { warmup, dailyLimit } from "../lib/safety.js";
+import { dailyLimit } from "../lib/safety.js";
 import { dayKey, num } from "../lib/util.js";
 import * as history from "../lib/history.js";
-import { h, btn, busy, send, toast, statusPill, statusInfo, fmtUsd, fmtAgo, fmtTime, fmtIn, setTz, fill } from "./components.js";
+import { h, btn, busy, send, toast, icon, statusInfo, primaryAction, quotaBar, fig, fmtUsd, fmtAgo, fmtTime, fmtIn, setTz, fill } from "./components.js";
 
 let settings = null;
 let state = { ...DEFAULT_STATE };
@@ -30,63 +31,72 @@ function openDashboard(hash) {
 function render() {
   if (!settings) return;
   const info = statusInfo(state);
-  const wu = (status && status.warmup) || warmup(state);
-  const eff = (status && status.effectiveMode) || (settings.mode === MODE.AUTO && !wu.active ? MODE.AUTO : MODE.REVIEW);
+  const eff = (status && status.effectiveMode) || (settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW);
   const modeEl = $("pMode");
-  modeEl.textContent = eff === MODE.AUTO ? "Full auto" : settings.mode === MODE.AUTO ? "Review (warm-up)" : "Review mode";
-  modeEl.classList.toggle("mode-auto", eff === MODE.AUTO);
+  modeEl.textContent = eff === MODE.AUTO ? "Full auto" : "Review";
+  modeEl.classList.toggle("is-auto", eff === MODE.AUTO);
+  modeEl.title = eff === MODE.AUTO ? "Full auto: posts on its own within your safety limits" : "Review: you approve every comment";
 
-  // status
-  const box = $("pStatusBox");
+  // status line
   const lines = [];
-  if (info.reason && state.status === STATUS.STOPPED) lines.push(h("div", { class: ["p-reason", info.kind === "danger" && "is-danger"] }, info.reason));
+  const now = Date.now();
+  const t = (ts) => h("span", { class: "tnum" }, fmtTime(ts));
+  if (info.reason && state.status === STATUS.STOPPED && !state.alert) lines.push(h("div", { class: ["p-reason", info.kind === "danger" && "is-danger"] }, info.reason));
   if (state.status === STATUS.RUNNING) {
     const ah = status && status.activeHours;
-    const now = Date.now();
-    if (ah && ah.inside === false) lines.push(h("div", { class: "p-sub" }, `Sleeping until ${fmtTime(ah.opensAt)} (outside active hours)`));
-    else if (state.breakUntil && state.breakUntil > now) lines.push(h("div", { class: "p-sub" }, `On a break until ${fmtTime(state.breakUntil)}`));
+    if (ah && ah.inside === false) lines.push(h("div", { class: "p-sub" }, "Sleeping until ", t(ah.opensAt), " (outside active hours)"));
+    else if (state.breakUntil && state.breakUntil > now) lines.push(h("div", { class: "p-sub" }, "On a break until ", t(state.breakUntil)));
     else if (state.nextCommentAt && state.nextCommentAt > now) lines.push(h("div", { class: "p-sub" }, `Next comment allowed ${fmtIn(state.nextCommentAt)}`));
-    if (state.nextTickAt) lines.push(h("div", { class: "p-sub" }, `Next check ${fmtIn(state.nextTickAt)}`));
-  } else if (state.status === STATUS.PAUSED) lines.push(h("div", { class: "p-sub" }, "Paused - nothing is posted."));
-  if (state.lastTickAt) lines.push(h("div", { class: "p-sub" }, `Last check ${fmtAgo(state.lastTickAt)}`));
-  fill(box, statusPill(state, { large: true }), ...lines);
-  box.id = "pStatusBox";
+    if (state.nextTickAt) lines.push(h("div", { class: "p-sub" }, `Next check ${fmtIn(state.nextTickAt)}`, state.lastTickAt ? ` · last ${fmtAgo(state.lastTickAt)}` : ""));
+  } else {
+    if (state.status === STATUS.PAUSED) lines.push(h("div", { class: "p-sub" }, "Nothing is generated or posted."));
+    if (state.lastTickAt) lines.push(h("div", { class: "p-sub" }, `Last check ${fmtAgo(state.lastTickAt)}`));
+  }
+  const box = $("pStatusBox");
+  fill(box,
+    h("div", { class: ["big-status", "is-" + info.kind], id: "pStatus" }, h("span", { class: "dot", "aria-hidden": "true" }), h("span", null, info.label)),
+    ...lines);
   box.dataset.kind = info.kind;
 
-  // alert
+  // alert line
   const al = state.alert;
   const alertEl = $("pAlert");
   alertEl.hidden = !al;
-  if (al) fill(alertEl, h("strong", null, STOP_LABEL[al.reason] || al.reason || "Safety stop"), al.detail ? h("div", null, al.detail) : null, h("div", null, `${fmtAgo(al.at)} · check your X account, then resume from the dashboard.`));
+  if (al) fill(alertEl, h("strong", null, STOP_LABEL[al.reason] || al.reason || "Safety stop"), al.detail ? h("div", null, al.detail) : null, h("div", null, `${fmtAgo(al.at)} · check your X account, then resume.`));
 
-  // numbers
-  const t = (status && status.today) || {};
-  const limit = t.limit != null ? t.limit : dailyLimit(settings, state);
-  const b = budgetStatus(settings, spend);
-  const todayCost = Math.max(num(t.cost), num(spend && spend.days && spend.days[dayKey(Date.now(), settings.timezone)]));
-  const cell = (label, value, sub, opts = {}) => {
-    const kids = [h("span", { class: "p-cell-label" }, label), h("span", { class: "p-cell-value", id: opts.valueId || null }, value), sub ? h("span", { class: "p-cell-sub" }, sub) : null];
-    return opts.onClick
-      ? h("button", { type: "button", class: ["p-cell", opts.cls], onClick: opts.onClick, title: opts.title || null, id: opts.id || null }, kids)
-      : h("div", { class: ["p-cell", opts.cls], id: opts.id || null }, kids);
-  };
-  fill($("pGrid"), 
-    cell("Posted (24h)", [String(t.posted != null ? t.posted : "-"), h("span", { class: "stat-of" }, ` / ${limit}`)], `A ${num(t.postedGroup && t.postedGroup.A)} · B ${num(t.postedGroup && t.postedGroup.B)}`, { valueId: "pPosted" }),
-    cell("Pending review", String(pending), queued ? `${queued} waiting to post` : "Open the queue", { onClick: () => openDashboard("review"), cls: pending ? "is-amber" : "", title: "Open the Review queue", id: "pPending" }),
-    cell("Cost today", fmtUsd(todayCost), `${num(t.generated)} generated`),
-    cell("This month", b.limit ? [fmtUsd(b.spent), h("span", { class: "stat-of" }, ` / ${fmtUsd(b.limit, 0)}`)] : fmtUsd(b.spent), b.limit ? `${Math.round(b.pct)}% of budget` : "No limit set", { cls: b.reached ? "is-red" : b.warn ? "is-amber" : "" }));
-
-  // controls
-  const controls = $("pControls");
-  const act = (label, msg, iconName, kind) => btn(label, (e) => {
+  // controls: one primary action + Stop
+  const act = (label, msg, iconName, kind, extra = {}) => btn(label, (e) => {
     const bt = e.currentTarget;
     busy(bt, async () => { const r = await send(msg, {}, { label }); if (r) { toast(`${label}: done`, { type: "success" }); refresh(); } });
-  }, { kind, iconName, id: "p-" + msg });
-  const kids = [];
-  if (state.status === STATUS.RUNNING) kids.push(act("Pause", "pause", "pause"), act("Stop", "stop", "stop"));
-  else if (state.status === STATUS.PAUSED) kids.push(act("Resume", "resume", "play", "primary"), act("Stop", "stop", "stop"));
-  else kids.push(act(al ? "Resume" : "Start", al ? "resume" : "start", "play", "primary"));
-  fill(controls, ...kids);
+  }, { kind, iconName, id: "p-" + msg, ...extra });
+  const [label, msg, ic] = primaryAction(state);
+  const canStop = state.status === STATUS.RUNNING || state.status === STATUS.PAUSED;
+  fill($("pControls"), act(label, msg, ic, "primary"), act("Stop", "stop", "stop", "quiet", { disabled: !canStop, title: canStop ? "Stop the engine" : "Already stopped" }));
+
+  // quota
+  const td = (status && status.today) || {};
+  const limit = td.limit != null ? td.limit : dailyLimit(settings, state);
+  const posted = td.posted != null ? num(td.posted) : null;
+  fill($("pQuota"),
+    h("div", { class: "p-quota-head" },
+      h("span", { class: "cell-label" }, "Posted · 24h"),
+      h("span", { class: "p-quota-num" }, h("span", { id: "pPosted" }, posted == null ? "-" : String(posted)), h("span", { class: "fig-of" }, ` / ${limit}`))),
+    quotaBar(posted || 0, limit, { label: "Comments posted in the last 24 hours" }),
+    h("span", { class: "p-quota-sub" }, `A ${num(td.postedGroup && td.postedGroup.A)} · B ${num(td.postedGroup && td.postedGroup.B)} · ${num(td.generated)} generated`));
+
+  // pending review
+  fill($("pPendingSlot"),
+    h("button", { type: "button", class: ["p-row", pending && "has-items"], id: "pPending", title: "Open the Review Queue", onClick: () => openDashboard("review") },
+      h("span", { class: "p-cell-label" }, "Pending review", h("span", { class: "p-cell-sub" }, queued ? ` · ${queued} approved` : "")),
+      h("span", { class: "p-cell-value" }, String(pending)),
+      icon("chevron")));
+
+  // costs
+  const b = budgetStatus(settings, spend);
+  const todayCost = Math.max(num(td.cost), num(spend && spend.days && spend.days[dayKey(Date.now(), settings.timezone)]));
+  fill($("pCosts"),
+    fig({ label: "Cost today", value: fmtUsd(todayCost) }),
+    fig({ label: "This month", value: fmtUsd(b.spent), of: b.limit ? fmtUsd(b.limit, 0) : null, cls: b.reached ? "is-red" : b.warn ? "is-amber" : null, title: b.limit ? `${Math.round(b.pct)}% of budget` : "No monthly budget set" }));
 }
 
 async function refresh() {
