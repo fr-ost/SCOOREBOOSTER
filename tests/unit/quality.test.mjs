@@ -44,8 +44,11 @@ describe("quality.js", () => {
       assert.ok(!/[—―]/.test(sanitizeComment("a — b — C — d")));
     });
     test("removes a trailing hashtag block, keeps inline ones", () => {
-      assert.equal(sanitizeComment("Solid angle on fees #defi #eth"), "Solid angle on fees");
-      assert.equal(sanitizeComment("Solid angle on fees #defi  "), "Solid angle on fees");
+      // Only after a finished sentence: "the real test is #Base" must not become "the real test is" (GEN-1);
+      // without a full stop the tag stays and the hashtag rule regenerates the reply.
+      assert.equal(sanitizeComment("Solid angle on fees. #defi #eth"), "Solid angle on fees.");
+      assert.equal(sanitizeComment("Solid angle on fees! #defi  "), "Solid angle on fees!");
+      assert.equal(sanitizeComment("Solid angle on fees #defi  "), "Solid angle on fees #defi");
       assert.equal(sanitizeComment("#defi summer is back for real"), "#defi summer is back for real");
     });
     test("whitespace and nullish", () => {

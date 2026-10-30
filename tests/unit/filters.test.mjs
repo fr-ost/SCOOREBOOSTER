@@ -91,7 +91,8 @@ describe("filters.js", () => {
     assert.equal(code({ text: "Natural selection applies to protocols too, the weak ones fade quietly" }), null);
     assert.equal(code({ text: "#Trump pumps another memecoin today and volume is wild" }), "political");
     assert.equal(code({ text: "Everyone is aping into $TRUMP again, volume is wild today" }), "political");
-    assert.equal(code({ text: "Who should I vote for in the community poll this week, thoughts?" }), "political");
+    // A community / DAO poll is not politics (GEN-4: "vote for" and "voting" left the default list).
+    assert.equal(code({ text: "Who should I vote for in the community poll this week, thoughts?" }), null);
     assert.equal(code({ text: "Trumpets and violins in one song, that arrangement is wild" }), null);
     assert.equal(code({ text: "The ELECTION, again, is all anyone talks about on here" }), "political");
     const off = sanitizeSettings({ safety: { skip: { political: false } } });

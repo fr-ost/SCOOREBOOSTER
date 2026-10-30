@@ -5,7 +5,7 @@ import { callModel, parseJsonAnswer } from "./openai.js";
 import { costOf } from "./costs.js";
 import { sanitizeComment, ruleCheck, feedbackFor } from "./quality.js";
 import { STOP } from "./constants.js";
-import { sample, pick, truncate, MIN, now } from "./util.js";
+import { sample, pick, truncate, normalizeText, MIN, now } from "./util.js";
 
 export const COMMENT_SCHEMA = {
   name: "scorex_reply",
@@ -54,7 +54,7 @@ export function modelChain(settings, presetKey) {
   return chain;
 }
 
-export function buildInstructions({ settings, target, toneText, angle, myHandle, hasExamples = false }) {
+export function buildInstructions({ settings, target, toneText, angle, myHandle, hasExamples = false, hasOwnerEdits = false }) {
   const q = settings.quality;
   const extra = String(settings.prompt.extraRules || "").trim();
   return [
@@ -75,6 +75,7 @@ export function buildInstructions({ settings, target, toneText, angle, myHandle,
     "- Do not promote anything, do not ask for follows or likes, do not talk about the owner's own projects.",
     "- Do not reuse the openings, structure or phrases of the owner's recent replies listed in the data.",
     hasExamples ? "- Some of the owner's past replies that did well are in the data: match their style (length, casing, punctuation), never copy their content." : "",
+    hasOwnerEdits ? "- owner_edits in the data pairs drafts like yours with what the owner actually posted after editing them: make the same kinds of changes to your reply (length, casing, punctuation, removed questions, word choice), never copy their content." : "",
     "- Set \"skip\" to true (with a short skip_reason and an empty comment) if the post is political, controversial, tragic, NSFW, an ad, a giveaway or engagement bait, or if you cannot add real value.",
     extra ? `- Owner's extra rules: ${extra}` : "",
     "",
@@ -84,7 +85,10 @@ export function buildInstructions({ settings, target, toneText, angle, myHandle,
   ].filter((l) => l !== "").join("\n");
 }
 
-export function buildInput({ post, target, styleExamples, avoid, feedback, ts = now() }) {
+// Untrusted text is JSON-encoded (no raw newlines), so only the real delimiter line can close the block.
+const dataBlock = (data) => "<<<DATA\n" + JSON.stringify(data, null, 1) + "\nDATA>>>";
+
+export function buildInput({ post, target, styleExamples, avoid, feedback, ownerEdits, ts = now() }) {
   const profile = target.profile || {};
   const recent = (target.recentPosts || []).filter((p) => p.id !== post.id).slice(0, 3).map((p) => truncate(p.text, 280));
   const data = {
@@ -103,8 +107,9 @@ export function buildInput({ post, target, styleExamples, avoid, feedback, ts = 
     owner_recent_replies_to_avoid: avoid,
   };
   if (styleExamples && styleExamples.length) data.owner_best_past_replies = styleExamples;
+  if (ownerEdits && ownerEdits.length) data.owner_edits = ownerEdits.map((e) => ({ draft: e.draft, final: e.final }));
   if (feedback) data.previous_attempt_was_rejected_because = feedback;
-  return "<<<DATA\n" + JSON.stringify(data, null, 1) + "\nDATA>>>\n\nWrite the reply now.";
+  return dataBlock(data) + "\n\nWrite the reply now.";
 }
 
 export function buildCheck({ post, comment, avoid }) {
@@ -113,7 +118,7 @@ export function buildCheck({ post, comment, avoid }) {
     "Fail the reply (pass=false) if ANY of these is true: it is generic and could be posted under many other posts; it is not about this specific post (off-topic); it adds nothing (no new point, detail, angle or real question); it is not in the post's language; it sounds machine-written, salesy or sycophantic; it is rude, political or controversial; it reuses a phrase or structure from the recent replies.",
     'Answer with JSON only: {"pass": boolean, "generic": boolean, "off_topic": boolean, "adds_value": boolean, "same_language": boolean, "issue": string}',
   ].join("\n");
-  const input = "<<<DATA\n" + JSON.stringify({ post: { author: "@" + post.author, language: post.lang || "unknown", text: truncate(post.text, 1200) }, reply: comment, recent_replies: avoid.slice(0, 8) }, null, 1) + "\nDATA>>>";
+  const input = dataBlock({ post: { author: "@" + post.author, language: post.lang || "unknown", text: truncate(post.text, 1200) }, reply: comment, recent_replies: avoid.slice(0, 8) });
   return { instructions, input };
 }
 
@@ -123,6 +128,57 @@ export function pickStyleExamples(settings, bestFromHistory = []) {
   const n = settings.prompt.styleExampleCount;
   if (!n || !settings.prompt.autoStyleFromHistory) return [];
   return sample([...new Set(bestFromHistory.filter(Boolean))], n).map((s) => truncate(s, 280));
+}
+
+// Edit distance, giving up (returns max + 1) once it is clearly larger than `max`.
+function editDistance(a, b, max) {
+  if (Math.abs(a.length - b.length) > max) return max + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (cur[j] < best) best = cur[j];
+    }
+    if (best > max) return max + 1;
+    prev = cur;
+  }
+  return prev[b.length];
+}
+// An edit that teaches nothing about the owner's voice: whitespace only, or a small typo fix. Small casing or
+// punctuation changes (a removed "?", lowercase) are style and count.
+function trivialEdit(draft, final) {
+  const sq = (s) => s.replace(/\s+/g, " ").trim();
+  const a = sq(draft), b = sq(final);
+  if (a === b) return true;
+  return editDistance(a, b, 2) <= 2 && normalizeText(a) !== normalizeText(b);
+}
+
+// Learn from my edits: the owner's recent Review edits (the model's draft -> what was posted), newest first.
+// records: recent posted history records. Returns [{ draft, final }] ([] when settings.prompt.learnFromEdits is off).
+export function pickOwnerEdits(records, settings, n = 6) {
+  if (!settings || !settings.prompt || settings.prompt.learnFromEdits === false || !Array.isArray(records)) return [];
+  const at = (r) => r.postedAt || r.createdAt || 0;
+  const out = [];
+  const seen = new Set();
+  for (const r of records.filter((x) => x && x.edited === true && typeof x.originalComment === "string" && typeof x.comment === "string").sort((x, y) => at(y) - at(x))) {
+    if (out.length >= n) break;
+    const draft = r.originalComment.trim(), final = r.comment.trim();
+    if (!draft || !final || trivialEdit(draft, final)) continue;
+    const key = draft + "\u0000" + final;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ draft: truncate(draft, 280), final: truncate(final, 280) });
+  }
+  return out;
+}
+
+// opts.ownerEdits as passed in, made safe: strings only, at most 6 pairs, 280 characters a side.
+function cleanOwnerEdits(settings, list) {
+  if (!Array.isArray(list) || (settings.prompt && settings.prompt.learnFromEdits === false)) return [];
+  return list.filter((e) => e && typeof e.draft === "string" && typeof e.final === "string" && e.draft.trim() && e.final.trim())
+    .slice(0, 6).map((e) => ({ draft: truncate(e.draft.trim(), 280), final: truncate(e.final.trim(), 280) }));
 }
 
 const STOP_KINDS = { auth: STOP.OPENAI_AUTH, quota: STOP.OPENAI_QUOTA, no_key: STOP.NO_API_KEY, forbidden: STOP.OPENAI_AUTH };
@@ -156,7 +212,8 @@ async function runChain({ chain, apiKey, instructions, input, jsonSchema, kind, 
 /**
  * Generate a checked comment.
  * opts: { settings, apiKey, target, post, tone: {key,text}, presetKey, previous: string[] (last 50 comments),
- *         bestComments: string[], myHandle, compatFor(name)->obj, onCall(call, compat), fetchImpl, feedback }
+ *         bestComments: string[], myHandle, compatFor(name)->obj, onCall(call, compat), fetchImpl, feedback,
+ *         ownerEdits: [{ draft, final }] (pickOwnerEdits; shown to the model as data) }
  * Returns { ok, comment, skipped, calls, model, effort, fallbackUsed, quality, attempts, stop, error }
  */
 export async function generate(opts) {
@@ -169,13 +226,14 @@ export async function generate(opts) {
 
   const avoid = previous.slice(0, 12).map((c) => truncate(c, 220));
   const styleExamples = pickStyleExamples(settings, bestComments);
+  const ownerEdits = cleanOwnerEdits(settings, opts.ownerEdits);
   let feedback = opts.feedback || "";
   let lastReasons = [];
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     out.attempts = attempt;
-    const instructions = buildInstructions({ settings, target, toneText: tone.text, angle: pick(ANGLES), myHandle, hasExamples: styleExamples.length > 0 });
-    const input = buildInput({ post, target, styleExamples, avoid, feedback });
+    const instructions = buildInstructions({ settings, target, toneText: tone.text, angle: pick(ANGLES), myHandle, hasExamples: styleExamples.length > 0, hasOwnerEdits: ownerEdits.length > 0 });
+    const input = buildInput({ post, target, styleExamples, avoid, feedback, ownerEdits });
     const g = await runChain({ chain, apiKey, instructions, input, jsonSchema: COMMENT_SCHEMA, kind: attempt === 1 ? "generate" : "regenerate", compatFor, onCall, fetchImpl });
     calls.push(...g.calls);
     if (!g.ok) {

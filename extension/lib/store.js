@@ -58,7 +58,20 @@ export const DEFAULT_TONES = {
 // The default Tone prompt (Tone & Prompts tab). Sent with every comment unless a target has its own tone.
 export const DEFAULT_TONE_PROMPT = "Insightful and sharp, like a smart builder who knows the space. Add one concrete point, data angle, implication or counterpoint the author did not mention. Casual and confident, never sycophantic, never salesy.";
 
+// Whole words / phrases (see filters.js). No ambiguous single words for a crypto account: "woke up", "DAO voting",
+// "vote for proposal 12", "leader election", "Christian" (a name), "Bitcoin is a religion", "Riot Platforms".
 export const DEFAULT_POLITICAL_KEYWORDS = [
+  "election", "elections", "midterms", "go vote", "early voting", "voting rights", "voter fraud", "voter id", "ballot", "ballots",
+  "democrat", "democrats", "republican", "republicans", "gop", "maga",
+  "trump", "biden", "kamala", "harris", "obama", "putin", "zelensky", "netanyahu", "modi", "parliament", "congressman", "congresswoman", "senator",
+  "left wing", "right wing", "leftist", "liberals", "conservatives", "woke mob", "woke left", "woke agenda", "anti woke", "wokeness",
+  "abortion", "gun control", "immigration", "deport", "deportation", "deportations",
+  "israel", "palestine", "gaza", "hamas", "ukraine war", "russia", "genocide", "war crimes", "terrorist", "islam",
+  "christians", "christianity", "jewish", "hindu", "muslim", "racist", "racism", "feminism", "transgender",
+  "protesters", "protestors", "riots", "rioters", "awami", "bnp", "jamaat", "আওয়ামী", "বিএনপি", "জামায়াত",
+];
+// The list before 2026-10: settings that still hold exactly this list move to the new default.
+const OLD_POLITICAL_KEYWORDS_V1 = [
   "election", "elections", "vote for", "voting", "ballot", "democrat", "democrats", "republican", "republicans", "gop", "maga",
   "trump", "biden", "kamala", "harris", "obama", "putin", "zelensky", "netanyahu", "modi", "parliament", "congressman", "senator",
   "left wing", "right wing", "leftist", "liberals", "conservatives", "woke", "abortion", "gun control", "immigration", "deport",
@@ -368,6 +381,8 @@ export function sanitizeSettings(raw) {
   for (const k of ["languages", "politicalKeywords", "blockedWords"]) {
     sf.skip[k] = (Array.isArray(sf.skip[k]) ? sf.skip[k] : []).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
   }
+  const pk = sf.skip.politicalKeywords;
+  if (pk.length === OLD_POLITICAL_KEYWORDS_V1.length && pk.every((x, i) => x === OLD_POLITICAL_KEYWORDS_V1[i])) sf.skip.politicalKeywords = [...DEFAULT_POLITICAL_KEYWORDS];
 
   const q = s.quality;
   q.similarityThreshold = clamp(num(q.similarityThreshold, 0.45), 0.1, 0.95);

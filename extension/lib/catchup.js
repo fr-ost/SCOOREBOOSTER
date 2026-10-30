@@ -26,7 +26,9 @@ export function catchUpCandidates(targets, settings, ts = now()) {
       out.push({
         id: String(p.id), author: t.handle, authorName: t.name || "", text: p.text || "", lang: p.lang || "",
         createdAt: p.createdAt, url: `https://x.com/${t.handle}/status/${p.id}`, metrics: p.metrics || null,
-        isReply: false, isRepost: false, isQuote: false, hasMedia: false, links: [], catchUp: true,
+        // The stored flags keep the quote / link-only / short-text rules working like on a live post.
+        isReply: false, isRepost: false, isQuote: !!p.isQuote, hasMedia: !!p.hasMedia, hasCard: !!p.hasCard,
+        links: Array.isArray(p.links) ? p.links.filter((l) => typeof l === "string").slice(0, 5) : [], catchUp: true,
         _rank: (t.tier === 1 ? 20 : 0) + (t.priority || 50) - (ts - p.createdAt) / HOUR,
       });
     }

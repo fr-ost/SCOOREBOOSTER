@@ -213,16 +213,31 @@ export function inWindow(ts, startHHMM, endHHMM, timeZone) {
   return cur >= s || cur < end; // crosses midnight
 }
 
+// First instant at which the local wall clock of day q reaches `minutes` after midnight. A wall time inside a
+// spring-forward gap (02:30 in New York on the DST day) does not exist: zonedTime maps it an hour early or
+// late, so the answer is then the transition instant itself (03:00 EDT), found by bisection.
+function wallClockAt(q, minutes, timeZone) {
+  const h = Math.floor(minutes / 60), mi = minutes % 60;
+  const target = Date.UTC(q.year, q.month - 1, q.day, h, mi);
+  const t = zonedTime(q.year, q.month, q.day, h, mi, timeZone);
+  const wall = (x) => x + tzOffset(x, timeZone);
+  if (wall(t) === target) return t;
+  let lo = t - 3 * HOUR, hi = t + 3 * HOUR;
+  if (wall(lo) >= target || wall(hi) < target) return t;
+  while (hi - lo > MIN) {
+    const mid = lo + Math.floor((hi - lo) / (2 * MIN)) * MIN;
+    if (wall(mid) >= target) hi = mid; else lo = mid;
+  }
+  return hi;
+}
+
 // Next instant >= ts at which the window opens (ts itself if already inside).
 export function nextWindowStart(ts, startHHMM, endHHMM, timeZone) {
   if (inWindow(ts, startHHMM, endHHMM, timeZone)) return ts;
   const s = parseHHMM(startHHMM);
   const p = zonedParts(ts, timeZone);
-  let cand = zonedTime(p.year, p.month, p.day, Math.floor(s / 60), s % 60, timeZone);
-  if (cand <= ts) {
-    const tomorrow = addDays(p, 1);
-    cand = zonedTime(tomorrow.year, tomorrow.month, tomorrow.day, Math.floor(s / 60), s % 60, timeZone);
-  }
+  let cand = wallClockAt(p, s, timeZone);
+  if (cand <= ts) cand = wallClockAt(addDays(p, 1), s, timeZone);
   return cand;
 }
 
@@ -232,7 +247,7 @@ export function currentWindowEnd(ts, startHHMM, endHHMM, timeZone) {
   if (e == null) return ts + DAY;
   // Step by calendar days (not ts + 24h): DST days are 23h/25h long and "+24h" can skip or repeat a day.
   let d = zonedParts(ts, timeZone);
-  const at = (q) => zonedTime(q.year, q.month, q.day, Math.floor(e / 60) % 24, e % 60, timeZone);
+  const at = (q) => wallClockAt(q, e % 1440, timeZone);
   let cand = at(d); // "24:00" maps to 00:00 of today here and is moved to tomorrow by the loop
   for (let i = 0; cand <= ts && i < 4; i++) {
     d = addDays(d, 1);
@@ -260,7 +275,10 @@ export function normalizeText(s) {
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
     .replace(/https?:\/\/\S+/g, " ")
-    .replace(/[^\p{L}\p{N}\s']/gu, " ")
+    // Combining marks stay (Bengali / Hindi vowel signs and viramas are part of the word); marks that no
+    // longer follow a letter (emoji variation selectors, keycaps) are dropped.
+    .replace(/[^\p{L}\p{M}\p{N}\s']/gu, " ")
+    .replace(/(^|[^\p{L}\p{M}])\p{M}+/gu, "$1")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -299,7 +317,8 @@ export function redact(v) {
   return String(s)
     .replace(/sk-[A-Za-z0-9_\-]{8,}/g, "sk-***")
     .replace(/(Bearer\s+)[A-Za-z0-9_\-.]{8,}/gi, "$1***")
-    .replace(/("?(?:api[_-]?key|authorization|openaiKey|sorsaKey)"?\s*[:=]\s*")[^"]+/gi, "$1***");
+    .replace(/("?(?:api[_-]?key|authorization|openaiKey|sorsaKey|twitterscoreKey|moniKey)"?\s*[:=]\s*")[^"]+/gi, "$1***")
+    .replace(/([?&](?:api[_-]?key|key|token|access[_-]?token)=)[^&#\s"']+/gi, "$1***");
 }
 
 export function csvEscape(v) {

@@ -15,10 +15,23 @@ export const GENERIC_PHRASES = [
   "mind blown", "insane", "incredible", "wow", "true", "exactly", "this is it", "say it louder",
 ];
 const GENERIC_OPENERS = [
-  "great post", "great thread", "great point", "great take", "love this", "so true", "well said", "absolutely", "couldn't agree more",
-  "spot on", "this is so true", "totally agree", "100%", "facts", "interesting take", "thanks for sharing", "nailed it", "agreed",
-  "as someone who", "what a", "this is a great",
+  "great post", "great thread", "great point", "great take", "love this", "so true", "well said", "couldn't agree more",
+  "spot on", "this is so true", "totally agree", "interesting take", "thanks for sharing", "nailed it", "agreed",
+  "as someone who", "this is a great",
 ];
+// Openers that are only generic in one form, matched on the raw text: "100% this" (not "100 validators"),
+// "Facts." / "Absolutely," (not "Facts like these" / "Absolutely nobody"), "What a great thread" (not "What a lot of").
+const RAW_OPENERS = [
+  ["100%", /^100\s?%/],
+  ["facts", /^facts(?:\s*[.!,:;?💯]|\s*$)/u],
+  ["absolutely", /^absolutely(?:\s*[.!,:;?]|\s*$|\s+(?:right|agree|true|correct|spot on|nailed|love|this)\b)/],
+  ["what a", /^what an? (?:great|nice|good|solid|amazing|awesome|brilliant|insightful|fantastic|incredible|banger|take|thread|post|point|read|insight|call|gem|legend)\b/],
+];
+// Short replies (up to 3 words) that start with a generic phrase ("Great post man", "Love this fam"). Not the
+// punctuation forms ("this!", "100%": normalised to "this" / "100" they would match "This breaks composability")
+// nor words that often start a real sentence ("Real yield, finally", "Based on what?", "True for L1s").
+const GENERIC_NORM = GENERIC_PHRASES.map((g) => normalizeText(g)).filter(Boolean);
+const PREFIX_PHRASES = GENERIC_PHRASES.filter((g) => !["this!", "this 👆", "100%", "real", "true", "based"].includes(g)).map((g) => normalizeText(g)).filter(Boolean);
 
 // Self-references that would reveal the reply was machine-written.
 // Only first-person self-references: talking ABOUT AI/OpenAI/ChatGPT as a topic is fine.
@@ -61,22 +74,31 @@ export function weightedLength(text) {
   return n;
 }
 
-// Clean model output: quotes, labels, leading @mentions, dashes, whitespace.
+// Clean model output: quotes, labels, leading @mentions, dashes, whitespace. Only clear decoration is removed:
+// anything ambiguous stays, so a rule fails the comment and it is regenerated instead of posting a fragment.
 export function sanitizeComment(raw) {
   let t = String(raw == null ? "" : raw).replace(/\r/g, "").trim();
-  t = t.replace(/^(?:reply|comment|response|answer)\s*[:\-]\s*/i, "");
-  // surrounding quotes
+  // "Reply: ..." / "comment - ..."; not compounds like "Response-time ..." or "Answer-first ..."
+  t = t.replace(/^(?:reply|comment|response|answer)(?:\s*:|\s+[-–]\s)\s*/i, "");
+  // surrounding quotes; not when the text starts and ends with separate quoted words ("'a' is ... 'b'"),
+  // while apostrophes inside words ("don't") are fine
   const q = t.match(/^["'“”‘’«»`](.*)["'“”‘’«»`]$/s);
-  if (q && !/["“”«»]/.test(q[1])) t = q[1].trim(); // not when the text starts and ends with separate quoted words
-  // leading @mentions the model may add ("@vitalik ...")
-  // Only when a separator follows ("@a, nice" -> "nice"); "@a's point" stays and fails the mention rule.
-  t = t.replace(/^(?:@[A-Za-z0-9_]{1,15}(?:[\s,:]+|$))+/, "");
-  // em dash / horizontal bar -> comma or period
-  t = t.replace(/\s*[—―]\s*(?=[A-Z])/g, ". ").replace(/\s*[—―]\s*/g, ", ");
+  if (q && !/["“”«»]/.test(q[1]) && !/(?:^|[^\p{L}\p{N}])['‘’`]|['‘’`](?:$|[^\p{L}\p{N}])/u.test(q[1])) t = q[1].trim();
+  // leading @mentions the model may add: "@a, nice" / "@a: nice" / "@a @b nice" / "@a Fees..." -> the rest. One
+  // handle followed by a lowercase word may be the subject ("@base is winning..."), and "@a's point" is a
+  // possessive: both stay and fail the mention rule.
+  t = t.replace(/^@[A-Za-z0-9_]{1,15}(?:[\s,:]+@[A-Za-z0-9_]{1,15})+(?:[\s,:]+|$)/, "");
+  t = t.replace(/^@[A-Za-z0-9_]{1,15}(?:\s*[,:]\s*|\s+(?=\p{Lu})|$)/u, "");
+  // em dash / horizontal bar: a spaced one before a capital, when it is the only one, starts a new sentence
+  // ("Fees dropped — Users never noticed"); the others become commas ("Two chains — Base and Arbitrum — dominate").
+  // An unspaced one before a capital ("the US—China chip war") is ambiguous: it stays and fails the dash rule.
+  if ((t.match(/[—―]/g) || []).length === 1) t = t.replace(/\s+[—―]\s+(?=\p{Lu})/u, ". ");
+  t = t.replace(/\s*[—―]\s*(?!\p{Lu})/gu, ", ");
   // spaced en dash used as a dash -> comma
   t = t.replace(/\s+–\s+/g, ", ");
-  // trailing hashtags block
-  t = t.replace(/(?:\s+#[\p{L}\p{N}_]+)+\s*$/u, "");
+  // trailing block of real hashtags (each has a letter, as on X) after a finished sentence or an emoji. "#1",
+  // "EIP #4844" or "the real test is #Base" stay (the hashtag rule decides).
+  t = t.replace(/([.!?…)\p{Extended_Pictographic}\uFE0F])(?:\s+[#＃][\p{L}\p{N}_]*\p{L}[\p{L}\p{N}_]*)+\s*$/u, "$1");
   t = t.replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").replace(/ ,/g, ",").trim();
   return t;
 }
@@ -104,12 +126,16 @@ function isGeneric(text) {
   const plain = text.trim().toLowerCase().replace(/[!.?\s]+$/, "");
   if (GENERIC_PHRASES.includes(t) || GENERIC_PHRASES.includes(plain)) return true;
   const w = t.split(" ");
-  if (w.length <= 3 && GENERIC_PHRASES.some((g) => { const n = normalizeText(g); return n && (t === n || t.startsWith(n + " ")); })) return true;
+  if (w.length <= 3 && (GENERIC_NORM.includes(t) || PREFIX_PHRASES.some((n) => t.startsWith(n + " ")))) return true;
   return false;
 }
 function genericOpener(text) {
   const t = normalizeText(text);
-  return GENERIC_OPENERS.find((g) => t.startsWith(normalizeText(g) + " ") || t === normalizeText(g)) || "";
+  const raw = String(text || "").trim().toLowerCase();
+  const hit = GENERIC_OPENERS.find((g) => t.startsWith(normalizeText(g) + " ") || t === normalizeText(g));
+  if (hit) return hit;
+  const m = RAW_OPENERS.find(([, re]) => re.test(raw));
+  return m ? m[0] : "";
 }
 
 const opener = (s, n = 3) => words(s).slice(0, n).join(" ");
