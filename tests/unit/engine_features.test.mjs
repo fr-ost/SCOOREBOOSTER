@@ -190,6 +190,29 @@ describe("engine features (worker tab)", () => {
     assert.equal(s2.reach.alert, null);
   });
 
+  test("state.me (account chip) is written from page reports, at most every 10 min unless the handle changes", async () => {
+    let t = T0 + 40 * DAY;
+    _setClock(() => t);
+    env.page = { ...env.page, me: "Main_Acct" };
+    await tabs.send(3, "ping");
+    assert.deepEqual((await getState()).me, { handle: "main_acct", checkedAt: t }, "a ping's handle is recorded (normalized)");
+    const first = t;
+    t += 4 * MIN;
+    await tabs.send(3, "waitFor", { keys: ["tweet"] });
+    assert.equal((await getState()).me.checkedAt, first, "same handle within 10 min: no write");
+    t += 1 * MIN;
+    env.page = { ...env.page, me: "other_acct" };
+    await tabs.send(3, "waitFor", { keys: ["tweet"] });
+    assert.deepEqual((await getState()).me, { handle: "other_acct", checkedAt: t }, "a different handle is written at once");
+    t += 11 * MIN;
+    await tabs.send(3, "ping");
+    assert.equal((await getState()).me.checkedAt, t, "refreshed after 10 min");
+    env.page = { ...env.page, me: null };
+    t += 11 * MIN;
+    await tabs.send(3, "ping");
+    assert.equal((await getState()).me.handle, "other_acct", "an unreadable handle never clears or changes it");
+  });
+
   test("the toolbar badge shows a red ! for an open reach alert until it is dismissed", async () => {
     env.badges.length = 0;
     await setBadge({ status: STATUS.RUNNING, reachAlert: { message: "Your replies are reaching far fewer people", action: "notify" } }, 0);
@@ -227,7 +250,7 @@ describe("safety: adaptive cadence, reach hooks, risk meter (pure)", () => {
     assert.equal(safety.nextCheckMs(s, { emptyWatchStreak: 3 }), Math.round(225000 + 0.5 * (540000 - 225000)));
   });
 
-  test("reach hooks: 'halve' halves the daily limit (floor, at least 1), 'review' forces Review mode, until dismissed", () => {
+  test("reach hooks: 'halve' halves the daily limit (floor, at least 1), until dismissed; 'review' is reach.js's one-time switch", () => {
     const s = sanitizeSettings({ mode: "auto", safety: { ramp: [200, 200, 3] } });
     const st = { firstStartedAt: T0 - 30 * DAY };
     assert.equal(safety.dailyLimit(s, st, T0), 3);
@@ -237,9 +260,10 @@ describe("safety: adaptive cadence, reach hooks, risk meter (pure)", () => {
     assert.equal(safety.dailyLimit(sanitizeSettings({}), { ...st, reachAlert: { action: "halve" } }, T0), 100);
     assert.equal(safety.generationLimit(sanitizeSettings({}), { ...st, reachAlert: { action: "halve" } }, T0), 200, "generations follow the halved limit");
     assert.equal(safety.dailyLimit(sanitizeSettings({}), { ...st, reachAlert: { action: "notify" } }, T0), 200);
-    assert.equal(safety.effectiveMode(s, { reachAlert: { action: "review" } }), MODE.REVIEW);
-    assert.equal(safety.effectiveMode(s, { reachAlert: null }), MODE.AUTO);
-    assert.equal(safety.effectiveMode(s), MODE.AUTO);
+    // "review" is applied once by reach.js (settings.mode = "review"); the mode itself follows the settings, so the
+    // owner can switch back to Full auto while the alert is still open.
+    assert.equal(safety.effectiveMode(s, { reachAlert: { action: "review" } }), MODE.AUTO);
+    assert.equal(safety.effectiveMode({ ...s, mode: MODE.REVIEW }, { reachAlert: { action: "review" } }), MODE.REVIEW);
   });
 
   test("riskReport: a calm setup is low, the owner's busy defaults in Full auto are high, with readable factors", () => {

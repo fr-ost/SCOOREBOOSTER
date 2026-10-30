@@ -19,6 +19,7 @@ import * as H from "../lib/history.js";
 import { recordSpend, getSpend, budgetStatus } from "../lib/costs.js";
 import * as SB from "../lib/scoreboard.js";
 import { runSelfTest } from "../lib/diagnostics.js";
+import { closeStaleReaderTab } from "../lib/pagereader.js";
 import { markDone as conversationDone } from "../lib/conversations.js";
 
 const EXT_ORIGIN = chrome.runtime.getURL("");
@@ -109,6 +110,7 @@ engine.onWorkerStart().catch(() => {});
 ensureScoresAlarm().catch(() => {});
 // A worker that was killed mid-job leaves a "running" score job behind: mark it interrupted.
 SB.updateBoard((b) => (b.job && b.job.status === "running" ? { ...b, job: { ...b.job, status: "error", error: "Interrupted (the browser stopped the worker)", finishedAt: now() } } : b)).catch(() => {});
+closeStaleReaderTab().catch(() => {});
 
 // ---------- discovery runner (needs the X tab, so it shares the engine lease) ----------
 

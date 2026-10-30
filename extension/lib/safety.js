@@ -6,16 +6,15 @@ import { DAY, HOUR, MIN, clamp, humanDelay, randInt, inWindow, nextWindowStart, 
 
 // ---------- reach monitor hooks ----------
 // The reach monitor (lib/reach.js) sets state.reachAlert = { ..., action } when your replies' views drop sharply.
-// Until the alert is dismissed: action "review" puts the engine in Review mode, action "halve" halves the daily limit.
+// Action "halve" halves the daily limit until the alert is dismissed (dailyLimit below). Action "review" is applied
+// once by reach.js (it saves settings.mode = "review", which you may switch back), "stop" is a safety stop.
 export const reachAction = (state) => (state && state.reachAlert && state.reachAlert.action) || null;
 export const reachHalved = (state) => reachAction(state) === "halve";
 
 // ---------- mode ----------
 
-// Review or Full auto, as chosen in the dashboard (no forced warm-up period); Review while a reach alert with
-// action "review" is open.
-export function effectiveMode(settings, state) {
-  if (reachAction(state) === "review") return MODE.REVIEW;
+// Review or Full auto, exactly as chosen in the dashboard (no forced warm-up period).
+export function effectiveMode(settings) {
   return settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW;
 }
 

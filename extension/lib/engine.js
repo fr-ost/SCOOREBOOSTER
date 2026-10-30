@@ -191,20 +191,13 @@ export async function computeCounts(settings, ts = now(), opts = {}) {
 }
 
 // getStatus() is polled by the popup and the dashboard (every few seconds and on state changes), so its history
-// read is small (2 days, enough for every 24 h / calendar-day number it shows) and reused for a moment.
-const STATUS_COUNTS_TTL = 2000;
-let statusCounts = null; // { at, tz, c }
-async function countsForStatus(settings, ts) {
-  if (statusCounts && statusCounts.tz === settings.timezone && ts - statusCounts.at >= 0 && ts - statusCounts.at < STATUS_COUNTS_TTL) return statusCounts.c;
-  const c = await computeCounts(settings, ts, { days: 2 });
-  statusCounts = { at: ts, tz: settings.timezone, c };
-  return c;
-}
-
+// read is small: 2 days, enough for every 24 h / calendar-day number it shows. (No time-based cache: right after a
+// post or a review action the numbers must already be current.) Everything else it adds is pure arithmetic on
+// state it already read (footprint, risk, watch cadence, reach).
 export async function getStatus() {
   const ts = now();
   const [settings, state, secrets, targets, spend, blacklist] = await Promise.all([getSettings(), getState(), getSecrets(), getTargets(), getSpend(), getBlacklist()]);
-  const c = await countsForStatus(settings, ts);
+  const c = await computeCounts(settings, ts, { days: 2 });
   const total = dailyLimit(settings, state, ts);
   const b = budgetStatus(settings, spend, ts);
   const all = Object.values(targets);

@@ -113,6 +113,21 @@ async function noteAccount(tabId, page) {
   await patchState((s) => ({ accountUnknownStreak: known ? 0 : (s.accountUnknownStreak || 0) + 1 }));
 }
 
+// state.me = { handle, checkedAt }: the account the X tab was last seen logged in as (the account chip in the UI).
+// Written from any page report that carries the handle, at most every ME_EVERY unless the handle changed.
+const ME_EVERY = 10 * 60 * 1000;
+let lastMe = null; // { handle, at } last value written (or confirmed) by this worker instance
+async function noteMe(raw) {
+  const handle = String(raw || "").trim().replace(/^@+/, "").toLowerCase();
+  if (!/^[a-z0-9_]{1,15}$/.test(handle)) return;
+  const ts = now();
+  if (lastMe && lastMe.handle === handle && ts - lastMe.at < ME_EVERY) return;
+  lastMe = { handle, at: ts };
+  const cur = (await getState()).me;
+  if (cur && cur.handle === handle && ts - (Number(cur.checkedAt) || 0) < ME_EVERY) { lastMe.at = Number(cur.checkedAt) || ts; return; }
+  await patchState({ me: { handle, checkedAt: ts } });
+}
+
 // ---------- the worker tab id belongs to this browser session ----------
 // Tab ids start again after a browser restart, so an id stored in sx.state may belong to one of the user's own tabs
 // in a new session. The id is also kept in chrome.storage.session (cleared on restart): a stored id without that
@@ -181,6 +196,8 @@ export async function send(tabId, cmd, args = {}, timeoutMs = 30000) {
     r = await Promise.race([p, timeout]);
   } finally { clearTimeout(timer); }
   if (cmd !== CMD.PING && r && r.page && accountPending.has(tabId)) await noteAccount(tabId, r.page).catch(() => {});
+  const me = r && ((r.page && r.page.me) || (cmd === CMD.PING && r.me));
+  if (me) await noteMe(me).catch(() => {});
   return r;
 }
 
