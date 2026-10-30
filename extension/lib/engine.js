@@ -10,7 +10,7 @@ import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats,
 import { effectiveMode, dailyLimit, generationLimit, likeLimit, accountsLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart, watchCadence, riskReport } from "./safety.js";
 import { skipReason } from "./filters.js";
 import { effectiveTone, effectivePreset, isActive, followStatus, FS } from "./targets.js";
-import { generate } from "./generator.js";
+import { generate, pickOwnerEdits } from "./generator.js";
 import { weightedLength } from "./quality.js";
 import { workerTab, releaseGuard, withPurpose, pageBudget, footprintSummary } from "./tabs.js";
 import { watchOnce, refreshProfile } from "./watcher.js";
@@ -386,6 +386,11 @@ async function bestComments(n = 20) {
   return posted.filter((r) => r.results && r.results.likes > 0).sort((a, b) => (b.results.likes || 0) - (a.results.likes || 0)).slice(0, n).map((r) => r.comment);
 }
 
+// Drafts the owner rewrote before posting (prompt.learnFromEdits): shown to the model as style examples, data only.
+async function ownerEdits(settings) {
+  return settings.prompt.learnFromEdits ? pickOwnerEdits(await H.recentPosted(100), settings) : [];
+}
+
 // Expire open items that are too old to be worth posting, and drop items for accounts that follow you
 // (followed back since the comment was written) or were removed from the targets.
 async function expireQueue(settings, ts = now()) {
@@ -749,6 +754,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
   const g = await generate({
     settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey, previous,
     bestComments: await bestComments(), myHandle: me, compatFor: await compatLoader(), onCall: await onCallFactory(settings), feedback,
+    ownerEdits: await ownerEdits(settings),
   });
   const base = H.newRecord({
     mode, ...postFields(post, t), tone: tone.key, toneText: truncate(tone.text, 300), preset: presetKey,
@@ -812,6 +818,14 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   if (r.budget || (r.fail && /page_budget/.test(String(r.reason || "")))) {
     await H.patch(rec.id, { status: prevStatus, reason: GATE_LABEL.footprint, ...(r.liked ? { liked: true, likedAt: ts } : {}) });
     return "budget";
+  }
+  // The logged-in account could not be read: nothing was typed or sent. The item waits (not a post failure);
+  // ACCOUNT_UNKNOWN_MAX unreadable page loads in a row stop the engine.
+  if (r.soft === "account_unknown") {
+    await H.patch(rec.id, { status: prevStatus, reason: STOP_LABEL[STOP.ACCOUNT_UNKNOWN], ...(r.liked ? { liked: true, likedAt: ts } : {}) });
+    await patchState({ nextCommentAt: ts + humanDelay(2 * MIN, 4 * MIN) });
+    if (await stopIfAccountUnknown(settings)) return "stopped";
+    return "retry";
   }
   if (r.retry) {
     // Counted on the item only (3 tries): a page that did not render is not an X error, so it never feeds the
@@ -892,7 +906,7 @@ async function routineBackground({ tabId, settings, me, shouldStop }) {
     if (r && r.did) return r;
   }
   if (await shouldStop()) return null;
-  if (settings.learning.enabled) {
+  if (settings.learning.enabled || (settings.safety.reach && settings.safety.reach.enabled)) {
     const r = await withPurpose("check", () => learningStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
     if (r && r.did) return r;
@@ -981,6 +995,7 @@ async function reviewActionInner({ id, action, text }) {
       settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey: rec.preset || effectivePreset(t, settings), previous,
       bestComments: await bestComments(), myHandle: settings.account.handle, compatFor: await compatLoader(), onCall: await onCallFactory(settings),
       feedback: "The owner asked for a different reply. Use a different angle and opening than: " + truncate(rec.comment, 200),
+      ownerEdits: await ownerEdits(settings),
     });
     // The record may have changed while the model was thinking (approved, posted, skipped): always keep the
     // cost of the new calls, but only replace the comment if it is still waiting in the same state.

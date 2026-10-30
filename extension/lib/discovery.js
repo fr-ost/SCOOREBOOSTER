@@ -169,7 +169,7 @@ async function runDiscoveryInner(opts, stopFn) {
       c.lastPostAt = s.lastPostAt;
       c.lang = majorityLang(p.posts);
       c.score = { own: s.score, flags: s.flags, bot: s.bot, combined: combinedScore(s.score, null), parts: s.parts };
-      c.recentPosts = (p.posts || []).filter((x) => !x.isRepost && !x.isReply).slice(0, 5).map((x) => ({ id: x.id, text: String(x.text || "").slice(0, 600), createdAt: x.createdAt, metrics: x.metrics, lang: x.lang }));
+      c.recentPosts = (p.posts || []).filter((x) => !x.isRepost && !x.isReply).slice(0, 5).map((x) => ({ id: x.id, text: String(x.text || "").slice(0, 600), createdAt: x.createdAt, metrics: x.metrics, lang: x.lang, isQuote: !!x.isQuote, hasMedia: !!x.hasMedia, hasCard: !!x.hasCard, links: Array.isArray(x.links) ? x.links.slice(0, 3).map((l) => String(l).slice(0, 300)) : [] }));
       c.suggestedTier = suggestTier(p.profile, s);
     }
     await sleep(humanDelay(4000, 9000));

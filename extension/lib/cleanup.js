@@ -125,9 +125,15 @@ export async function cleanupStep({ tabId, settings, me, shouldStop }) {
   if (fs.followsYou || !fs.youFollow) return { did: "cleanup_recheck" };
   if (await stopped()) return { did: "aborted" }; // last chance: Pause/Stop wins
 
-  const r = await send(tabId, CMD.UNFOLLOW, { handle: pick.handle }, 30000);
+  // The page re-checks the logged-in account right before clicking (account verification on).
+  const acct = settings.account || {};
+  const expectMe = acct.verifyAccount && acct.handle ? String(acct.handle).trim().replace(/^@+/, "").toLowerCase() : undefined;
+  const r = await send(tabId, CMD.UNFOLLOW, { handle: pick.handle, expectMe }, 30000);
   const v3 = pageVerdict(r.page, settings);
   if (v3 && v3.stop) return v3;
+  if (r.error === "wrong_account") return { stop: "wrong_account", detail: `Logged in as @${r.me || "?"}, expected @${expectMe}` };
+  if (r.error === "account_unknown") return postpone(false);
+  if (r.state === "unknown_prompt") return { stop: "unknown_prompt", detail: r.detail || "X showed a prompt ScoreX does not know" };
   if (r.state) return { stop: r.state === "rate_limit" ? "rate_limit" : "unusual_activity", detail: r.detail || "X warning after unfollow" };
   if (r.dom) return { stop: "dom_changed", detail: "Unfollow button not found: " + r.error };
   await patchState((s) => ({

@@ -5,7 +5,7 @@
 //   tone (override key or ""), preset (override key or ""),
 //   notes, source, addedAt,
 //   profile: { handle, name, bio, followers, following, verified, protected, defaultAvatar, joinedAt, avatar, updatedAt },
-//   recentPosts: [{ id, text, createdAt, metrics }]  (newest first, max 5)
+//   recentPosts: [{ id, text, createdAt, metrics, lang, isQuote, hasMedia, hasCard, links }]  (newest first, max 5)
 //   lastPostAt, lastCheckedAt,
 //   rel: { followsYou (null = not checked yet), youFollow, checkedAt, youFollowSince, followedBackAt,
 //          notFollowingSeen, unfollowedYouAt (it followed you, then unfollowed), gone (profile not found; cleared
@@ -264,7 +264,7 @@ export function mergePosts(t, posts) {
   const map = new Map((t.recentPosts || []).map((p) => [p.id, p]));
   for (const p of posts) {
     if (!p || !p.id || p.isRepost || p.isReply || p.isPinned) continue;
-    map.set(p.id, { id: p.id, text: String(p.text || "").slice(0, 600), createdAt: p.createdAt || null, metrics: p.metrics || null, lang: p.lang || "" });
+    map.set(p.id, { id: p.id, text: String(p.text || "").slice(0, 600), createdAt: p.createdAt || null, metrics: p.metrics || null, lang: p.lang || "", isQuote: !!p.isQuote, hasMedia: !!p.hasMedia, hasCard: !!p.hasCard, links: Array.isArray(p.links) ? p.links.slice(0, 3).map((l) => String(l).slice(0, 300)) : [] });
   }
   t.recentPosts = [...map.values()].sort((a, b) => num(b.createdAt) - num(a.createdAt)).slice(0, 5);
   const newest = t.recentPosts[0];
