@@ -19,6 +19,7 @@ import * as H from "../lib/history.js";
 import { refreshProfile } from "../lib/watcher.js";
 import { workerTab } from "../lib/tabs.js";
 import { recordSpend } from "../lib/costs.js";
+import * as SB from "../lib/scoreboard.js";
 
 const EXT_ORIGIN = chrome.runtime.getURL("");
 
@@ -27,6 +28,7 @@ const EXT_ORIGIN = chrome.runtime.getURL("");
 chrome.runtime.onInstalled.addListener(async (details) => {
   await ensureDefaults();
   await engine.ensureAlarms();
+  await ensureScoresAlarm();
   await engine.refreshBadge();
   if (details.reason === "install") chrome.runtime.openOptionsPage().catch(() => {});
 });
@@ -37,13 +39,50 @@ chrome.runtime.onStartup.addListener(async () => {
   const st = await getState();
   if (st.status === STATUS.RUNNING) log("info", "Chrome restarted - resuming");
   await engine.ensureAlarms();
+  await ensureScoresAlarm();
   await engine.refreshBadge();
 });
 
 chrome.alarms.onAlarm.addListener((a) => {
   if (a.name === ALARM.TICK) engine.tick("alarm");
   else if (a.name === ALARM.WATCHDOG) engine.watchdog();
+  else if (a.name === ALARM.SCORES) autoRefreshScores().catch((e) => log("warn", "Score refresh failed: " + e.message));
 });
+
+// Your own scores on the enabled providers, about once a day (refreshOwn skips anything newer than 20 h).
+async function ensureScoresAlarm() {
+  try { if (!(await chrome.alarms.get(ALARM.SCORES))) await chrome.alarms.create(ALARM.SCORES, { delayInMinutes: 3, periodInMinutes: 240 }); } catch (_) {}
+}
+async function autoRefreshScores() {
+  const settings = await getSettings();
+  if (!settings.scores.autoRefreshOwn || !Object.values(settings.providers || {}).some((p) => p.enabled)) return;
+  await keepAlive(() => SB.refreshOwn({}));
+}
+
+// Keep the worker awake during long provider jobs (each extension API call resets the idle timer).
+async function keepAlive(fn) {
+  const t = setInterval(() => { chrome.runtime.getPlatformInfo().catch(() => {}); }, 20000);
+  try { return await fn(); } finally { clearInterval(t); }
+}
+
+// Long provider jobs (smart-follower search, target scores) run in the background; progress is written to
+// sx.scoreboard.job so the dashboard can show it. One job at a time; Stop in the dashboard cancels it.
+let scoreJob = null;
+function startScoreJob(kind, label, run) {
+  if (scoreJob) return { ok: false, error: "Another score job is still running" };
+  const job = { kind, label, cancel: false };
+  scoreJob = job;
+  const write = (patch) => SB.updateBoard((b) => ({ ...b, job: { ...(b.job || {}), ...patch, kind, label, updatedAt: now() } }));
+  keepAlive(async () => {
+    await write({ status: "running", startedAt: now(), finishedAt: null, done: 0, total: 0, current: "", error: "", result: null });
+    let r;
+    try {
+      r = await run({ onProgress: (p) => write({ ...p }), shouldStop: async () => job.cancel });
+    } catch (e) { r = { ok: false, error: String((e && e.message) || e) }; }
+    await write({ status: job.cancel ? "cancelled" : r && r.ok ? "done" : "error", finishedAt: now(), error: r && !r.ok ? r.error || "error" : "", result: r || null });
+  }).finally(() => { if (scoreJob === job) scoreJob = null; });
+  return { ok: true, started: true };
+}
 
 chrome.tabs.onRemoved.addListener((tabId, info) => { onTabRemoved(tabId, info); });
 
@@ -55,6 +94,9 @@ chrome.notifications.onClicked.addListener((id) => {
 
 // Every worker start: drop a lease left by a killed worker and re-arm alarms (cheap and idempotent).
 engine.onWorkerStart().catch(() => {});
+ensureScoresAlarm().catch(() => {});
+// A worker that was killed mid-job leaves a "running" score job behind: mark it interrupted.
+SB.updateBoard((b) => (b.job && b.job.status === "running" ? { ...b, job: { ...b.job, status: "error", error: "Interrupted (the browser stopped the worker)", finishedAt: now() } } : b)).catch(() => {});
 
 // ---------- discovery runner (needs the X tab, so it shares the engine lease) ----------
 
@@ -192,6 +234,20 @@ const handlers = {
 
   sorsaTest: () => testSorsa(),
   sorsaRefresh: (m) => refreshScores(m.handles || []),
+
+  // ---- score providers (Scores tab) ----
+  scoresState: async () => ({ ok: true, providers: await SB.providerStates(), board: await SB.getBoard() }),
+  scoresRefreshOwn: (m) => keepAlive(() => SB.refreshOwn({ force: !!m.force, only: Array.isArray(m.only) ? m.only.map(String) : null })),
+  providerTest: async (m) => {
+    const r = await keepAlive(() => SB.refreshOwn({ force: true, only: [String(m.id || "")] }));
+    const one = r.ok && r.results ? r.results[String(m.id || "")] : null;
+    return one ? (one.ok ? { ok: true, score: one.score, max: one.max != null ? one.max : null, url: one.url || "", mode: one.mode || "" } : { ok: false, error: one.message || one.error || "Failed" }) : { ok: false, error: r.error || "That provider is off" };
+  },
+  scoreCheck: (m) => keepAlive(() => SB.checkScores(String(m.handle || ""))),
+  smartFollowers: (m) => keepAlive(() => SB.smartFollowersOf(String(m.handle || ""), { maxAgeMs: m.fresh ? 0 : undefined })),
+  smartSweep: (m) => startScoreJob("sweep", "Smart followers", (ctl) => SB.sweepSmartFollowers((m.handles || []).map(String), ctl)),
+  targetScores: (m) => startScoreJob("targets", "Target scores", (ctl) => SB.refreshTargetScores((m.handles || []).map(String), String(m.provider || ""), ctl)),
+  scoreJobCancel: async () => { if (scoreJob) scoreJob.cancel = true; return { ok: true }; },
 
   learningRun: async () => {
     await patchState({ lastLearningAt: 0, learningForce: true });

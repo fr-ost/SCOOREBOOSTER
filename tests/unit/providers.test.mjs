@@ -167,3 +167,27 @@ describe("providers", () => {
     assert.equal(own.sorsa.modes.api.score.url, "https://api.sorsa.io/v4/score?u={handle}");
   });
 });
+
+describe("provider definitions vs manifest", () => {
+  test("every provider host is an optional host permission; tab modes need the optional scripting permission", async () => {
+    const fs = await import("node:fs");
+    const { PROVIDER_DEFS } = await import("../../extension/lib/providerdefs.js");
+    const manifest = JSON.parse(fs.readFileSync(new URL("../../extension/manifest.json", import.meta.url), "utf8"));
+    const optional = new Set(manifest.optional_host_permissions || []);
+    for (const def of Object.values(PROVIDER_DEFS)) {
+      assert.ok(def.id && def.name && def.modes && Object.keys(def.modes).length, def.id);
+      for (const h of P.allHosts(def)) {
+        assert.ok(optional.has(h), `${def.id}: ${h} must be in optional_host_permissions`);
+        assert.ok(!(manifest.host_permissions || []).includes(h), `${def.id}: ${h} must not be a required permission`);
+      }
+      for (const [mode, m] of Object.entries(def.modes)) {
+        for (const cap of P.CAPS) if (m[cap]) {
+          assert.ok(["json", "html", "tab"].includes(m[cap].kind), `${def.id}.${mode}.${cap}.kind`);
+          assert.ok(String(m[cap].url).startsWith("https://"), `${def.id}.${mode}.${cap}.url`);
+          if (m[cap].kind === "tab") assert.ok((manifest.optional_permissions || []).includes("scripting"), "scripting is optional");
+        }
+      }
+    }
+    assert.ok(!(manifest.permissions || []).includes("scripting"), "scripting is never a required permission");
+  });
+});

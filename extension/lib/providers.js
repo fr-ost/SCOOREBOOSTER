@@ -93,7 +93,7 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
   const pageUrl = spec.pageUrl ? fill(spec.pageUrl, vars) : (def.profileUrl ? fill(def.profileUrl, vars) : url);
   if (spec.kind === "tab") {
     const r = await readPage(url, { json: spec.json, score: cap === "score" ? spec.value : undefined, max: spec.max, list: cap === "smartFollowers" ? spec.list : undefined, notFound: spec.notFound || def.notFound, loginWall: spec.loginWall || def.loginWall }, { timeoutMs: spec.timeoutMs || 30000 });
-    return finish(def, cap, r, pageUrl);
+    return finish(def, cap, r, pageUrl, vars.handle);
   }
   const headers = {};
   for (const [k, v] of Object.entries(spec.headers || {})) headers[k] = String(v).replace(/\{key\}/g, key);
@@ -112,13 +112,13 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
     out.list = pickList(spec.list, json);
     if (spec.total) out.total = toNumber(pickValue(spec.total, { json, text }));
   }
-  return finish(def, cap, out, pageUrl);
+  return finish(def, cap, out, pageUrl, vars.handle);
 }
 
-function finish(def, cap, r, pageUrl) {
+function finish(def, cap, r, pageUrl, self = "") {
   if (!r || !r.ok) return { ...(r || { ok: false, error: "unknown" }), url: (r && r.url) || pageUrl };
   const out = { ...r, url: r.url || pageUrl };
   if (cap === "score" && out.max == null && def.max) out.max = def.max;
-  if (cap === "smartFollowers" && Array.isArray(out.list)) out.list = out.list.slice(0, def.listLimit || 50);
+  if (cap === "smartFollowers" && Array.isArray(out.list)) out.list = out.list.filter((x) => x.handle !== self).slice(0, def.listLimit || 50);
   return out;
 }

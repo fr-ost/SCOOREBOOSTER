@@ -187,8 +187,30 @@ export function pageExtract(spec) {
       const arr = pluckP(json, L.path);
       if (Array.isArray(arr)) for (const it of arr) items.push({ json: it });
     } else if (L.selector) {
+      // containerText: only read links inside the block whose heading matches (e.g. "smart followers"),
+      // found by climbing from the heading to the nearest ancestor that contains matching rows.
+      let root = document;
+      if (L.containerText) {
+        root = null;
+        let re = null;
+        try { re = new RegExp(L.containerText, "i"); } catch (e) { re = null; }
+        const heads = re ? Array.prototype.filter.call(document.querySelectorAll("h1,h2,h3,h4,h5,h6,p,span,div,section,header"), function (el) {
+          const t = txt(el);
+          return t.length > 0 && t.length < 140 && re.test(t) && el.querySelectorAll(L.selector).length === 0;
+        }) : [];
+        for (let k = 0; k < heads.length && !root; k++) {
+          let el = heads[k];
+          for (let i = 0; i < 6 && el && el !== document.body; i++) {
+            el = el.parentElement;
+            let n = 0;
+            try { n = el ? el.querySelectorAll(L.selector).length : 0; } catch (e) { n = 0; }
+            if (n > 0) { root = el; break; }
+          }
+        }
+        if (!root) out.noContainer = true;
+      }
       let nodes = [];
-      try { nodes = Array.prototype.slice.call(document.querySelectorAll(L.selector)); } catch (e) { nodes = []; }
+      if (root) { try { nodes = Array.prototype.slice.call(root.querySelectorAll(L.selector)); } catch (e) { nodes = []; } }
       for (const n of nodes) items.push({ el: n });
     }
     out.list = items.slice(0, (L.limit || 50) * 2).map(function (it) {
@@ -226,6 +248,7 @@ export function normalizeExtract(raw, spec = {}) {
       if (out.list.length >= (spec.list.limit || 50)) break;
     }
     if (!out.list.length && raw.loginWall) return { ok: false, error: "login", message: "The site wants you to log in to show followers" };
+    if (!out.list.length && raw.noContainer) return { ok: false, error: "parse", message: "The smart-followers block was not found on the page (site changed? check Settings > Scores)" };
   }
   return out;
 }

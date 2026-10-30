@@ -21,7 +21,9 @@ async function get(path, key) {
   } catch (e) { return { ok: false, error: "network", message: redact(String(e && e.message || e)) }; }
   let body = null;
   try { body = await res.json(); } catch (_) {}
-  if (res.status === 401 || res.status === 403) return { ok: false, error: "auth", message: "Sorsa rejected the API key" };
+  // 401 = missing or wrong key; 403 = valid key without credits or with an expired plan.
+  if (res.status === 401) return { ok: false, error: "auth", message: "Sorsa rejected the API key" };
+  if (res.status === 403) return { ok: false, error: "auth", message: "Sorsa: no requests left or the plan expired - check your key's usage" };
   if (res.status === 429) return { ok: false, error: "rate", message: "Sorsa rate limit / quota reached" };
   if (res.status === 404) return { ok: true, body: null };
   if (!res.ok) return { ok: false, error: "http_" + res.status, message: (body && body.message) || "Sorsa error " + res.status };
@@ -37,7 +39,8 @@ export async function fetchScore(handle, key) {
 
 export async function keyUsage(key) {
   const r = await get("/key-usage-info", key);
-  return r.ok ? { ok: true, remaining: r.body && r.body.remaining_requests, total: r.body && r.body.total_requests, validUntil: r.body && r.body.valid_until } : r;
+  // key_requests = this period's allocation, remaining_requests = what is left of it.
+  return r.ok ? { ok: true, remaining: r.body && r.body.remaining_requests, total: r.body && (r.body.key_requests != null ? r.body.key_requests : r.body.total_requests), validUntil: r.body && r.body.valid_until } : r;
 }
 
 async function ready() {

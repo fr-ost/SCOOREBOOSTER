@@ -201,7 +201,11 @@ export async function sweepSmartFollowers(handles, extra = {}) {
   const [targets, black] = await Promise.all([getTargets(), getBlacklist()]);
   const found = new Map();
   const errors = [];
+  let done = 0;
   for (const src of list) {
+    if (extra.shouldStop && (await extra.shouldStop())) break;
+    if (extra.onProgress) await extra.onProgress({ done, total: list.length, current: src, found: found.size });
+    done++;
     const r = await smartFollowersOf(src, extra);
     if (!r.ok) { errors.push(`@${src}: ${r.error}`); if (/Turn on/.test(r.error || "")) break; continue; }
     for (const [pid, res] of Object.entries(r.results)) if (res.error) errors.push(`@${src} (${ctx.defs[pid] ? ctx.defs[pid].name : pid}): ${res.error}`);
@@ -246,8 +250,10 @@ export async function refreshTargetScores(handles, providerId, { maxAgeMs = DAY,
   if (!def) return { ok: false, error: "Unknown provider" };
   const targets = await getTargets();
   const list = (handles && handles.length ? handles.map(normalizeHandle) : Object.keys(targets)).filter((h) => h && targets[h]);
-  let updated = 0;
+  let updated = 0, done = 0;
   for (const h of list) {
+    if (extra.shouldStop && (await extra.shouldStop())) break;
+    if (extra.onProgress) await extra.onProgress({ done: done++, total: list.length, current: h, updated });
     const prev = targets[h].score && targets[h].score.providers && targets[h].score.providers[providerId];
     if (prev && prev.at && now() - prev.at < maxAgeMs) continue;
     const r = await call(providerId, "score", h, ctx);

@@ -1,7 +1,7 @@
 // ScoreX - chrome.storage.local access, defaults and settings sanitising.
 //
 // Ownership rule (keeps writes race-free):
-//   * settings, secrets, selectorOverrides  -> written by the dashboard, read by the service worker
+//   * settings, secrets, selectorOverrides, providerOverrides -> written by the dashboard, read by the service worker
 //   * state, targets, candidates, blacklist, seen, logs, learning, discovery, history (IndexedDB)
 //                                           -> written ONLY by the service worker; the UI asks via messages
 // Every read-modify-write in the service worker goes through withLock(key) so interleaved
@@ -10,6 +10,7 @@
 import { K, STATUS, MODE, HARD, SCHEMA_VERSION } from "./constants.js";
 import { deepMerge, deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact, parseHandleList } from "./util.js";
 import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK, MODELS_REV } from "./models.js";
+import { PROVIDER_DEFS } from "./providerdefs.js";
 import { db, STORES } from "./db.js";
 
 const area = () => globalThis.chrome.storage.local;
@@ -189,9 +190,13 @@ export const DEFAULT_SETTINGS = {
   },
 
   scores: {
-    sorsaEnabled: false, // optional, needs your Sorsa API key + permission
+    sorsaEnabled: false, // legacy switch, kept in sync with providers.sorsa.enabled
     blendSorsa: 0.5, // weight of Sorsa in the combined rank when available
+    autoRefreshOwn: true, // refresh your own scores about once a day while any provider is on
   },
+  // Score providers (lib/providerdefs.js): all OFF until you turn them on in the Scores tab.
+  // { [id]: { enabled, mode: "auto" | "api" | "public" | "page", dailyCap } }
+  providers: {},
 
   discovery: {
     minFollowers: 1000,
@@ -361,6 +366,23 @@ export function sanitizeSettings(raw) {
   c.dailyLimit = clamp(Math.round(num(c.dailyLimit, 10)), 0, HARD.dailyUnfollows);
   // Accept profile URLs, @handles and several handles per line, like everywhere else.
   c.whitelist = parseHandleList((Array.isArray(c.whitelist) ? c.whitelist : c.whitelist ? [c.whitelist] : []).map(String).join("\n"));
+
+  // Providers: one entry per known provider; the legacy Sorsa switch maps onto providers.sorsa.
+  const prov = s.providers && typeof s.providers === "object" ? s.providers : {};
+  const legacySorsa = !!(s.scores && s.scores.sorsaEnabled);
+  s.providers = {};
+  for (const [id, def] of Object.entries(PROVIDER_DEFS)) {
+    const cur = prov[id] && typeof prov[id] === "object" ? prov[id] : {};
+    const modes = Object.keys(def.modes || {});
+    s.providers[id] = {
+      enabled: cur.enabled != null ? !!cur.enabled : id === "sorsa" ? legacySorsa : false,
+      mode: cur.mode === "auto" || modes.includes(cur.mode) ? cur.mode : "auto",
+      dailyCap: clamp(Math.round(num(cur.dailyCap, def.dailyCap || 100)), 1, 5000),
+    };
+  }
+  s.scores.sorsaEnabled = !!(s.providers.sorsa && s.providers.sorsa.enabled);
+  s.scores.blendSorsa = clamp(num(s.scores.blendSorsa, 0.5), 0, 1);
+  s.scores.autoRefreshOwn = s.scores.autoRefreshOwn !== false;
 
   const dv = s.discovery;
   dv.languages = (Array.isArray(dv.languages) ? dv.languages : String(dv.languages || "").split(/[\s,;]+/)).map((x) => String(x).trim().toLowerCase()).filter(Boolean);

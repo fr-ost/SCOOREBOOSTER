@@ -18,6 +18,8 @@ export const K = Object.freeze({
   learning: "sx.learning", // A/B arms + suggestions cache
   spend: "sx.spend", // { days: {YYYY-MM-DD: usd}, months: {YYYY-MM: usd} } authoritative ledger for budgets
   blacklist: "sx.blacklist", // { [handle]: { handle, name, reason, at, days, comments, tier } } never re-added as targets
+  scoreboard: "sx.scoreboard", // your scores per provider (+ history), score checks, smart followers, usage
+  providerOverrides: "sx.providerOverrides", // partial provider definitions JSON, merged over lib/providerdefs.js
   schema: "sx.schemaVersion",
 });
 
@@ -155,6 +157,7 @@ export const MSG = Object.freeze({
 export const ALARM = Object.freeze({
   TICK: "sx.tick", // main randomized scheduler tick (one-shot, re-armed each time)
   WATCHDOG: "sx.watchdog", // periodic safety net: re-arms TICK if it went missing
+  SCORES: "sx.scores", // refreshes your own scores on the enabled providers (about once a day)
 });
 
 // Absolute safety caps. Settings are clamped to these and cannot be raised from the UI.

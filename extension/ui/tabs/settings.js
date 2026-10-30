@@ -148,11 +148,11 @@ export default {
         try { req = chrome.permissions.request({ origins: [SORSA.permission] }); } catch (e) { input.checked = false; toast("Permission request failed: " + e.message, { type: "error" }); return; }
         Promise.resolve(req).then((granted) => {
           if (!granted) { input.checked = false; toast("Sorsa stays off: access to api.sorsa.io was not granted.", { type: "warn" }); return; }
-          ctx.save((d) => { d.scores.sorsaEnabled = true; });
+          ctx.save((d) => { d.scores.sorsaEnabled = true; d.providers.sorsa = { ...(d.providers.sorsa || {}), enabled: true }; });
           toast("Sorsa enabled", { type: "success" });
         }, (e) => { input.checked = false; toast("Permission request failed: " + ((e && e.message) || e), { type: "error" }); });
       } else {
-        ctx.save((d) => { d.scores.sorsaEnabled = false; });
+        ctx.save((d) => { d.scores.sorsaEnabled = false; d.providers.sorsa = { ...(d.providers.sorsa || {}), enabled: false }; });
         try { Promise.resolve(chrome.permissions.remove({ origins: [SORSA.permission] })).catch(() => {}); } catch (_) {}
       }
     });
