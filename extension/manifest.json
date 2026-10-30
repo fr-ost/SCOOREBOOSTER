@@ -16,7 +16,9 @@
   ],
   "optional_host_permissions": [
     "https://api.sorsa.io/*",
-    "https://twitterscore.io/*"
+    "https://twitterscore.io/*",
+    "https://api.ethos.network/*",
+    "https://api.discover.getmoni.io/*"
   ],
   "background": {
     "service_worker": "background/sw.js",

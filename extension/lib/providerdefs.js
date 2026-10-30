@@ -13,6 +13,11 @@
 //     score in the server-rendered HTML; the smart-followers panel is filled by JavaScript and shows the first 3
 //     for free). API v1 (paid key): get_twitter_score?username= -> { twitter_score },
 //     top_followers_paginate?username=&page=&size= -> { top_followers: [{ username, name, twitter_score, followers_count }] }.
+//   Ethos: free public API v2, GET /api/v2/user/by/x/<handle> -> { score (0-2800 credibility), profileId (null = no
+//     Ethos profile), username, displayName }. No follower data. Header X-Ethos-Client identifies the app.
+//   Moni: Social API v3 with your (free) key, header "Api-Key": accounts/<handle>/info/smart_engagement/ ->
+//     { smartEngagement: { moniScore, smartsCount } }, accounts/<handle>/smarts/meta/?orderBy=SCORE ->
+//     { items: [{ meta: { userUrl } }] }. A free Moni account gets about 300 requests a month.
 
 export const PROVIDER_DEFS = {
   sorsa: {
@@ -75,6 +80,46 @@ export const PROVIDER_DEFS = {
         smartFollowers: {
           kind: "json", url: "https://twitterscore.io/api/v1/top_followers_paginate?username={handle}&page=1&size=20&api_key={key}", headers: { "X-API-Key": "{key}" },
           list: { path: ["top_followers", "data.top_followers", "followers", "data"], fields: { handle: ["username", "screen_name"], name: ["name"], score: ["twitter_score", "score"], followers: ["followers_count"] }, limit: 20 },
+        },
+      },
+    },
+  },
+
+  ethos: {
+    id: "ethos",
+    name: "Ethos",
+    site: "https://ethos.network",
+    about: "Free credibility score (0-2800) from reviews and vouches on Ethos. No follower data.",
+    profileUrl: "https://app.ethos.network/profile/x/{handle}",
+    max: 2800,
+    dailyCap: 500,
+    modes: {
+      public: {
+        hosts: ["https://api.ethos.network/*"],
+        score: { kind: "json", url: "https://api.ethos.network/api/v2/user/by/x/{handle}", headers: { "X-Ethos-Client": "scorex@1.2" }, value: { path: ["score", "user.score"] }, requirePath: ["profileId", "user.profileId"] },
+      },
+    },
+  },
+
+  moni: {
+    id: "moni",
+    name: "Moni",
+    site: "https://moni.ai",
+    about: "Moni Score and the account's 'smarts' (smart followers) from Moni Discover.",
+    profileUrl: "https://discover.getmoni.io/{handle}",
+    max: null,
+    keyName: "moniKey",
+    keyHelp: "https://moni.ai/api",
+    keyNote: "A free Moni account's API key includes about 300 requests a month.",
+    dailyCap: 20,
+    modes: {
+      api: {
+        hosts: ["https://api.discover.getmoni.io/*"],
+        score: { kind: "json", url: "https://api.discover.getmoni.io/api/v3/accounts/{handle}/info/smart_engagement/", headers: { "Api-Key": "{key}" }, value: { path: ["smartEngagement.moniScore", "moniScore"] } },
+        smartFollowers: {
+          kind: "json", url: "https://api.discover.getmoni.io/api/v3/accounts/{handle}/smarts/meta/?limit=20&offset=0&orderBy=SCORE&orderByDirection=DESC", headers: { "Api-Key": "{key}" },
+          list: { path: ["items"], fields: { handle: ["meta.userUrl", "meta.username", "userUrl"], name: ["meta.name"], score: ["smartEngagement.moniScore"] }, limit: 20 },
+          total: { path: ["totalCount"] },
         },
       },
     },

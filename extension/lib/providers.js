@@ -103,7 +103,9 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
   if (!r.ok) return { ...r, url: pageUrl };
   const json = as === "json" ? r.json : (spec.json ? jsonFromHtml(r.text, spec.json) : undefined);
   const text = as === "text" ? textFromHtml(r.text) : undefined;
-  if (spec.notFoundPath && json !== undefined && pickValue({ path: spec.notFoundPath }, { json }) != null) return { ok: false, error: "not_found", message: "The site has no data for this account", url: pageUrl };
+  if (spec.notFoundPath && json !== undefined && pickValue({ path: spec.notFoundPath }, { json }) != null) return { ok: false, error: "not_found", message: `${def.name} has no data for @${vars.handle}`, url: pageUrl };
+  // requirePath: the answer only counts when this field is set (e.g. Ethos returns a default for unknown accounts).
+  if (spec.requirePath && json !== undefined && pickValue({ path: spec.requirePath }, { json }) == null) return { ok: false, error: "not_found", message: `@${vars.handle} has no ${def.name} profile`, url: pageUrl };
   const out = { ok: true, url: pageUrl };
   if (cap === "score") {
     out.score = toNumber(pickValue(spec.value, { json, text }));

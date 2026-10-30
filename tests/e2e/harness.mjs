@@ -50,7 +50,7 @@ export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewpor
     args: [
       `--disable-extensions-except=${ext}`,
       `--load-extension=${ext}`,
-      `--host-resolver-rules=MAP x.com:443 127.0.0.1:${port}, MAP api.openai.com:443 127.0.0.1:${port}, MAP api.sorsa.io:443 127.0.0.1:${port}, MAP twitterscore.io:443 127.0.0.1:${port}`,
+      `--host-resolver-rules=MAP x.com:443 127.0.0.1:${port}, MAP api.openai.com:443 127.0.0.1:${port}, MAP api.sorsa.io:443 127.0.0.1:${port}, MAP twitterscore.io:443 127.0.0.1:${port}, MAP api.ethos.network:443 127.0.0.1:${port}, MAP api.discover.getmoni.io:443 127.0.0.1:${port}`,
       "--ignore-certificate-errors",
       "--no-proxy-server",
     ],

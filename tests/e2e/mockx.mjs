@@ -35,6 +35,8 @@ export function createMock(opts = {}) {
     sorsa: { calls: [], scores: {}, top: {} }, // top: handle -> [{ username, display_name, score, followers_count }]
     // twitterscore: scores handle -> 0..1000; smart: handle -> [{ handle, score }]; mode: ok | blocked (bot check) | js (panel filled by JS)
     twitterscore: { calls: [], scores: {}, smart: {}, mode: "ok", apiKey: "ts-test" },
+    ethos: { calls: [], scores: {} }, // handle -> score (missing = no Ethos profile)
+    moni: { calls: [], scores: {}, smarts: {} }, // smarts: handle -> [handles]
     log: [],
     nextId: 1900000000000000000n,
   };
@@ -264,6 +266,26 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           const h = (u.searchParams.get("username") || "").toLowerCase();
           if (u.pathname === "/v3/top-followers") return send(200, { users: M.sorsa.top[h] || [] });
           return send(200, { score: M.sorsa.scores[h] ?? null });
+        }
+        if (host === "api.ethos.network") {
+          const u = new URL(req.url, "https://api.ethos.network");
+          M.ethos.calls.push(u.pathname + " " + (req.headers["x-ethos-client"] || ""));
+          const m3 = u.pathname.match(/^\/api\/v2\/user\/by\/x\/([A-Za-z0-9_]{1,15})$/);
+          if (!m3) return send(404, { message: "not found" });
+          const h = m3[1].toLowerCase();
+          const sc = M.ethos.scores[h];
+          return send(200, { id: 1, profileId: sc == null ? null : 77, username: h, displayName: h, score: sc == null ? 1200 : sc, status: "ACTIVE" });
+        }
+        if (host === "api.discover.getmoni.io") {
+          const u = new URL(req.url, "https://api.discover.getmoni.io");
+          M.moni.calls.push(u.pathname);
+          if (req.headers["api-key"] !== "moni-test") return send(401, { detail: "Invalid API key" });
+          const m4 = u.pathname.match(/^\/api\/v3\/accounts\/([A-Za-z0-9_]{1,15})\/(info\/smart_engagement|smarts\/meta)\/$/);
+          if (!m4) return send(404, { detail: "Not found" });
+          const h = m4[1].toLowerCase();
+          if (m4[2] === "info/smart_engagement") return M.moni.scores[h] == null ? send(404, { detail: "Not found" }) : send(200, { smartEngagement: { smartsCount: (M.moni.smarts[h] || []).length, moniScore: M.moni.scores[h], mentionsCount: 3, smartMentionsCount: 1 } });
+          const items = (M.moni.smarts[h] || []).map((x) => ({ meta: { userId: "1", userUrl: "https://x.com/" + x } }));
+          return send(200, { items, totalCount: items.length });
         }
         if (host === "twitterscore.io") {
           const u = new URL(req.url, "https://twitterscore.io");

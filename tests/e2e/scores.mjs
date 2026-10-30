@@ -77,6 +77,22 @@ try {
   r = await H.msg("smartFollowers", { handle: "bigvc", fresh: true });
   assert(r.results.twitterscore.list.length === 4, "TwitterScore API lists every smart follower (not just the free 3)");
 
+  // ---- Ethos (free, no key) and Moni (your free key) ----
+  M.ethos.scores["0x_nation"] = 1460;
+  M.moni.scores["0x_nation"] = 37;
+  M.moni.scores.bigvc = 880;
+  M.moni.smarts.bigvc = ["alpha", "Epsilon", "bigvc"];
+  await H.settings({ providers: { ethos: { enabled: true }, moni: { enabled: true } } });
+  await H.secrets({ moniKey: "moni-test" });
+  r = await H.msg("scoresRefreshOwn", { force: true, only: ["ethos", "moni"] });
+  assert(r.results.ethos.ok && r.results.ethos.score === 1460 && r.results.moni.ok && r.results.moni.score === 37, "Ethos (1460) and Moni (37) scores");
+  assert(M.ethos.calls.some((c) => /scorex@/.test(c)), "Ethos requests identify the app (X-Ethos-Client)");
+  r = await H.msg("scoreCheck", { handle: "beta" });
+  assert(/no Ethos profile/.test(r.results.ethos.error || ""), "an account without an Ethos profile is not shown with Ethos' default score: " + r.results.ethos.error);
+  r = await H.msg("smartFollowers", { handle: "bigvc", fresh: true });
+  assert(JSON.stringify(r.results.moni.list.map((x) => x.handle)) === JSON.stringify(["alpha", "epsilon"]), "Moni smarts read from profile links, the account itself excluded");
+  assert(!r.results.ethos, "Ethos is not asked for smart followers (it has none)");
+
   // ---- smart-follower search -> candidates ----
   await H.settings({ providers: { twitterscore: { mode: "public" } } });
   await H.msg("targetsUpsert", { rows: ["delta"] });
