@@ -38,6 +38,15 @@
     async openComposer(m) { return A.openComposer(m); },
     async type(m) { return A.type(m); },
     async composerText() { return A.composerText(); },
+    // Diagnostics: how many elements each selector key finds on this page (read-only, nothing is clicked).
+    async selfTest(m) {
+      const keys = [].concat(m.keys || []).filter((k) => typeof k === "string").slice(0, 40);
+      const counts = {};
+      for (const k of keys) { try { counts[k] = D.qa(k).length; } catch (_) { counts[k] = -1; } }
+      const cells = D.qa("userCell");
+      const badgeCells = cells.filter((c) => !!D.q("followsYouBadge", c)).length;
+      return { ok: true, counts, me: X.myHandle(), url: location.href, cells: cells.length, badgeCells };
+    },
     async clearComposer() { return A.clearComposer(); },
     async closeComposer() { return A.closeComposer(); },
     async submitReply(m) { return A.submitReply(m); },

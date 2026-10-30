@@ -20,6 +20,7 @@ import { refreshProfile } from "../lib/watcher.js";
 import { workerTab } from "../lib/tabs.js";
 import { recordSpend } from "../lib/costs.js";
 import * as SB from "../lib/scoreboard.js";
+import { runSelfTest } from "../lib/diagnostics.js";
 
 const EXT_ORIGIN = chrome.runtime.getURL("");
 
@@ -248,6 +249,9 @@ const handlers = {
   smartSweep: (m) => startScoreJob("sweep", "Smart followers", (ctl) => SB.sweepSmartFollowers((m.handles || []).map(String), ctl)),
   targetScores: (m) => startScoreJob("targets", "Target scores", (ctl) => SB.refreshTargetScores((m.handles || []).map(String), String(m.provider || ""), ctl)),
   scoreJobCancel: async () => { if (scoreJob) scoreJob.cancel = true; return { ok: true }; },
+
+  // ---- diagnostics ----
+  selfTest: () => keepAlive(() => runSelfTest()),
 
   learningRun: async () => {
     await patchState({ lastLearningAt: 0, learningForce: true });

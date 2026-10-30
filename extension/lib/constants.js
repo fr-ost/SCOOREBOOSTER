@@ -127,6 +127,7 @@ export const CMD = Object.freeze({
   FOLLOW_STATE: "followState",
   UNFOLLOW: "unfollow",
   REPLY_STATS: "replyStats",
+  SELF_TEST: "selfTest", // counts which selectors match on the current page (Diagnostics)
 });
 
 // Runtime messages (content/UI -> SW via chrome.runtime.sendMessage({ sx: MSG, ... })).
