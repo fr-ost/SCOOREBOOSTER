@@ -502,7 +502,8 @@ export default {
         const total = num(job.total), done = num(job.done);
         const pct = total ? Math.max(3, (done / total) * 100) : running ? 6 : 100;
         const kind = job.status === "error" ? "red" : job.status === "cancelled" ? "grey" : running ? "" : "green";
-        const pname = jobProvider ? providerName(jobProvider) + " · " : "";
+        const jp = job.provider || jobProvider; // job.provider is saved by the worker, so it survives a reload
+        const pname = jp ? providerName(jp) + " · " : "";
         const res = job.result || {};
         add(jobHost, h("div", { class: "job-strip" },
           h("div", { class: "job-head" },

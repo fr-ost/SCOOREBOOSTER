@@ -148,7 +148,8 @@ export default {
       const sq = { low: "green", medium: "amber", high: "red" }[lvl];
       const factors = Array.isArray(r.factors) ? r.factors : [];
       const hrs = r.hoursToLimit;
-      const hoursText = hrs == null || !Number.isFinite(Number(hrs)) ? "-" : Number(hrs) <= 0 ? "reached" : Number(hrs) < 1 ? `~${Math.max(1, Math.round(Number(hrs) * 60))} min` : `~${Number(hrs).toFixed(Number(hrs) < 10 ? 1 : 0)} h`;
+      // The limit is per 24 h, so a pace that needs more than a day never reaches it: say so instead of "~199 h".
+      const hoursText = hrs == null || !Number.isFinite(Number(hrs)) ? "-" : Number(hrs) <= 0 ? "reached" : Number(hrs) >= 24 ? "not today" : Number(hrs) < 1 ? `~${Math.max(1, Math.round(Number(hrs) * 60))} min` : `~${Number(hrs).toFixed(Number(hrs) < 10 ? 1 : 0)} h`;
       fill(riskHost,
         h("div", { class: "risk-cell" },
           h("div", { class: "cap" }, "Risk estimate"),

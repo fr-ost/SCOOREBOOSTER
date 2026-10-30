@@ -1473,7 +1473,8 @@ export async function healthCheck({ settings, state, secretsRev } = {}) {
   try {
     if (chrome.permissions && !(await chrome.permissions.contains({ origins: ["https://x.com/*", "https://api.openai.com/*"] }))) add("fail", "Site access to x.com or api.openai.com is missing", "#diagnostics");
   } catch (_) { /* not available */ }
-  if (secretsRev && secretsRev.hasOpenai === false) add("warn", "No OpenAI API key", "#models");
+  // Same levels as Settings > Diagnostics, so the rail and the quick check agree.
+  if (secretsRev && secretsRev.hasOpenai === false) add("fail", "No OpenAI API key: ScoreX cannot write replies", "#models");
   if (s.account && !String(s.account.handle || "").trim()) add("warn", "Your X handle is not set", "#settings");
   if (st.status === STATUS.RUNNING && st.nextTickAt && now - st.nextTickAt > 10 * 60000) add("warn", `No engine check since ${fmtTime(st.nextTickAt)}: the scheduler may be stuck`, "#diagnostics");
   for (const [id, cfg] of Object.entries(s.providers || {})) {
@@ -1490,6 +1491,12 @@ export async function healthCheck({ settings, state, secretsRev } = {}) {
     if (!ok) add("warn", `${def.name}: site access not granted`, "#scores");
   }
   if (st.reachAlert) add("warn", "Your replies are reaching far fewer people than last week", "#safety");
+  // The last live X test (state.lastSelfTest, saved by the worker) counts for a week.
+  const lt = st.lastSelfTest;
+  if (lt && Array.isArray(lt.checks) && now - (Number(lt.at) || 0) < 7 * 864e5) {
+    const bad = lt.checks.filter((c) => c && !c.ok).length + (lt.stop ? 1 : 0);
+    if (bad) add("fail", `Live X test: ${bad} check${bad === 1 ? "" : "s"} failed`, "#diagnostics");
+  }
   if (st.followBadgeOkAt && now - st.followBadgeOkAt > 3 * 864e5) add("warn", "The \"Follows you\" badge was not seen for 3+ days", "#diagnostics");
   try {
     const used = await chrome.storage.local.getBytesInUse(null);

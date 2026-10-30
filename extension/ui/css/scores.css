@@ -8,6 +8,12 @@
 /* My scores: one ledger cell per provider */
 .pcells { margin-bottom: 6px; }
 .pcells .pcell { flex: 1 1 230px; gap: 6px; padding-top: 16px; padding-bottom: 16px; }
+/* Four sites: 4 columns, 2 x 2 when they do not fit (a wrapped flex row would leave its first cell indented). */
+.pcells .panel-in { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 1180px) {
+  .pcells .panel-in { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pcells .pcell:nth-child(odd) { padding-left: 0; }
+}
 .pcell .fig-value { font-size: var(--fs-hero); line-height: 1.05; }
 .pcell .pcell-cap { width: 100%; }
 .pcell .pcell-cap .tag { margin-left: auto; }
@@ -82,7 +88,8 @@
   .prow-grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 }
 @media (max-width: 720px) {
-  .pcells .pcell { flex-basis: 100%; }
+  .pcells .panel-in { grid-template-columns: minmax(0, 1fr); }
+  .pcells .pcell { padding-left: 0; padding-right: 0; }
   .cover { grid-template-columns: minmax(80px, 100px) minmax(40px, 1fr) auto; }
   .cover .btn { grid-column: 1 / -1; justify-self: start; }
   .prow-grid { grid-template-columns: minmax(0, 1fr); }

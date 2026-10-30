@@ -28,7 +28,7 @@ const STRATEGIES = [
 // ---------------------------------------------------------------- diagnostics
 
 const DAY_MS = 864e5;
-const LIVE_KEY = "sx.diag.live"; // last live X test result (this browser only)
+const LIVE_KEY = "sx.diag.live"; // last live X test result in this browser (state.lastSelfTest is preferred when newer)
 const STATUS_WORD = { pass: "Pass", warn: "Warning", fail: "Failure", skip: "Not checked" };
 const readLive = () => { try { const v = JSON.parse(window.localStorage.getItem(LIVE_KEY) || "null"); return v && Array.isArray(v.checks) ? v : null; } catch (_) { return null; } };
 const writeLive = (v) => { try { window.localStorage.setItem(LIVE_KEY, JSON.stringify(v)); } catch (_) { /* storage blocked */ } };
@@ -138,7 +138,10 @@ const redactText = (text, own) => String(text == null ? "" : text)
 // Diagnostics section. full: every check (#diagnostics); otherwise only warnings and failures plus a link.
 function diagnosticsSection(ctx, { full = false } = {}) {
   let quick = null;
-  let live = readLive();
+  // The last live test: the worker saves it in state.lastSelfTest (any browser window); this browser's copy is the fallback.
+  const fromState = () => { const v = ctx.data[K.state] && ctx.data[K.state].lastSelfTest; return v && Array.isArray(v.checks) ? { at: v.at, checks: v.checks, stop: v.stop || null } : null; };
+  const newer = (a, b) => (!a ? b : !b ? a : (Number(b.at) || 0) > (Number(a.at) || 0) ? b : a);
+  let live = newer(readLive(), fromState());
   let liveRunning = false;
   const head = h("div", { class: "diag-head", id: "diagHead" });
   const rowsHost = h("div", { class: "dg-list", id: "diagList" });

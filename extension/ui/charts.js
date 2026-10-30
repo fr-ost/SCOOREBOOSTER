@@ -259,7 +259,8 @@ export function funnel(stages, { w, width } = {}) {
     let sub = st.sub || st.hint || "";
     if (!sub && i > 0) {
       const prev = Number(list[i - 1].value) || 0;
-      if (prev) sub = `${Math.round((v / prev) * 1000) / 10}% of ${String(list[i - 1].label).toLowerCase()}`;
+      // A stage can hold accounts the previous one does not (e.g. commented on, then followed you): no "116% of".
+      if (prev && v <= prev) sub = `${Math.round((v / prev) * 1000) / 10}% of ${String(list[i - 1].label).toLowerCase()}`;
     }
     svg.appendChild(s("text", { x: 0, y: y + (sub ? 16 : 23), class: "funnel-label" }, st.label));
     if (sub) svg.appendChild(s("text", { x: 0, y: y + 31, class: "funnel-conv" }, sub));

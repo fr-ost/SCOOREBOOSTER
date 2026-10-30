@@ -73,6 +73,11 @@
 .dg-group { margin: 0; font: 650 var(--fs-cap)/1 var(--font); text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-2); padding: 16px 0 6px; border-bottom: 1px solid var(--border-strong); }
 .dg-note, .dg-allok { margin: 6px 0 0; }
 @media (max-width: 900px) { .dg { grid-template-columns: 16px 160px minmax(0, 1fr) 110px; } }
+/* Mid widths: level + daily limit side by side, the factor list full width under them. */
+@media (max-width: 1100px) and (min-width: 721px) {
+  .risk-report { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .risk-report .risk-factors { grid-column: 1 / -1; grid-row: 2; border-left: none; border-top: 1px solid var(--border); padding-left: 0; }
+}
 @media (max-width: 720px) {
   .risk-report { grid-template-columns: minmax(0, 1fr); }
   .risk-cell { padding-left: 0; }

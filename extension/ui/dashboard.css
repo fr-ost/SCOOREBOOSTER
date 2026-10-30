@@ -212,11 +212,14 @@ code, pre, .mono { font-family: var(--mono); font-size: var(--fs-s); }
   min-height: var(--bar-h); display: flex; align-items: center; gap: 8px 12px;
   padding: 6px var(--gutter); background: var(--bg); border-bottom: 1px solid var(--border);
 }
-.bar-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex: 0 1 auto; }
+/* When the bar is short of room the date line gives way first (high shrink), then the status reason; the chips
+   never shrink, so they cannot slide under the status (long titles like "Settings › Diagnostics"). */
+.bar-title { display: flex; align-items: baseline; gap: 12px; min-width: 0; flex: 0 100 auto; }
 .screen-title { font-size: var(--fs-xl); font-weight: 700; letter-spacing: -0.02em; white-space: nowrap; flex: none; }
 .screen-sub { color: var(--text-3); font: 500 var(--fs-s)/1.2 var(--mono); white-space: nowrap; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .bar-spacer { flex: 1 1 auto; }
-.bar-chips { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.bar-chips { display: flex; align-items: center; gap: 8px; flex: none; }
+.bar-chips > * { flex: none; }
 .bar-chips:empty { display: none; }
 .bar-theme { display: flex; }
 .btn.menu-btn { display: none; }
