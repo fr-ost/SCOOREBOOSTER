@@ -9,7 +9,7 @@ you would (content scripts in a pinned X tab).
 > * X's rules restrict automated replies. Every safety feature below lowers the risk, but none of them makes
 >   automation undetectable or risk-free. Review mode (the default) is the safest way to use ScoreX.
 > * The default volume is high (up to 200 replies a day, each with a like, around the clock). That is your
->   choice as the account owner; a lower daily limit, a weekly ramp and active hours (Safety tab) lower the
+>   choice as the account owner; a lower daily limit, a weekly ramp and active hours (Safety screen) lower the
 >   risk of X limiting the account. ScoreX stops at the first warning, captcha or rate-limit message.
 > * Nothing here can guarantee more follow-backs or a higher Kaito / Sorsa score. Good replies help, but
 >   results depend on your content and on the accounts you reply to.
@@ -33,7 +33,7 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
 
 ## 2. First-time setup (5 minutes)
 
-1. **Models & Costs > OpenAI API key**: paste your key and press **Save**, then **Test**. The key is stored only
+1. **Models & costs > OpenAI API key**: paste your key and press **Save**, then **Test**. The key is stored only
    inside the extension (its own IndexedDB, which pages on x.com cannot read), is shown masked, and is never
    logged or exported.
 2. **Settings > Account**: your handle is preset to `0x_nation`. ScoreX stops if a different account is logged in.
@@ -42,17 +42,18 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
      then shows every target's newest posts, which is the lightest and fastest way to watch many accounts.
    * **Batched Latest search** (default, no setup): `(from:a OR from:b ...) -filter:replies`, 12 accounts per search.
    * **Profile rotation**: visits a few profiles per check. Fine for a handful of targets only.
-4. **Targets**: paste handles or profile links (or import CSV / JSON / TXT) and choose the **Tier**
+4. **Targets > Add targets**: paste handles or profile links (or import CSV / JSON / TXT) and choose the **Tier**
    (**Tier 1**: big influencers, **Tier 2**: smart accounts). You don't have to sort out who follows you:
    ScoreX checks every account first and **only comments on accounts that don't follow you** (see
-   [Follow tracking](#follow-tracking)). Or use **Find new targets** (followers/following of a big account,
-   people search, or accounts that several smart accounts follow). Candidates are ranked and bot-filtered;
-   you pick which to add.
-5. **Tone & Prompts > Tone prompt**: describe in your own words how your replies should sound (voice,
-   attitude, wording, length, casing). It is sent with every comment. A sensible default is filled in.
-6. **Models & Costs > Monthly budget**: set a limit (for example $10). ScoreX stops when it is reached.
-7. Press **Start** (header or popup). It starts in **Review mode**; switch to **Full auto** on the Dashboard
-   whenever you want.
+   [Follow tracking](#follow-tracking)). Or use **Discover**: the smart followers of big accounts (from the score
+   sites you connect), followers / following of a big account, people search, or accounts that several smart
+   accounts follow. Candidates are ranked and bot-filtered; you pick which to add.
+5. **Tone > Tone prompt**: describe in your own words how your replies should sound (voice, attitude, wording,
+   length, casing). It is sent with every comment. A sensible default is filled in. **Try it** writes a sample
+   reply for any post text you paste (one real generation, never posted).
+6. **Models & costs > Monthly budget**: set a limit (for example $10). ScoreX stops when it is reached.
+7. Press **Start** (engine bar or popup). It starts in **Review mode**; switch to **Full auto** on Today whenever
+   you want (ScoreX asks you to confirm). The **Today** screen shows the setup steps that are still open.
 
 ## 3. How it works
 
@@ -65,31 +66,39 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
      -> limits (200 per 24 h, 2 per account per day, 100 accounts per day, budget)
      -> OpenAI: post + bio + 2-3 recent posts + your Tone prompt -> reply (JSON)
      -> rule check + quality model check (generic? off-topic? repeated vs your last 50?) -> regenerate once or skip
-   Review mode: reply waits in the Review Queue (edit / approve / regenerate / skip)
+   Review mode: reply waits in Review (edit / approve / regenerate / skip)
    Full auto:   reply is queued with a human delay
      -> open the post, "read" it, scroll, optional like, type at a human speed, verify, submit, confirm
      -> random 2-6 min gap (and longer breaks) before the next comment
  catch-up: when the queue is nearly empty, each account's latest 2 earlier posts (up to 48 h old) get
  comments too, so posts from before ScoreX ran are not missed
  background when idle: follow checks (your followers list + profiles), follow-backs, removal after
- 14 days without a follow-back, engagement checks, optional cleanup
+ 14 days without a follow-back, replies from authors (your mentions), engagement and reach checks,
+ optional cleanup
 ```
 
 ## 4. Dashboard guide
 
-The Dashboard shows a short setup checklist until ScoreX is ready. Every tab shows the essentials first;
-everything else is in collapsed **Advanced** sections (their open/closed state is remembered).
+The dashboard has a left rail in three groups (**Work**, **Growth**, **Setup**) and an engine bar at the top
+with the status, Start / Pause / Stop and the Review / Full auto switch. Details open in a drawer on the right,
+so the list stays where it was. Light and dark themes (Settings); narrow windows get a compact rail.
 
-| Tab | What you do there |
+| Screen | What you do there |
 |---|---|
-| **Dashboard** | Status (Running / Paused / Stopped with the reason), today's counters vs limits, cost today / this month, Review / Full auto switch, recent activity, "Run a check now". A red banner appears after an auto-stop. |
-| **Targets** | Add / import / export targets, follow status of every account (checking / not following - day N of 14 / follows you / followed back), follow-back rules, blacklist, tier, tone and preset per target, enable/disable, re-check. Discovery and candidates. Rank columns: **ScoreX rank** (own formula) and **Sorsa Score** (if enabled). |
-| **Review Queue** | Every generated reply with the post, the author, the model, the cost and quality notes. Edit, Approve, Regenerate (costs another call), Skip. Approved replies post one by one in their own time slots. |
-| **Models & Costs** | API key, model list with **editable model names** and **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort Low / Medium / High, fallback models, preset per tier, quality checker, cost estimator, budget, totals per model / day / week / month, performance per model and tone. |
-| **Tone & Prompts** | Your **Tone prompt** (the one input that sets how replies sound) and a prompt preview. Advanced: extra rules, learning from your best-performing replies, built-in and custom tones (per-target overrides), A/B testing settings, results and suggestions. |
-| **Safety** | Daily limits (optional weekly ramp), comments per account, different accounts per day, gaps and breaks, active hours and time zone (off by default), like before replying, typing speed, skip rules, failure limit, the list of auto-stop triggers. |
-| **History** | Every reply attempt: date, target, tier, post link, model, reasoning level, tokens, cost, comment, status (posted / skipped / failed + reason) and results (liked, reply likes, replies, author replied, followed back). Filters, totals, CSV export. |
-| **Settings** | Account, watch strategy, comment window (default 2-20 min after a post), review expiry, learning, cleanup, Sorsa, worker tab mode, selector overrides, theme, export / import JSON, history CSV, reset. |
+| **Today** | Engine state and **Run a check now**, the day's rhythm and counters vs limits, the setup steps until ScoreX is ready, this week's figures (comments, follow-backs, cost, your main score), replies waiting for review (expiring first), **Needs you** (reach alert, authors who answered your replies, page-load budget near its cap, targets close to their give-up day, new candidates, budget, health) and the activity log in plain words. After a safety stop a banner offers **Review stop...**: you confirm that you checked your account before ScoreX resumes. |
+| **Review** | Keyboard-first queue: **J/K** move, **A** approve, **E** edit, **S** skip, **R** regenerate, **O** open the post, **Z** undo (5 s), **?** lists the keys. Sort by expiring first, newest or priority. Approve is disabled for accounts that follow you now. **Approve all** asks whether to keep your unsaved edits. Approved replies show when they will post, with Cancel. |
+| **Targets** | Status chips with counts (Commenting, Checking, Followed back, Follow you, Off, Not found), search (**/**), tier and **High value** filters, a Columns menu, and bulk actions (tier, tone, preset, on/off, re-check, fetch scores, blacklist, remove). Click a row (or press Enter) for the target drawer: profile, scores, value and follow-back chance with the reason, the timeline (every comment and its results, follow checks, the planned give-up day) and per-account settings. **Add targets** and **Edit rules** (follow rules, check frequency, value ranking) open as sheets; the blacklist is a sub-view. |
+| **Discover** | Find new targets: smart followers of big accounts (score sites), followers or following of an account, common follows, people search. Shows the big accounts already swept and a candidates table with per-site scores, overlap ("listed by 3 of 5"), filter verdicts and **Add N as Tier X**. |
+| **Scores** | Your score on each connected site (tier, 7- and 30-day change, history chart with follow-back ticks), **Follow-backs that count**, **Check any account**, score coverage of your targets with a refresh job (progress and Cancel), and the providers setup (on/off, mode, key, daily cap, usage, Test, overrides). |
+| **Results** | **Overview** (funnel, activity, which tones, models and tiers bring follow-backs), **Comments** (every attempt with filters, a drawer with model, tokens, cost and quality notes, CSV export, history retention) and **Spend** (budget, daily cost, totals and performance per model). Ranges 7 d / 30 d / All. |
+| **Tone** | Your Tone prompt, **Try it**, **Learn from my edits** with this week's edit rate, extra rules, built-in and custom tones, A/B tests and suggestions. |
+| **Models & costs** | API key, model list with **editable model names** and the **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort, fallback models, preset per tier, quality checker, cost estimator, budget. |
+| **Safety** | Risk report, reach alert, **Safety profile** (Careful / Standard / Max / Custom), daily limits and ramp, gaps and breaks, active hours (off by default), like before replying, typing speed, skip rules, **X page loads** in the last 24 hours (with an optional cap), the **reply reach monitor**, adaptive watching and the list of auto-stop reasons. |
+| **Settings** | **Diagnostics** first (quick check, live X test, copy a redacted report), then account, watching, comment window, review expiry, learning and conversation alerts, cleanup, worker tab, selector overrides, theme, backup export / import, reset. |
+
+The **popup** shows the status, the main action and the next reply to review (approve or skip it there). On an
+X profile page it adds a **This profile** card: target status, scores from your connected sites, **Check
+scores**, **Add as Tier 1 / 2**, **Smart followers** and **Blacklist**.
 
 ### Models and prices
 Model names are free text: when OpenAI releases a new model, type its name into a model row (or add a row) and
@@ -114,7 +123,7 @@ not counted twice. Rough per-reply costs with the default prices, including the 
 | Balanced | gpt-6.1-terra / medium | ~$0.008 | ~$7 |
 | High quality | gpt-6.1-sol / high | ~$0.036 | ~$32 |
 
-The estimator in Models & Costs uses your own average token usage once you have history.
+The estimator in Models & costs uses your own average token usage once you have history.
 
 ## 5. Safety (main account)
 
@@ -144,10 +153,16 @@ stays realistic even when the X tab is in the background.
 **Auto-stop**: ScoreX stops immediately, shows a desktop notification and a red **!** badge, and does **not**
 retry when it sees: a captcha / verification page, X's "this request looks like it might be automated" or any
 unusual-activity warning, a rate-limit message ("over the daily limit", "Something went wrong" three times in a
-row), a locked or restricted account, the login page, a different logged-in account, 2 posting failures in a
-row, a page whose posts can no longer be read (X changed its markup), a rejected OpenAI key, exhausted OpenAI
-quota, or the monthly budget. **Resume is always manual**: check your account on x.com first, then press
-"I checked my account - resume".
+row), a locked or restricted account, the login page, a different logged-in account (or one ScoreX cannot read
+on 3 page loads in a row), a dialog or notice ScoreX does not know (for example a new "label AI content"
+question: it is never clicked, and its text is shown with the stop), 2 posting failures in a row, a page whose
+posts can no longer be read (X changed its markup), a rejected OpenAI key, exhausted OpenAI quota, the monthly
+budget, or a reach collapse when the reach monitor is set to *Stop*. **Resume is always manual**: press
+**Review stop...**, check your account on x.com, tick the box and resume.
+
+**Account check before every action**: right before each like, reply and unfollow click the page checks again
+that it is logged in as your account. If the account cannot be read, nothing is clicked or typed and the reply
+waits for the next slot.
 
 **Pause / Stop** take effect immediately, also in the middle of typing a reply: nothing is submitted after
 you press them, and the half-typed text is cleared.
@@ -155,6 +170,28 @@ you press them, and the half-typed text is cleared.
 **Never done**: no blind re-submit (if the confirmation is unclear ScoreX checks the thread for your reply
 instead of posting again), no replies to posts it already handled, no clicking through captchas or warnings,
 no X API, no other accounts.
+
+**Safety profiles** (Safety screen): *Careful* (20, 40, then 60 a day, 1 per account, 40 accounts, gaps of
+6-15 min), *Standard* (60, 90, then 120 a day, 2 per account, 70 accounts, gaps of 3-8 min) and *Max* (your
+defaults: 200 a day, 2 per account, 100 accounts, gaps of 2-6 min). Changing any single field shows *Custom*.
+
+**Risk report**: an estimate built from what raises the risk most (replies in the last 24 hours vs the limit,
+hours active per day, Full auto, a like on every reply, how fast replies follow a post, X page loads, and your
+reply reach), with the hours you need to reach today's limit. The points are hand-picked heuristics, not a
+guarantee and not something X publishes.
+
+**X page loads**: every page ScoreX opens in the X tab is counted by purpose (watching, posting, follow checks,
+engagement checks, mentions, diagnostics) for the last 24 hours. You can set a cap; at the cap ScoreX waits
+until older loads leave the 24-hour window (never a stop). **Adaptive watching** slows the watch checks down
+(1.5x per empty check, up to 15 min) after 6 checks in a row found nothing new, and returns to normal with the
+first new post.
+
+**Reply reach monitor** (on, action *Review*): after enough checked replies (15) ScoreX compares the views of
+your recent replies with your earlier ones. If the median drops by 60% or more, or more than half of the recent
+replies get fewer than 10 views, it alerts you (notification, banner on Today and Safety) and then does what
+you chose: only notify, switch to Review mode, halve the daily limit until you dismiss the alert, or stop. It
+never switches anything back by itself. View counts are what X shows on the page, and low reach can have other
+causes (topic, time of day), so treat the alert as a signal to look, not proof of a penalty.
 
 **Keeps running**: all state is in `chrome.storage` and IndexedDB, so the service worker can sleep or be
 killed at any time. After a Chrome restart a running engine resumes by itself (a safety stop stays stopped).
@@ -179,7 +216,7 @@ ScoreX only comments on accounts that **don't follow you**. Import a list of 100
    profile one last time and then **removes it from your targets and adds it to the blacklist**. Blacklisted
    accounts are never added again by import, paste or discovery until you remove them from the blacklist
    (Targets > Blacklist). The number of days, automatic removal and the blacklist are switches on the
-   Targets tab.
+   Targets screen (**Edit rules**).
 
 Safety check: if X shows your followers list without any "Follows you" badge, the badge markup has changed
 and every account would look like a non-follower, so ScoreX stops ("X page changed") instead of commenting.
@@ -189,7 +226,7 @@ that followed you unfollows later, it is treated as not following again (after t
 ## 6. Scores (TwitterScore, Sorsa, Ethos, Moni)
 
 ScoreX can show your own score on four score sites, check any account, and turn the "smart followers" of big
-accounts into targets. Every provider is **off** until you turn it on in the **Scores** tab; Chrome then asks
+accounts into targets. Every provider is **off** until you turn it on in **Scores > Providers**; Chrome then asks
 for permission to reach that one site. Only X handles are sent (yours, your targets' or the account you check).
 Provider keys are stored like the OpenAI key (the extension's IndexedDB) and are never logged or exported.
 
@@ -234,10 +271,23 @@ the **combined** rank blends both (50/50 by default).
   with a higher priority.
 * Targets that never respond after N comments (default 6) cool down for 10 days.
 * **A/B testing**: your Tone prompt is always the default. Pick extra tones (and/or presets) to test against
-  it in Tone & Prompts (none by default, so every reply uses your Tone prompt until you do). Variants are
+  it on the Tone screen (none by default, so every reply uses your Tone prompt until you do). Variants are
   chosen with Thompson sampling, starting with a lean towards your Tone prompt, plus an exploration share
-  (20%). Tone & Prompts shows results and suggests the best tone and model once each combination has
+  (20%). The Tone screen shows results and suggests the best tone and model once each combination has
   enough checked replies. A tone or preset set on a single target is never overridden by A/B tests.
+* **Conversation alerts** (on): when idle, at most every 40 minutes, ScoreX reads your mentions and spots
+  authors who answered one of your replies from the last 72 hours. They show up under **Today > Needs you**
+  (Open on X, Mark done) with a notification. ScoreX never answers for you.
+* **Learn from my edits** (on, Tone screen): when you change a reply in Review before approving it, your last
+  few edits (draft -> what you posted) are shown to the model as style examples. They are data only, like the
+  post text, and never become instructions. Small typo fixes are ignored.
+* **Value ranking** (on, Targets > Edit rules): a target's priority starts from its *value* = its score (the
+  score sites when available, otherwise ScoreX rank) x its chance to follow back (learned from your own
+  results), plus a boost for tier 1. The weights are heuristics. **High value** on Targets shows value 70+,
+  and the drawer explains each value.
+* **History retention** (Results > Comments): skipped and failed attempts older than 30 days are shortened to
+  the essentials, and deleted after 90 days. Posted replies (with their results) and anything still waiting are
+  never touched.
 * **Cleanup** (default **OFF**): unfollows targets you follow that did not follow back within 7+ days. It has its
   own daily limit, a whitelist and tier-1 protection, and it re-checks each profile right before unfollowing.
   Only accounts in your target list are ever considered (an account removed after 14 days without a
@@ -250,38 +300,43 @@ Load the extension (section 1), add your API key, then:
 
 **Phase 1: core**
 1. Add 2-3 targets that post often and don't follow you (Tier 2), plus one account that does follow you, set
-   the watch strategy, press **Start**. Within a minute or two the Targets tab shows **Not following** for the
+   the watch strategy, press **Start**. Within a minute or two the Targets screen shows **Not following** for the
    first ones and **Follows you** for the other; only the first ones ever get replies.
-2. Within a few minutes of one of them posting, a reply should appear in **Review Queue**. Check the post link,
+2. Within a few minutes of one of them posting, a reply should appear in **Review**. Check the post link,
    the model and the cost.
 3. Edit it and **Approve**. Watch the pinned X tab: it opens the post, types the reply and posts it.
-4. Check: the reply on x.com is exactly your text; **History** shows it as posted with tokens and cost;
-   **Models & Costs** totals and the estimator update; skipped posts (giveaways, links, too old) show a reason.
+4. Check: the reply on x.com is exactly your text; **Results > Comments** shows it as posted with tokens and cost;
+   **Results > Spend** and the estimator in Models & costs update; skipped posts (giveaways, links, too old) show a reason.
 
 **Phase 2: full auto and safety**
 1. **Safety** shows the daily limits (200/day, 2 per account, 100 accounts). Try a narrow active-hours window:
    the status says "Sleeping".
-2. Switch to Full auto on the Dashboard and check that replies are posted with 2-6 minute gaps, at most
+2. Switch to Full auto on Today and check that replies are posted with 2-6 minute gaps, at most
    2 per account per 24 hours, each post liked first.
 3. Safe things to try: close the pinned X tab (it comes back), restart Chrome (it resumes by itself), log
    out of X in that profile (ScoreX stops with "Logged out", notifies you and shows a red badge).
 
 **Phase 3: learning and cleanup**
-1. A day after posting, **History** fills in the result columns (reply likes, replies, author replied).
-   When an account you commented on follows you, the Targets tab shows **Followed back** and it gets no more
+1. A day after posting, **Results > Comments** fills in the result columns (reply likes, replies, author replied).
+   When an account you commented on follows you, the Targets screen shows **Followed back** and it gets no more
    replies; an account with no follow-back 14 days after the first reply moves to **Targets > Blacklist**.
-2. **Tone & Prompts > A/B testing** shows arms and, once there is enough data, suggestions.
-3. **Settings > Cleanup**: leave it off unless you want it. Use **Preview** first to see who would be unfollowed.
+2. **Tone > A/B testing** shows arms and, once there is enough data, suggestions.
+3. **Settings > Cleanup**: leave it off unless you want it. Use **Preview unfollows** first to see who would be unfollowed.
 
 ## 9. Updating selectors when X changes
 
 All X selectors and page text patterns live in **`extension/content/selectors.js`**. Each entry is a list of
-fallbacks. To patch without editing code, use **Settings > Advanced > Selector overrides** with the same shape,
+fallbacks. To patch without editing code, use **Settings > Worker tab and selectors > Selector overrides** with the same shape,
 for example:
 
 ```json
 { "sel": { "replySubmitInline": ["[data-testid=\"tweetButtonInline\"]", "button[data-testid=\"replyButton\"]"] } }
 ```
+
+**Settings > Diagnostics** runs a quick check (permissions, storage, key, handle, the "Follows you" badge, the
+engine) and a **live X test**: it opens your home timeline, profile and followers list in the X tab (about
+30 seconds, never clicks or types) and shows which selectors still match. **Copy report** gives a redacted
+JSON (no keys, no other accounts' handles) to share when asking for help.
 
 The patterns are written for an English X interface. If you use X in another language, add your language's
 wording to the `text` patterns (captcha, rate limit, "Your post was sent", ...).
@@ -290,7 +345,7 @@ wording to the `text` patterns (captcha, rate limit, "Your post was sent", ...).
 
 * **X can change its page** at any time. ScoreX detects broken pages and stops, but it cannot fix them alone.
 * **Background tab rendering**: Chrome may not fully render x.com in a hidden tab. If ScoreX reports "X tab
-  not rendering", switch **Settings > Advanced > Worker tab** to *separate window* (keep that window visible, for
+  not rendering", switch **Settings > Worker tab and selectors > Worker tab** to *separate window* (keep that window visible, for
   example on a second screen) or enable **Safety > Bring X tab to front while posting**.
 * Only **original posts** are commented (no replies inside threads, no reposts). Quote posts are included by default.
 * "Following since" for cleanup is the first time ScoreX saw that you follow an account.
@@ -324,6 +379,7 @@ docs/ARCHITECTURE.md
 
 * Unit tests: `npm test` (Node 22+, no install needed).
 * End-to-end: needs Playwright with Chromium (`npm i -D playwright && npx playwright install chromium`), then
-  `node tests/e2e/p1_core.mjs`, `node tests/e2e/p2_auto.mjs`, `node tests/e2e/p3_learning.mjs` and
-  `node tests/e2e/ui_smoke.mjs`. They map x.com / api.openai.com to a local HTTPS mock, so no real account or
-  key is used.
+  `node tests/e2e/p1_core.mjs`, `node tests/e2e/p2_auto.mjs`, `node tests/e2e/p3_learning.mjs`,
+  `node tests/e2e/scores.mjs`, `node tests/e2e/ui_smoke.mjs` and the long run `node tests/e2e/soak.mjs`
+  (`SX_CYCLES=n` sets its length). They map x.com, api.openai.com and the score sites to local HTTPS mocks, so
+  no real account or key is used. `SX_PORT` gives each run its own port when several run at once.

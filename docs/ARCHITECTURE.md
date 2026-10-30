@@ -15,14 +15,27 @@ extension/
     history.js            history records = review queue + log of every generated comment
     costs.js              real cost from usage, spend ledger, budget, estimates, totals, performance
     targets.js            target CRUD, import parsing, follow status, tone/preset resolution, profile merge
-    scores.js             own ranking ("ScoreX rank"), bot flags, tier suggestion, Sorsa mapping
-    sorsa.js              optional Sorsa Score provider (user key + optional host permission)
+    scores.js             own ranking ("ScoreX rank"), bot flags, tier suggestion, value x follow-back chance
+    sorsa.js              older Sorsa-only refresh (kept for the sorsaTest / sorsaRefresh messages)
+    providerdefs.js       data-only definitions of the score sites (TwitterScore, Sorsa, Ethos, Moni)
+    providers.js          runs one provider capability (score / smart followers): api, public or page mode,
+                          owner overrides limited to the provider's own https hosts, optional permissions
+    pagereader.js         "browser tab" mode: reads a rendered provider page in a background tab, then closes it
+    scoreboard.js         sx.scoreboard: own scores + history, checks, smart lists, target scores, usage caps
+    analytics.js          funnel, heatmap and follow-back attribution for Results
+    diagnostics.js        live X self-test (home, profile, followers list; never clicks or types)
+    catchup.js            catch-up: each target's latest earlier posts when the queue runs dry
+    guard.js              pageVerdict: turns the page report into stop / soft / not-found verdicts
+    reach.js              reply reach monitor (median views now vs before, alert + chosen action)
+    conversations.js      conversation alerts: authors who answered your replies (mentions page)
     filters.js            post skip rules (ads, link-only, political, giveaway, gm, language, age)
     quality.js            comment sanitising + rule checks + similarity vs last 50 comments
     openai.js             raw Responses API client, usage extraction, error classification
     generator.js          prompt building, preset/fallback chain, quality check, regeneration
-    safety.js             ramp limits, active hours, gaps/breaks, per-target caps (pure)
-    tabs.js               pinned X worker tab, navigation, content-script messaging
+    safety.js             ramp limits, active hours, gaps/breaks, per-target caps, page-load budget, adaptive
+                          watch cadence, risk report (pure)
+    tabs.js               pinned X worker tab, navigation (+ X page-load ledger by purpose), content-script
+                          messaging, logged-in account tracking (state.me, unreadable-account streak)
     watcher.js            new-post detection (X List / batched Latest search / profile rotation)
     poster.js             human-like posting flow (navigate, read, scroll, like, type, submit, verify)
     discovery.js          candidate discovery jobs (followers/following/search/common follows)
@@ -36,13 +49,21 @@ extension/
     selectors.js          THE single config of DOM selectors + text patterns (user overrides merged)
     dom.js  detect.js  scrape.js  actions.js  content.js (router)
   ui/                     dashboard (options page) + popup
+    dashboard.js          shell: left rail (Work / Growth / Setup), engine bar, routes (#screen?param=..),
+                          storage watch + redraw, Full-auto confirm, safety-stop review dialog
+    components.js         DOM helpers (h(), no innerHTML with untrusted text), fields, drawer, sheets, tables
+    charts.js             inline SVG charts (sparklines, bars, history with event ticks, heatmap)
+    tabs/*.js             one module per screen: overview (Today), review, targets, discover, scores,
+                          history (Results), tones (Tone), models, safety, settings (with Diagnostics)
+    css/*.css             per-screen styles on the shared tokens in dashboard.css (light + dark)
 ```
 
 ## Ownership rule (race-free storage)
 
 * `sx.settings`, `sx.secrets`, `sx.selectorOverrides`: written by the dashboard, read by the service worker.
-* `sx.state`, `sx.targets`, `sx.candidates`, `sx.blacklist`, `sx.discovery`, `sx.logs`, `sx.spend`, `sx.learning`, `sx.seen`
-  and the IndexedDB history: written **only** by the service worker. The UI reads them (and listens with
+* `sx.providerOverrides`: written by the dashboard (Scores > Advanced), read by the service worker.
+* `sx.state`, `sx.targets`, `sx.candidates`, `sx.blacklist`, `sx.discovery`, `sx.logs`, `sx.spend`, `sx.learning`, `sx.seen`,
+  `sx.scoreboard`, `sx.conversations` and the IndexedDB history: written **only** by the service worker. The UI reads them (and listens with
   `chrome.storage.onChanged`) and asks the worker for changes with messages.
 
 ## Message API (UI -> service worker)
@@ -73,6 +94,17 @@ extension/
 | previewPrompt | `{ handle? }` | `{ instructions, input }` |
 | sorsaTest | - | `{ score, remaining }` |
 | sorsaRefresh | `{ handles }` | `{ updated }` |
+| scoresState | - | `{ providers, board }` |
+| scoresRefreshOwn | `{ force, only }` | `{ results }` |
+| providerTest | `{ id }` | `{ score, max, url, mode }` |
+| scoreCheck | `{ handle }` | `{ handle, results }` (also stored on the target when it is one) |
+| smartFollowers | `{ handle, fresh }` | `{ handle, results, merged }` (cached 3 days) |
+| smartSweep / targetScores | `{ handles }` / `{ handles, provider }` | `{ started }` (progress in `sx.scoreboard.job`) |
+| scoreJobCancel | - | `{}` |
+| sampleReply | `{ text, handle \| tier }` | `{ comment, model, effort, cost, tone, preset, quality }` (never posted) |
+| selfTest | - | `{ checks, stop }` (also kept in `state.lastSelfTest`) |
+| conversationDone | `{ id, done }` | `{}` |
+| reachDismiss | - | `{}` |
 | learningRun | - | `{}` |
 | learningSummary | - | `{ arms, suggestions }` |
 | abReset | - | `{}` |
@@ -85,7 +117,9 @@ extension/
 `status` = `{ state, effectiveMode, today: { posted, limit, generated, generationLimit, liked, likeLimit,
 skipped, failed, cost }, month: { cost, budget, pct, reached, warn }, pendingReview, queued,
 activeHours: { inside, opensAt, closesAt }, rampStage, daysSinceStart, hasApiKey, targetCount,
-activeTargetCount, follow: { checking, active, follows, followedBack, off, blacklisted }, label }`.
+activeTargetCount, follow: { checking, active, follows, followedBack, off, blacklisted }, label,
+risk: { level, score, factors, hoursToLimit }, footprint: { total, cap, byPurpose, hourly }, watch: { slow,
+intervalSec, emptyStreak }, reach: { ..., alert } }`.
 
 ## Follow status
 
@@ -122,6 +156,9 @@ See the header of `lib/history.js`. One record per generated comment. Records wi
 One randomized one-shot alarm (`sx.tick`) plus a 1-minute watchdog alarm. Each tick, in order:
 safety gates -> expire stale queue items (and drop items for accounts that follow you now or were removed)
 -> post one due item (approved/queued) -> otherwise watch for new posts and generate for the best fresh one
--> otherwise background work (queued profile refreshes, follow checks, learning checks, cleanup) -> schedule
-the next tick at a random interval inside active hours. A job lease in `sx.state.job`
+-> otherwise background work (queued profile refreshes and follow tracking take turns; then conversation alerts,
+engagement + reach checks, cleanup) -> schedule the next tick at a random interval inside active hours
+(stretched by adaptive watching after empty checks). Every X page load goes through `tabs.navigate`, which
+counts it by purpose and refuses it softly at the optional 24 h budget. A separate 4-hourly alarm refreshes
+your own scores and tidies the history (retention). A job lease in `sx.state.job`
 prevents two ticks from running at once, also across service-worker restarts.
