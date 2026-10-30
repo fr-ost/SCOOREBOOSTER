@@ -21,7 +21,7 @@ extension/
     quality.js            comment sanitising + rule checks + similarity vs last 50 comments
     openai.js             raw Responses API client, usage extraction, error classification
     generator.js          prompt building, preset/fallback chain, quality check, regeneration
-    safety.js             ramp limits, warm-up, active hours, gaps/breaks, per-target caps (pure)
+    safety.js             ramp limits, active hours, gaps/breaks, per-target caps (pure)
     tabs.js               pinned X worker tab, navigation, content-script messaging
     watcher.js            new-post detection (X List / batched Latest search / profile rotation)
     poster.js             human-like posting flow (navigate, read, scroll, like, type, submit, verify)
@@ -79,7 +79,7 @@ extension/
 | historyClear | - | `{}` |
 | resetAll | - | `{}` |
 
-`status` = `{ state, effectiveMode, warmup, today: { posted, limit, postedGroup, groupLimits, generated,
+`status` = `{ state, effectiveMode, today: { posted, limit, postedGroup, groupLimits, generated,
 generationLimit, liked, likeLimit, skipped, failed, cost }, month: { cost, budget, pct, reached, warn },
 pendingReview, queued, activeHours: { inside, opensAt, closesAt }, rampStage, daysSinceStart, hasApiKey,
 targetCount, activeTargetCount, label }`.

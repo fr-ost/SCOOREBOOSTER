@@ -1,4 +1,4 @@
-// Phase 2 end-to-end: full auto after warm-up, like + comment combo, ramp limits, active hours,
+// Phase 2 end-to-end: full auto from the first day, like + comment combo, ramp limits, active hours,
 // X warnings / rate limits / repeated failures / changed page -> auto-stop, service-worker restart,
 // closed X tab, queue expiry.
 import { boot, setup, assert, log, sleep, passCount } from "./harness.mjs";
@@ -17,16 +17,15 @@ try {
   await H.msg("targetsUpsert", { rows: ["bigbob"], defaults: { group: "B", tier: 1 } });
   await H.msg("targetsUpsert", { rows: ["alice"], defaults: { group: "A", tier: 2 } });
 
-  // ---- warm-up still active (day 1): auto setting still produces review items ----
+  // ---- no warm-up: Full auto works from the first day ----
   await H.msg("start");
-  await H.patchState({ firstStartedAt: Date.now() - 1 * DAY });
   let s = (await H.msg("getStatus")).status;
-  assert(s.effectiveMode === "review" && s.warmup.active, "day 1: Full auto is locked (warm-up)");
+  assert(s.effectiveMode === "auto" && s.warmup === undefined, "day 1: Full auto is active immediately (no warm-up)");
   assert(s.today.limit === 10, "week 1 daily limit is 10");
   const p1 = M.addPost("bigbob", "Most founders underestimate how long distribution takes to compound. Start before launch.", 3);
   await H.runNow();
   const r1 = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p1.id && x.attempts > 0), "item for p1", 90000);
-  assert(r1.status === "pending_review", "warm-up item went to the review queue, not auto");
+  assert(r1.status === "queued", "day-1 item is queued for auto posting, not sent to review");
   await H.msg("reviewAction", { id: r1.id, action: "skip" });
 
   // ---- ramp ----
@@ -41,8 +40,6 @@ try {
   assert(s.today.limit === 30, "ramp is clamped to the hard cap of 30");
 
   // ---- full auto: generate -> queue -> post with like ----
-  s = (await H.msg("getStatus")).status;
-  assert(s.effectiveMode === "auto" && !s.warmup.active, "after 3 days Full auto is active");
   const p2 = M.addPost("alice", "We cut our signup form from 9 fields to 3 and conversion jumped. Asking for company size later worked fine.", 2);
   await H.runNow();
   const q = await H.waitFor(async () => (await H.history()).find((x) => x.postId === p2.id && x.status === "queued"), "queued auto item", 90000);

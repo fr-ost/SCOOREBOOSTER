@@ -13,36 +13,15 @@ const T0 = dhaka(11, 0, 1); // first start: 2026-10-01 11:00 Dhaka
 describe("safety.js", () => {
   afterEach(() => { _setRandom(null); _setClock(null); });
 
-  describe("warm-up and mode", () => {
-    test("not started yet", () => {
-      const w = safety.warmup({ firstStartedAt: null }, T0);
-      assert.deepEqual(w, { active: true, endsAt: null, msLeft: 3 * DAY, notStarted: true });
-    });
-    test("active during the first 3 days, ends exactly at 3 days", () => {
-      const st = { firstStartedAt: T0 };
-      assert.equal(safety.warmup(st, T0).active, true);
-      const d1 = safety.warmup(st, T0 + DAY);
-      assert.equal(d1.active, true);
-      assert.equal(d1.msLeft, 2 * DAY);
-      assert.equal(d1.endsAt, T0 + 3 * DAY);
-      assert.equal(safety.warmup(st, T0 + 3 * DAY - 1).active, true);
-      const end = safety.warmup(st, T0 + 3 * DAY);
-      assert.equal(end.active, false);
-      assert.equal(end.msLeft, 0);
-      assert.equal(end.notStarted, false);
-      assert.equal(safety.warmup(st, T0 + 10 * DAY).msLeft, 0);
-    });
-    test("effectiveMode forces review during warm-up", () => {
-      const auto = { ...settings, mode: MODE.AUTO };
-      const st = { firstStartedAt: T0 };
-      assert.equal(safety.effectiveMode(auto, st, T0 + DAY), MODE.REVIEW);
-      assert.equal(safety.effectiveMode(auto, { firstStartedAt: null }, T0), MODE.REVIEW);
-      assert.equal(safety.effectiveMode(auto, st, T0 + 3 * DAY), MODE.AUTO);
-      assert.equal(safety.effectiveMode(settings, st, T0 + 30 * DAY), MODE.REVIEW); // review stays review
+  describe("mode", () => {
+    test("Full auto is available immediately (no warm-up)", () => {
+      assert.equal(safety.effectiveMode({ ...settings, mode: MODE.AUTO }, { firstStartedAt: null }, T0), MODE.AUTO);
+      assert.equal(safety.effectiveMode({ ...settings, mode: MODE.AUTO }, { firstStartedAt: T0 }, T0 + 60000), MODE.AUTO);
+      assert.equal(safety.effectiveMode(settings, { firstStartedAt: T0 }, T0 + 30 * DAY), MODE.REVIEW);
+      assert.equal(safety.warmup, undefined);
     });
     test("uses the injected clock by default", () => {
       _setClock(() => T0 + 4 * DAY);
-      assert.equal(safety.warmup({ firstStartedAt: T0 }).active, false);
       assert.equal(safety.daysSinceStart({ firstStartedAt: T0 }), 4);
     });
   });

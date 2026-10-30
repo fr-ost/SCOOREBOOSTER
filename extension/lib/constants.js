@@ -163,7 +163,6 @@ export const HARD = Object.freeze({
   minGapMin: 2, // never two comments closer than this
   perTargetDay: 1,
   perTargetWeek: 3,
-  warmupDays: 3,
   maxCommentChars: 280,
   maxPostFailures: 5,
   minCheckIntervalSec: 90,

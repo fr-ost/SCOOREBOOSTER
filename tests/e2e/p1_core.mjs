@@ -31,7 +31,7 @@ try {
   let st = await H.store("sx.state");
   assert(st.status === "running" && st.firstStartedAt, "state running with firstStartedAt");
   const status = await H.msg("getStatus");
-  assert(status.ok && status.status.effectiveMode === "review" && status.status.warmup.active, "warm-up forces review mode");
+  assert(status.ok && status.status.effectiveMode === "review", "Review mode is the default");
 
   // ---- detection + generation ----
   const hist = await H.waitFor(async () => {

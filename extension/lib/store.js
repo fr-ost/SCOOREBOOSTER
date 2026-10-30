@@ -67,7 +67,7 @@ export const DEFAULT_SETTINGS = {
     handle: "0x_nation", // your own X handle (without @). Used to verify the logged-in account before acting.
     verifyAccount: true,
   },
-  mode: MODE.REVIEW, // review | auto (auto is locked during warm-up)
+  mode: MODE.REVIEW, // review | auto
   timezone: "Asia/Dhaka",
 
   watch: {

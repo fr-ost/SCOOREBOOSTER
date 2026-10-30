@@ -47,7 +47,8 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
 5. **Tone & Prompts > Style examples**: paste 5-10 of your best past replies. This matters more than anything
    else for sounding like you.
 6. **Models & Costs > Monthly budget**: set a limit (for example $10). ScoreX stops when it is reached.
-7. Press **Start** (header or popup). The first 3 days are **Review mode only**.
+7. Press **Start** (header or popup). It starts in **Review mode**; switch to **Full auto** on the Dashboard
+   whenever you want.
 
 ## 3. How it works
 
@@ -70,7 +71,7 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
 
 | Tab | What you do there |
 |---|---|
-| **Dashboard** | Status (Running / Paused / Stopped with the reason), today's counters vs limits, cost today / this month, Review / Full auto switch (locked during warm-up), recent activity, "Run a check now". A red banner appears after an auto-stop. |
+| **Dashboard** | Status (Running / Paused / Stopped with the reason), today's counters vs limits, cost today / this month, Review / Full auto switch, recent activity, "Run a check now". A red banner appears after an auto-stop. |
 | **Targets** | Add / import / export targets, edit group, tier, tone and preset per target, enable/disable, refresh profiles. Discovery and candidates. Rank columns: **ScoreX rank** (own formula) and **Sorsa Score** (if enabled). |
 | **Review Queue** | Every generated reply with the post, the author, the model, the cost and quality notes. Edit, Approve, Regenerate (costs another call), Skip. Approved replies post one by one in their own time slots. |
 | **Models & Costs** | API key, model list with **editable model names** and **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort Low / Medium / High, fallback models, preset per group x tier, quality checker, cost estimator, budget, totals per model / day / week / month, performance per model and tone. |
@@ -113,7 +114,6 @@ The estimator in Models & Costs uses your own average token usage once you have 
 | Same target | 1 per 24 hours, 3 per 7 days | 1 / 3 |
 | Likes (like + comment combo) | off, 20/day when on | 50 |
 | Generations per 24 hours | 2 x the comment limit (protects your OpenAI spend) | - |
-| Warm-up | first 3 days review only | 3 days |
 | Unfollow cleanup | off, 10/day when on, min 7 days | 30/day |
 
 Limits use rolling windows (the last 24 hours / 7 days), so an active-hours window that crosses midnight
@@ -190,8 +190,8 @@ Load the extension (section 1), add your API key, then:
 
 **Phase 2: full auto and safety**
 1. **Safety** shows the ramp (10/day in week 1). Try a narrow active-hours window: the status says "Sleeping".
-2. Full auto stays locked for 3 days (the countdown is on the Dashboard). After that, switch to Full auto and
-   check that replies are posted with 3-12 minute gaps, at most 1 per target per day.
+2. Switch to Full auto on the Dashboard and check that replies are posted with 3-12 minute gaps, at most
+   1 per target per 24 hours.
 3. Safe things to try: close the pinned X tab (it comes back), restart Chrome (it resumes by itself), log
    out of X in that profile (ScoreX stops with "Logged out", notifies you and shows a red badge).
 

@@ -142,7 +142,7 @@ export async function clearHistory() {
 }
 
 // Factory reset of everything except API keys and what the safety limits depend on: comments posted in the
-// last 8 days (rolling 24h / 7-day caps) and the spend ledger (monthly budget). Warm-up starts again.
+// last 8 days (rolling 24h / 7-day caps) and the spend ledger (monthly budget). The ramp starts again.
 export async function resetAll() {
   await remove([K.settings, K.targets, K.candidates, K.seen, K.logs, K.discovery, K.selectorOverrides, K.learning, K.state]);
   const keepSince = now() - 8 * 864e5;

@@ -7,7 +7,7 @@ import { getSettings, getSecrets, getState, patchState, getTargets, updateTarget
 import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
-import { warmup, effectiveMode, dailyLimit, groupLimit, generationLimit, likeLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
+import { effectiveMode, dailyLimit, groupLimit, generationLimit, likeLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
 import { skipReason } from "./filters.js";
 import { effectiveTone, effectivePreset, isActive } from "./targets.js";
 import { generate } from "./generator.js";
@@ -175,7 +175,6 @@ export async function getStatus() {
     label,
     sub,
     effectiveMode: effectiveMode(settings, state, ts),
-    warmup: warmup(state, ts),
     today: {
       posted: c.postedToday, limit: total, postedGroup: c.postedGroup,
       groupLimits: { A: groupLimit(settings, "A", total), B: groupLimit(settings, "B", total) },
@@ -216,7 +215,6 @@ export async function start() {
     firstStartedAt: st.firstStartedAt || ts, consecutiveFailures: 0, softErrors: 0, internalErrors: 0, emptyStreak: 0,
     job: s.job && s.job.leaseUntil > now() ? s.job : null, // never drop a live lease (e.g. a running discovery)
   }));
-  if (!st.firstStartedAt) log("info", `First start. Warm-up: review mode is forced for ${HARD.warmupDays} days.`);
   log("info", "Started");
   await scheduleTick(randInt(4000, 12000), "start");
   await ensureAlarms();

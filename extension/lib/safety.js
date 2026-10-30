@@ -4,17 +4,11 @@
 import { HARD, MODE } from "./constants.js";
 import { DAY, MIN, clamp, humanDelay, randInt, inWindow, nextWindowStart, currentWindowEnd, now } from "./util.js";
 
-// ---------- warm-up & mode ----------
+// ---------- mode ----------
 
-// The first HARD.warmupDays days after the first start are forced Review mode.
-export function warmup(state, ts = now()) {
-  if (!state.firstStartedAt) return { active: true, endsAt: null, msLeft: HARD.warmupDays * DAY, notStarted: true };
-  const endsAt = state.firstStartedAt + HARD.warmupDays * DAY;
-  return { active: ts < endsAt, endsAt, msLeft: Math.max(0, endsAt - ts), notStarted: false };
-}
-export function effectiveMode(settings, state, ts = now()) {
-  if (settings.mode !== MODE.AUTO) return MODE.REVIEW;
-  return warmup(state, ts).active ? MODE.REVIEW : MODE.AUTO;
+// Review or Full auto, exactly as chosen in the dashboard (no forced warm-up period).
+export function effectiveMode(settings) {
+  return settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW;
 }
 
 // ---------- daily limits ----------
