@@ -20,7 +20,7 @@ describe("store.js", () => {
       assert.equal(s.mode, MODE.REVIEW);
       assert.deepEqual(s.safety.ramp, [10, 20, 30]);
       assert.deepEqual(s.safety.gapMin, { min: 3, max: 12 });
-      assert.equal(s.models.length, 3);
+      assert.equal(s.models.length, 12, "GPT-6 and GPT-5 families");
       assert.equal(s.presets.high.modelId, "m_best");
       assert.equal(sanitizeSettings(null).timezone, "Asia/Dhaka");
       assert.equal(sanitizeSettings(undefined).account.handle, "0x_nation");
@@ -111,6 +111,7 @@ describe("store.js", () => {
 
     test("presets / fallback referencing removed models are repaired", () => {
       const s = sanitizeSettings({
+        modelsRev: 2, // a user who already saw the current model list and deleted the rest
         models: [
           { id: "a", name: "model-a", prices: { input: 1, output: 2 } },
           { id: "b", name: "model-b", prices: { input: 3, output: 4 } },

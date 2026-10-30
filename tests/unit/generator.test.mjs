@@ -57,9 +57,10 @@ describe("generator.js", () => {
   describe("modelChain", () => {
     test("primary + fallbacks, deduplicated", () => {
       const ids = (k, s = settings) => gen.modelChain(s, k).map((c) => `${c.model.id}:${c.effort}:${c.role}`);
-      assert.deepEqual(ids("high"), ["m_best:high:primary", "m_balanced:low:fallback", "m_cheap:low:fallback"]);
-      assert.deepEqual(ids("balanced"), ["m_balanced:medium:primary", "m_cheap:low:fallback"]);
-      assert.deepEqual(ids("cheap"), ["m_cheap:low:primary", "m_balanced:low:fallback"]);
+      // The last resort is GPT-5 mini (a long-available model), so a renamed model never stops generation.
+      assert.deepEqual(ids("high"), ["m_best:high:primary", "m_balanced:low:fallback", "m_g5_mini:low:fallback"]);
+      assert.deepEqual(ids("balanced"), ["m_balanced:medium:primary", "m_g5_mini:low:fallback"]);
+      assert.deepEqual(ids("cheap"), ["m_cheap:low:primary", "m_balanced:low:fallback", "m_g5_mini:low:fallback"]);
       assert.deepEqual(ids("unknown"), ids("balanced"));
     });
     test("respects fallback.enabled and an empty second model", () => {
@@ -71,7 +72,7 @@ describe("generator.js", () => {
     test("models without a name are skipped", () => {
       const s = sanitizeSettings({});
       s.models.find((m) => m.id === "m_best").name = "";
-      assert.deepEqual(gen.modelChain(s, "high").map((c) => c.model.id), ["m_balanced", "m_cheap"]);
+      assert.deepEqual(gen.modelChain(s, "high").map((c) => c.model.id), ["m_balanced", "m_g5_mini"]);
     });
   });
 
@@ -332,7 +333,7 @@ describe("generator.js", () => {
       const { out } = await run(f);
       assert.equal(out.ok, true);
       assert.deepEqual(out.quality.reasons.map((r) => r.code), ["checker_unavailable"]);
-      assert.equal(f.calls.filter((c) => c.kind === "check").length, 2); // checker chain: luna then terra
+      assert.equal(f.calls.filter((c) => c.kind === "check").length, 3); // checker chain: luna, terra, then GPT-5 mini
     });
 
     test("checker auth failure stops the engine", async () => {

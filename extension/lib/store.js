@@ -9,7 +9,7 @@
 
 import { K, STATUS, MODE, HARD, SCHEMA_VERSION } from "./constants.js";
 import { deepMerge, deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact, parseHandleList } from "./util.js";
-import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK } from "./models.js";
+import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK, MODELS_REV } from "./models.js";
 import { db, STORES } from "./db.js";
 
 const area = () => globalThis.chrome.storage.local;
@@ -95,6 +95,7 @@ export const DEFAULT_SETTINGS = {
   presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" },
 
   models: DEFAULT_MODELS,
+  modelsRev: MODELS_REV, // revision of the built-in model list these settings have seen (lib/models.js)
   presets: DEFAULT_PRESETS,
   fallback: DEFAULT_FALLBACK,
 
@@ -355,6 +356,17 @@ export function sanitizeSettings(raw) {
     s.groups[g].enabled = s.groups[g].enabled !== false;
   }
   if (!Array.isArray(s.models) || !s.models.length) s.models = deepClone(DEFAULT_MODELS);
+  // Built-in models added in a newer model-list revision are offered once (models you deleted stay deleted),
+  // and the old default last-resort fallback moves to GPT-5 mini.
+  const seenRev = Number(raw && raw.modelsRev) || (raw && Array.isArray(raw.models) && raw.models.length ? 1 : MODELS_REV);
+  if (seenRev < MODELS_REV) {
+    for (const dm of DEFAULT_MODELS) {
+      if ((dm.addedIn || 1) <= seenRev || s.models.some((x) => x && (x.id === dm.id || x.name === dm.name))) continue;
+      s.models.push(deepClone(dm));
+    }
+    if (s.fallback && s.fallback.secondModelId === "m_cheap" && s.models.some((x) => x && x.id === "m_g5_mini")) s.fallback.secondModelId = "m_g5_mini";
+  }
+  s.modelsRev = MODELS_REV;
   for (const m of s.models) {
     m.name = String(m.name || "").trim();
     m.maxOutputTokens = clamp(Math.round(num(m.maxOutputTokens, 1200)), 64, 32000);

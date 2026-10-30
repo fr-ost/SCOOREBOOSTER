@@ -9,7 +9,7 @@
 import { boot, setup, assert, log, sleep, passCount } from "./harness.mjs";
 
 const SEED = Number(process.env.SX_SEED) || 1337;
-const CYCLES = Number(process.env.SX_CYCLES) || 24;
+const CYCLES = Number(process.env.SX_CYCLES) || 30;
 const DAILY = 8;
 const MIN = 60000;
 let seed = SEED;
@@ -85,7 +85,7 @@ try {
   for (let c = 1; c <= CYCLES; c++) {
     log(`cycle ${c}/${CYCLES}`);
     // New posts (targets, followers, non-targets).
-    const n = 1 + Math.floor(rand() * 3);
+    const n = 2 + Math.floor(rand() * 3);
     for (let i = 0; i < n; i++) M.addPost(pick([...TARGETS, ...TARGETS, ...FOLLOWERS, ...OTHERS]), pick(TEXTS) + " #" + c + i, 1 + Math.floor(rand() * 4));
 
     const roll = rand();
@@ -106,15 +106,18 @@ try {
     else if (roll < 0.50) { const tab = (await H.xTabs())[0]; if (tab) { await tab.close().catch(() => {}); ev("X tab closed"); } }
     else if (roll < 0.58) { await H.settings({ mode: "review" }); ev("switched to Review mode"); }
 
-    // Speed up the clock-based waits (gaps / breaks); history-based limits stay untouched.
-    await settle();
-    await H.patchState({ nextCommentAt: 0, lastCommentAt: Date.now() - 3 * MIN, breakUntil: 0 });
-    for (const x of (await H.history()).filter((x) => x.status === "queued" || x.status === "approved")) await H.patchHistory(x.id, { scheduledFor: 0 });
-    await H.runNow();
-    // Sometimes kill the service worker while it works.
-    if (rand() < 0.25) { await sleep(2000 + Math.floor(rand() * 8000)); await H.stopWorker(); ev("service worker killed"); await sleep(1500); await H.msg("getStatus"); }
-    await sleep(6000);
-    await settle(90000);
+    // Two checks per cycle (one posts a due reply, the next watches and generates). Clock-based waits (gaps /
+    // breaks) are sped up; history-based limits (daily, per target) stay untouched.
+    for (let k = 0; k < 2; k++) {
+      await settle();
+      await H.patchState({ nextCommentAt: 0, lastCommentAt: Date.now() - 3 * MIN, breakUntil: 0 });
+      for (const x of (await H.history()).filter((x) => x.status === "queued" || x.status === "approved")) await H.patchHistory(x.id, { scheduledFor: 0 });
+      await H.runNow();
+      // Sometimes kill the service worker while it works.
+      if (rand() < 0.15) { await sleep(2000 + Math.floor(rand() * 8000)); await H.stopWorker(); ev("service worker killed"); await sleep(1500); await H.msg("getStatus"); }
+      await sleep(5000);
+      await settle(90000);
+    }
 
     // Undo the disruption and recover like a user would.
     if (M.replyMode !== "ok") M.replyMode = "ok";
@@ -154,6 +157,8 @@ try {
   assert(!tickErrors.length, "no internal tick errors (" + tickErrors.map((l) => l.msg).join(" | ") + ")");
   checkInvariants("final");
   assert(!violations.length, "no safety invariant violated:\n    " + violations.join("\n    "));
+  const eligible = TARGETS.filter((h) => !removedAt[h] && !followSince[h]).length;
+  if (eligible >= DAILY && CYCLES >= 30) assert(M.replies.length >= DAILY - 1, `the daily limit was reached and held (${M.replies.length}/${DAILY})`);
   log(`\nSoak: ${CYCLES} cycles, ${M.replies.length} replies, ${M.likes.length} likes, ${stopsSeen} safety stops handled, ${events.length} disruptions.`);
   log(`Soak e2e: ${passCount()} checks passed`);
 } catch (e) {

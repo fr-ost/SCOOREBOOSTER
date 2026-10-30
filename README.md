@@ -88,10 +88,15 @@ everything else is in collapsed **Advanced** sections (their open/closed state i
 
 ### Models and prices
 Model names are free text: when OpenAI releases a new model, type its name into a model row (or add a row) and
-update its prices. Defaults (late October 2026): `gpt-6-luna` (fast/cheap), `gpt-6.1-terra` (balanced),
-`gpt-6.1-sol` (high quality). **Check the prices on openai.com/api/pricing and update them**; the cost numbers
-are only as good as this table. Defaults per tier: tier 1 High quality, tier 2 Balanced.
-If a model errors, times out or hits a rate limit, the fallback model is used once.
+update its prices. Presets use the GPT-6 family by default (late October 2026): `gpt-6-luna` (fast/cheap),
+`gpt-6.1-terra` (balanced), `gpt-6.1-sol` (high quality). The **GPT-5 family** is in the list too, ready to
+pick for any preset: `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-5.1`, `gpt-5.2`, `gpt-5.4-nano`,
+`gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5` (USD per 1M tokens input / output: 0.05 / 0.40, 0.25 / 2, 1.25 / 10,
+1.25 / 10, 1.75 / 14, 0.20 / 1.25, 0.75 / 4.50, 2.50 / 15, 5 / 30). **Check the prices on
+openai.com/api/pricing and update them**; the cost numbers are only as good as this table. Use **Test** next to
+a model to confirm your key can use it. Defaults per tier: tier 1 High quality, tier 2 Balanced.
+If a model errors, times out or hits a rate limit, the fallback is used once: Balanced at low effort, then
+GPT-5 mini as the last resort, so one renamed or unavailable model never stops comment generation.
 
 ### Cost
 After every OpenAI call ScoreX reads the real token usage from the response (input, cached input, cache writes,
