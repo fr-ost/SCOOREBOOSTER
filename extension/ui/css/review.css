@@ -1,3 +1,66 @@
 /* ScoreX - Review (#review): keyboard-first queue, review cards, expiry chips, undo line, Approved waiting to post.
    Screen-specific styles only. Tokens, the shell and shared components live in ../dashboard.css (use its
    custom properties: --text*, --border*, --lime, --mark-edge, --accent-text, --amber*, --red*, --viz-1..6, --fs-*, --s1..s7). */
+
+/* toolbar + legend */
+.review-sec .sec-body { gap: 12px; }
+.review-toolbar { display: flex; align-items: center; gap: 10px 16px; flex-wrap: wrap; }
+.review-title { margin: 0; font-size: var(--fs-l); font-weight: 650; display: inline-flex; align-items: center; gap: 8px; }
+.review-sortwrap { display: inline-flex; align-items: center; gap: 8px; }
+.review-toolbar .spacer { flex: 1 1 0; }
+.review-keys { gap: 6px 16px; }
+.keys-help { display: inline-flex; align-items: center; gap: 4px; color: var(--text-2); text-decoration: none; font-size: 12px; }
+.keys-help:hover { color: var(--text); }
+.review-note { margin: 0; font-size: var(--fs-s); color: var(--text-2); }
+
+/* cards: the focused card gets an ink border plus a 3px ink rule on the left */
+.review-card { scroll-margin-top: calc(var(--bar-h) + 16px); scroll-margin-bottom: 16px; }
+.review-card:focus { outline: none; }
+.review-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: none; }
+.review-card.is-focus { border-color: var(--text); box-shadow: inset 3px 0 0 var(--text); }
+.review-card.is-focus .rc-post { border-radius: 0; }
+.review-card .rc-post, .review-card .rc-main { padding: 12px 16px; gap: 8px; }
+.review-card .post-text { font-size: var(--fs-m); line-height: 1.5; }
+.review-card .comment-input { min-height: 76px; resize: vertical; }
+.review-card .comment-head { align-items: center; gap: 8px; }
+.review-card .comment-head .field-label { color: var(--text-2); }
+.review-card .comment-head .spacer { flex: 1 1 auto; }
+.rc-exp:empty { display: none; }
+.rc-ctx { display: flex; gap: 6px 12px; flex-wrap: wrap; align-items: center; font-size: 12px; color: var(--text-2); }
+.rc-day, .rc-score { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.rc-day { font-family: var(--mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+.rc-score { font-variant-numeric: tabular-nums; }
+.rc-meta { font: 500 11.5px/1.3 var(--mono); color: var(--text-2); display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: center; }
+.rc-meta .post-link { font-family: var(--mono); }
+.rc-note { margin: 0; padding: 6px 10px; border-left: 3px solid var(--border-strong); background: var(--sunk); color: var(--text-2); border-radius: 0 var(--r-xs) var(--r-xs) 0; font-size: var(--fs-s); }
+.review-card .quality-notes { list-style: none; padding-left: 10px; }
+.review-card .review-foot { align-items: center; gap: 8px 12px; }
+.rc-foot-meta { flex: 1 1 200px; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 10px; font: 500 11.5px/1.5 var(--mono); color: var(--text-2); }
+.rc-foot-meta .rc-pass { color: var(--accent-text); }
+.review-card .review-actions { flex: 0 0 auto; gap: 6px; }
+.review-card .review-actions [hidden] { display: none; }
+.review-card.is-follows .comment-input { color: var(--text-2); }
+.review-card.is-waiting .review-foot .slot { flex: 0 1 auto; font-family: var(--mono); font-size: 11.5px; }
+
+/* one-line undo row after approve / skip */
+.review-undo { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-height: 42px; padding: 8px 14px; border: 1px dashed var(--border-strong); border-radius: var(--r); font-size: var(--fs-s); color: var(--text); background: var(--bg); }
+.review-undo .undo-sq { width: 8px; height: 8px; border-radius: 1px; background: var(--grey); flex: none; }
+.review-undo.is-approve .undo-sq { background: var(--lime); box-shadow: inset 0 0 0 1px var(--mark-edge); }
+.review-undo .undo-text { font-weight: 600; }
+.review-undo .undo-btn { font-weight: 600; }
+.review-undo .undo-sec { font: 600 11.5px/1 var(--mono); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.review-undo.is-sending { color: var(--text-2); }
+
+/* 721-900 px: keep the two columns (post | reply) like the spec; stack below 720 px */
+@media (min-width: 721px) and (max-width: 900px) {
+  .review-card { grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.3fr); }
+  .review-card .rc-post { border-right: 1px solid var(--border); border-bottom: none; border-radius: var(--r) 0 0 var(--r); }
+}
+@media (max-width: 720px) {
+  .review-toolbar .spacer { display: none; }
+  .review-card .rc-post, .review-card .rc-main { padding: 12px; }
+  .review-card .review-actions { width: 100%; justify-content: flex-end; }
+}
+.review-card.is-focus > .rc-post { box-shadow: inset 3px 0 0 var(--text); }
+.review-who-line .fs-days { display: none; } /* the context line shows "day N/14" with its meter */
+@media (max-width: 720px) { .review-card.is-focus > .rc-main { box-shadow: inset 3px 0 0 var(--text); } }

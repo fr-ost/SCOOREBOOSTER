@@ -1,12 +1,14 @@
-// Settings tab. Essentials: your X account, watch strategy (+ list URLs), comment window.
+// Settings tab. Diagnostics first (quick check without the X tab + the live X test + a redacted report; #diagnostics
+// shows every check), then the essentials: your X account, watch strategy (+ list URLs), comment window.
 // Advanced (collapsed groups): mode/time zone/theme, watching details, review expiry, learning, cleanup
 // (OFF by default, with a confirm), worker tab + debug + selector overrides, data import/export/reset.
 // Score sites (Sorsa, TwitterScore, Ethos, Moni: keys, caps, the Sorsa blend) are set up on the Scores screen.
 
-import { K, MODE, HARD } from "../../lib/constants.js";
+import { K, MODE, HARD, STATUS, STOP_LABEL } from "../../lib/constants.js";
+import { PROVIDER_DEFS } from "../../lib/providerdefs.js";
 import * as history from "../../lib/history.js";
 import { num } from "../../lib/util.js";
-import { h, clear, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, modal, download, readFileText, stamp, toggleEl, xLink, badge, fmtCount, uidShort, renderTable, add } from "../components.js";
+import { h, clear, fill, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, modal, download, readFileText, stamp, toggleEl, xLink, badge, fmtCount, uidShort, renderTable, add, diagSquare, fmtAgo, fmtTime, fmtUsd, fmtDateTime, announce } from "../components.js";
 import { timeZones } from "./safety.js";
 
 const DATA_PARTS = [
@@ -22,10 +24,228 @@ const STRATEGIES = [
   ["rotation", "Profile rotation", "Visits a few profiles per check. Slowest; fine for small lists."],
 ];
 
+
+// ---------------------------------------------------------------- diagnostics
+
+const DAY_MS = 864e5;
+const LIVE_KEY = "sx.diag.live"; // last live X test result (this browser only)
+const STATUS_WORD = { pass: "Pass", warn: "Warning", fail: "Failure", skip: "Not checked" };
+const readLive = () => { try { const v = JSON.parse(window.localStorage.getItem(LIVE_KEY) || "null"); return v && Array.isArray(v.checks) ? v : null; } catch (_) { return null; } };
+const writeLive = (v) => { try { window.localStorage.setItem(LIVE_KEY, JSON.stringify(v)); } catch (_) { /* storage blocked */ } };
+const mb = (b) => (b < 1048576 ? `${Math.max(1, Math.round(b / 1024))} KB` : (b / 1048576).toFixed(b >= 10485760 ? 0 : 1) + " MB");
+
+// Provider site access, same rule as the health check: any usable mode with its hosts (+ scripting for tab modes) granted.
+async function providerAccess(def, cfg) {
+  const modes = Object.entries(def.modes || {}).filter(([m]) => !cfg || !cfg.mode || cfg.mode === "auto" || cfg.mode === m);
+  if (!modes.length) return { ok: true, hosts: [] };
+  let hosts = [];
+  for (const [, m] of modes) {
+    const origins = m.hosts || [];
+    const perms = ["score", "smartFollowers"].some((c) => m[c] && m[c].kind === "tab") ? ["scripting"] : [];
+    hosts = hosts.concat(origins);
+    if (!origins.length && !perms.length) return { ok: true, hosts: [] };
+    try { if (await chrome.permissions.contains({ origins, permissions: perms })) return { ok: true, hosts: origins }; } catch (_) { return { ok: true, hosts: origins }; }
+  }
+  return { ok: false, hosts };
+}
+const hostNames = (list) => [...new Set((list || []).map((o) => String(o).replace(/^https?:\/\//, "").replace(/\/\*$/, "")))].join(", ");
+
+// The quick check (no X tab): [{ title, rows: [{ id, label, status: pass|warn|fail|skip, detail, action: [label, href] }] }].
+async function quickCheck(ctx) {
+  const s = ctx.settings, st = ctx.state, status = ctx.status || {};
+  const rev = ctx.data[K.secretsRev] || {}, has = rev.has || {};
+  const now = Date.now();
+  const handle = String((s.account && s.account.handle) || "").replace(/^@+/, "");
+  const me = st.me && st.me.handle ? String(st.me.handle).replace(/^@+/, "") : "";
+  const R = (id, label, statusKind, detail, action) => ({ id, label, status: statusKind, detail, action: action || null });
+  const groups = [];
+
+  const x = [];
+  x.push(handle ? R("handle", "Your X handle", "pass", "@" + handle) : R("handle", "Your X handle", "fail", "Not set: ScoreX cannot check follow-backs or which account is logged in.", ["Set handle", "#settings?focus=handle"]));
+  if (me) {
+    const same = handle && me.toLowerCase() === handle.toLowerCase();
+    x.push(R("me", "Logged-in account", same ? "pass" : handle ? "fail" : "warn", `@${me} on x.com${st.me.checkedAt ? ` (checked ${fmtAgo(st.me.checkedAt)})` : ""}${handle && !same ? `; ScoreX expects @${handle}` : ""}`));
+  } else x.push(R("me", "Logged-in account", "skip", "Not checked yet: read the next time the X tab loads a page, or run the live X test."));
+  const fb = Number(st.followBadgeOkAt) || 0;
+  if (fb && now - fb <= 3 * DAY_MS) x.push(R("badge", "\"Follows you\" badge", "pass", `Seen on your followers list ${fmtAgo(fb)} (trusted for 3 days)`));
+  else if (fb) x.push(R("badge", "\"Follows you\" badge", "warn", `Last seen ${fmtAgo(fb)}: follow checks wait until it is seen again (run the live X test)`));
+  else x.push(R("badge", "\"Follows you\" badge", st.firstStartedAt ? "warn" : "skip", "Not seen yet: follow checks start once the badge is seen on your followers list."));
+  let ov = null;
+  try { ov = (await chrome.storage.local.get(K.selectorOverrides))[K.selectorOverrides]; } catch (_) { ov = null; }
+  const ovN = ov && typeof ov === "object" ? ["sel", "text", "misc"].reduce((a, g) => a + Object.keys(ov[g] || {}).length, 0) : 0;
+  x.push(R("overrides", "Selector overrides", ovN ? "pass" : "skip", ovN ? `${ovN} override${ovN === 1 ? "" : "s"} active, merged over the built-in selectors` : "None active: the built-in selectors are used."));
+  groups.push({ title: "X account and page", rows: x });
+
+  const perm = [];
+  const mf = chrome.runtime.getManifest();
+  const req = mf.host_permissions || [];
+  let reqOk = true, notif = true;
+  try { reqOk = await chrome.permissions.contains({ origins: req }); } catch (_) { reqOk = true; }
+  try { notif = await chrome.permissions.contains({ permissions: ["notifications"] }); } catch (_) { notif = true; }
+  perm.push(R("hosts", hostNames(req) || "Required sites", reqOk ? "pass" : "fail", reqOk ? "Granted at install" : "Missing: allow site access for ScoreX in chrome://extensions"));
+  perm.push(R("notifications", "Notifications", notif ? "pass" : "warn", notif ? "Granted: safety stops show a desktop notification" : "Not granted: safety stops only show in the dashboard and the badge"));
+  for (const [id, def] of Object.entries(PROVIDER_DEFS)) {
+    const cfg = (s.providers || {})[id];
+    if (!cfg || !cfg.enabled) { perm.push(R("p_" + id, `${def.name} (optional)`, "skip", "Not connected", ["Connect", "#scores?view=providers"])); continue; }
+    const a = await providerAccess(def, cfg);
+    perm.push(R("p_" + id, `${def.name} (optional)`, a.ok ? "pass" : "warn", a.ok ? `${hostNames(a.hosts) || "No site access needed"}${a.hosts.length ? " granted" : ""}` : `Site access not granted (${hostNames(a.hosts)})`, a.ok ? null : ["Fix", "#scores?view=providers"]));
+  }
+  groups.push({ title: "Permissions", rows: perm });
+
+  const ai = [];
+  const hasOpenai = typeof status.hasApiKey === "boolean" ? status.hasApiKey : has.openaiKey != null ? !!has.openaiKey : typeof rev.hasOpenai === "boolean" ? rev.hasOpenai : null;
+  ai.push(hasOpenai === false ? R("openai", "OpenAI key", "fail", "Missing: ScoreX cannot write replies.", ["Add key", "#models"]) : hasOpenai ? R("openai", "OpenAI key", "pass", "Saved (the key itself never leaves this browser except to OpenAI)") : R("openai", "OpenAI key", "skip", "Unknown"));
+  for (const [id, def] of Object.entries(PROVIDER_DEFS)) {
+    const cfg = (s.providers || {})[id];
+    if (!cfg || !cfg.enabled || !def.keyName) continue;
+    const k = has[def.keyName];
+    ai.push(R("k_" + id, `${def.name} key`, k ? "pass" : "skip", k ? "Saved" : "Not saved (optional): modes that need no key still work", k ? null : ["Add key", "#scores?view=providers"]));
+  }
+  const budget = num(s.budget && s.budget.monthlyUsd);
+  const month = status.month || null;
+  ai.push(budget > 0
+    ? R("budget", "Monthly budget", month && month.reached ? "fail" : month && month.warn ? "warn" : "pass", `${fmtUsd(budget)}${month && month.pct != null ? ` · ${Math.round(num(month.pct))}% used` : ""}${month && month.reached ? " · reached: replies are paused" : ""}`)
+    : R("budget", "Monthly budget", "skip", "No limit set", ["Set budget", "#models"]));
+  groups.push({ title: "AI and budget", rows: ai });
+
+  const eng = [];
+  const running = st.status === STATUS.RUNNING;
+  const lastTxt = st.lastTickAt ? `Last check ${fmtAgo(st.lastTickAt)}` : "No check yet";
+  const nextTxt = running && st.nextTickAt ? ` · next ${fmtTime(st.nextTickAt)}` : "";
+  if (running && st.nextTickAt && now - st.nextTickAt > 10 * 60000) eng.push(R("tick", "Scheduler", "warn", `${lastTxt}; the check planned for ${fmtTime(st.nextTickAt)} did not run: the scheduler may be stuck (Pause, then Resume)`));
+  else eng.push(R("tick", "Scheduler", running ? "pass" : "skip", `${lastTxt}${nextTxt}${running ? "" : ` · engine ${st.status || "stopped"}`}`));
+  const job = st.job;
+  if (job && job.kind) {
+    const expired = job.leaseUntil && job.leaseUntil < now;
+    eng.push(R("lease", "Job lease", expired ? "warn" : "pass", `${job.kind}${job.step ? " (" + job.step + ")" : ""} since ${fmtTime(job.startedAt)}${job.leaseUntil ? `${expired ? ", lease ran out at " : ", lease until "}${fmtTime(job.leaseUntil)}` : ""}${expired ? ": cleaned up on the next check" : ""}`));
+  } else eng.push(R("lease", "Job lease", "pass", "Free: no job holds the X tab"));
+  let used = null, recs = null, schema = null;
+  try { used = await chrome.storage.local.getBytesInUse(null); } catch (_) { used = null; }
+  try { recs = await history.count(); } catch (_) { recs = null; }
+  try { schema = (await chrome.storage.local.get(K.schema))[K.schema]; } catch (_) { schema = null; }
+  const quota = 10 * 1048576;
+  if (used != null) eng.push(R("storage", "Storage", used >= quota * 0.9 ? "fail" : used >= quota * 0.7 ? "warn" : "pass", `chrome.storage ${mb(used)} of 10 MB${recs != null ? ` · history ${recs.toLocaleString()} records` : ""}`));
+  else eng.push(R("storage", "Storage", "skip", recs != null ? `history ${recs.toLocaleString()} records` : "Unknown"));
+  eng.push(R("version", "Version", "pass", `ScoreX ${mf.version}${schema != null ? ` · data schema ${schema}` : ""}`));
+  groups.push({ title: "Engine and storage", rows: eng });
+  return { at: now, groups };
+}
+
+const redactText = (text, own) => String(text == null ? "" : text)
+  .replace(/sk-[A-Za-z0-9_-]{6,}/g, "sk-[redacted]")
+  .replace(/@([A-Za-z0-9_]{1,15})/g, (m, hd) => (own && hd.toLowerCase() === own.toLowerCase() ? m : "@[account]"));
+
+// Diagnostics section. full: every check (#diagnostics); otherwise only warnings and failures plus a link.
+function diagnosticsSection(ctx, { full = false } = {}) {
+  let quick = null;
+  let live = readLive();
+  let liveRunning = false;
+  const head = h("div", { class: "diag-head", id: "diagHead" });
+  const rowsHost = h("div", { class: "dg-list", id: "diagList" });
+  const liveHost = h("div", { class: "dg-list", id: "diagLive", "aria-live": "polite" });
+  const own = () => String((ctx.settings.account && ctx.settings.account.handle) || "").replace(/^@+/, "");
+
+  const quickBtn = btn("Run quick check", (e) => busy(e.currentTarget, async () => { await runQuick(); announce(summaryText()); }), { iconName: "refresh", id: "diagQuickBtn", title: "Checks permissions, keys, storage and the scheduler. Does not use the X tab." });
+  const liveBtn = btn("Run live X test", (e) => busy(e.currentTarget, runLive), { kind: "primary", iconName: "play", id: "diagLiveBtn", title: "Uses the X tab for about 30 seconds. It only reads pages: it never clicks, likes or types." });
+  const copyBtn = btn("Copy report", () => copyReport(), { kind: "ghost", iconName: "copy", id: "diagCopyBtn", title: "Copies a JSON report without API keys or other accounts' handles" });
+
+  const counts = () => {
+    const all = [...(quick ? quick.groups.flatMap((g) => g.rows) : []), ...(live ? live.checks.map((c) => ({ status: c.ok ? "pass" : "fail" })) : [])];
+    return { warn: all.filter((r) => r.status === "warn").length, fail: all.filter((r) => r.status === "fail").length, n: all.length };
+  };
+  const summaryText = () => { const c = counts(); return `${c.warn} warning${c.warn === 1 ? "" : "s"}, ${c.fail} failure${c.fail === 1 ? "" : "s"}`; };
+  // The buttons are built once (a redraw never takes focus away from them); only the summary is refreshed.
+  const sumHost = h("div", { class: "diag-sum" });
+  add(head, sumHost, h("div", { class: "diag-actions" }, quickBtn, liveBtn, copyBtn));
+  function drawHead() {
+    const c = counts();
+    const worst = c.fail ? "fail" : c.warn ? "warn" : quick ? "pass" : "skip";
+    fill(sumHost,
+      diagSquare(worst, STATUS_WORD[worst]),
+      h("strong", { id: "diagSummary" }, quick ? summaryText() : "Checking…"),
+      h("span", { class: "muted small" }, `quick check ${quick ? fmtAgo(quick.at) : "-"} · live X test ${live && live.at ? fmtAgo(live.at) : "not run yet"}`));
+  }
+  const dgRow = (r) => h("div", { class: "dg", dataset: { check: r.id, status: r.status } },
+    diagSquare(r.status, STATUS_WORD[r.status]),
+    h("div", { class: "dg-name" }, r.label),
+    h("div", { class: "dg-detail" }, r.detail || ""),
+    h("div", { class: "dg-act" }, r.action ? h("a", { class: "btn btn-sm", href: r.action[1] }, r.action[0]) : null));
+  function drawRows() {
+    if (!quick) { fill(rowsHost, h("p", { class: "muted small" }, "Running the quick check…")); return; }
+    if (full) { fill(rowsHost, quick.groups.map((g) => [h("h3", { class: "dg-group" }, g.title), g.rows.map(dgRow)])); return; }
+    const issues = quick.groups.flatMap((g) => g.rows).filter((r) => r.status === "warn" || r.status === "fail");
+    const total = quick.groups.reduce((a, g) => a + g.rows.length, 0);
+    fill(rowsHost,
+      issues.length ? issues.map(dgRow) : h("p", { class: "muted small dg-allok" }, `No problems in the quick check (${total} checks).`),
+      h("p", { class: "small" }, h("a", { href: "#diagnostics", id: "diagAllLink" }, `See all ${total} checks and the live X test`), " →"));
+  }
+  function drawLive() {
+    if (liveRunning) {
+      fill(liveHost, h("h3", { class: "dg-group" }, "Live X test"),
+        h("div", { class: "dg" }, h("span", { class: "spinner", "aria-hidden": "true" }), h("div", { class: "dg-name" }, "Running…"), h("div", { class: "dg-detail" }, "The X tab opens your home timeline, your profile and your followers list (about 30 s). It never clicks, likes or types."), h("div", { class: "dg-act" })));
+      return;
+    }
+    if (!live) {
+      fill(liveHost, full ? [h("h3", { class: "dg-group" }, "Live X test"), h("p", { class: "muted small dg-note" }, "Not run yet. It uses the X tab for about 30 seconds and only reads pages: it never clicks, likes or types, and it stops at the first captcha or warning.")] : []);
+      return;
+    }
+    const rows = live.error ? [{ id: "live", label: "Live X test", status: "fail", detail: live.error }]
+      : live.checks.map((c) => ({ id: "live_" + c.id, label: c.label || c.id, status: c.ok ? "pass" : "fail", detail: c.detail || "" }));
+    if (live.stop) rows.push({ id: "live_stop", label: "Safety stop", status: "fail", detail: `${STOP_LABEL[live.stop] || live.stop}: the test stopped there and ScoreX stopped for safety.` });
+    const failed = rows.filter((r) => r.status === "fail").length;
+    if (!full && !failed) { fill(liveHost, []); return; }
+    fill(liveHost, h("h3", { class: "dg-group" }, `Live X test · ${live.at ? fmtDateTime(live.at) : ""}`), (full ? rows : rows.filter((r) => r.status === "fail")).map(dgRow));
+  }
+  async function runQuick() {
+    try { quick = await quickCheck(ctx); } catch (e) { console.error("[ScoreX UI] quick check", e); quick = { at: Date.now(), groups: [{ title: "Quick check", rows: [{ id: "error", label: "Quick check", status: "fail", detail: String((e && e.message) || e) }] }] }; }
+    drawHead(); drawRows();
+  }
+  async function runLive() {
+    if (!(ctx.settings.account && String(ctx.settings.account.handle || "").trim())) { toast("Set your X handle first (Your X account, below).", { type: "warn" }); return; }
+    liveRunning = true; drawLive();
+    announce("Live X test started. It takes about 30 seconds.");
+    const r = await ctx.send("selfTest", {}, { raw: true, quiet: true, label: "Live X test" });
+    liveRunning = false;
+    live = r && r.ok !== false && Array.isArray(r.checks) ? { at: r.at || Date.now(), checks: r.checks, stop: r.stop || null } : { at: Date.now(), checks: [], error: (r && r.error) || "No answer from the background worker." };
+    writeLive(live);
+    drawHead(); drawLive();
+    const failed = live.error ? 1 : live.checks.filter((c) => !c.ok).length + (live.stop ? 1 : 0);
+    announce(`Live X test finished: ${failed ? failed + " failed" : "all checks passed"}.`);
+    toast(live.error ? `Live X test: ${live.error}` : failed ? `Live X test: ${failed} check${failed === 1 ? "" : "s"} failed` : "Live X test: all checks passed", { type: live.error || failed ? "warn" : "success" });
+    ctx.refreshHealth();
+  }
+  async function copyReport() {
+    if (!quick) await runQuick();
+    const s = ctx.settings, st = ctx.state, me = own();
+    const report = {
+      app: "ScoreX", version: chrome.runtime.getManifest().version, generatedAt: new Date().toISOString(),
+      note: "Redacted: no API keys, no other accounts' handles.",
+      summary: summaryText(),
+      quickCheck: quick ? { at: new Date(quick.at).toISOString(), groups: quick.groups.map((g) => ({ group: g.title, checks: g.rows.map((r) => ({ id: r.id, status: r.status, label: redactText(r.label, me), detail: redactText(r.detail, me) })) })) } : null,
+      liveTest: live ? { at: live.at ? new Date(live.at).toISOString() : null, error: live.error ? redactText(live.error, me) : undefined, stop: live.stop || null, checks: live.checks.map((c) => ({ id: c.id, ok: !!c.ok, label: redactText(c.label, me), detail: redactText(c.detail, me) })) } : null,
+      engine: { status: st.status, stopReason: st.stopReason || null, mode: s.mode, watchStrategy: s.watch && s.watch.strategy, workerTab: s.advanced && s.advanced.tabMode, debug: !!(s.advanced && s.advanced.debug) },
+      limits: { ramp: s.safety.ramp, accountsPerDay: s.safety.accountsPerDay, perTargetDay: s.safety.perTargetDay, gapMin: s.safety.gapMin, activeHours: !!s.safety.activeHours.enabled, maxPageLoads24h: s.safety.maxPageLoads24h },
+      counts: { targets: ctx.targetList().length, pending: ctx.counts.pending, queued: ctx.counts.queued },
+    };
+    const text = JSON.stringify(report, null, 2);
+    try { await navigator.clipboard.writeText(text); toast("Diagnostics report copied (no keys)", { type: "success" }); }
+    catch (_) { download(`scorex-diagnostics-${stamp()}.json`, text, "application/json"); toast("Clipboard blocked: the report was downloaded instead.", { type: "warn" }); }
+  }
+
+  const sec = section({ wide: true, className: "diag-sec", id: "diagnostics", title: full ? "Diagnostics" : "Diagnostics", hint: full ? "A quick check (no X tab) and a live test of the X pages ScoreX reads. Use Copy report when you ask for help." : "Problems found by the quick check. It does not use the X tab." },
+    head, rowsHost, liveHost,
+    h("p", { class: "muted small dg-note" }, "The live X test uses the X tab for about 30 seconds. It only reads pages: it never clicks, likes or types."));
+  drawHead(); drawRows(); drawLive();
+  sec.runQuick = runQuick;
+  ctx.on(K.state, () => { if (quick) drawHead(); });
+  ctx.on("tick", () => { drawHead(); });
+  return sec;
+}
+
 export default {
   id: "settings",
   title: "Settings",
-  hint: "Your account, how new posts are found, and everything else under Advanced.",
+  hint: "Diagnostics, your account, how new posts are found, and everything else under Advanced.",
   async render(root, ctx) {
     const f = (spec) => ctx.field(spec);
 
@@ -35,15 +255,24 @@ export default {
       if (window.sxTheme) window.sxTheme.set(themeSel.value);
       ctx.save((d) => { d.ui = { ...(d.ui || {}), theme: themeSel.value }; });
     });
-    window.addEventListener("sx-theme", (e) => { if (themeSel.isConnected) themeSel.value = e.detail.pref; });
+    const onTheme = (e) => { if (themeSel.isConnected && e && e.detail) themeSel.value = e.detail.pref; };
+    window.addEventListener("sx-theme", onTheme);
+    ctx.onDispose(() => window.removeEventListener("sx-theme", onTheme));
+    // Mode goes through the Full-auto confirm (switchMode); a cancelled confirm puts the select back.
+    const modeSel = selectEl([[MODE.REVIEW, "Review"], [MODE.AUTO, "Full auto"]], ctx.settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW, { id: "settingsMode" });
+    modeSel.addEventListener("change", async () => {
+      await ctx.setMode(modeSel.value);
+      modeSel.value = ctx.settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW;
+    });
+    ctx.addRefresher((st) => { if (!modeSel.isConnected) return false; if (document.activeElement !== modeSel) modeSel.value = st.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW; return true; });
 
     const accountSec = section({ title: "Your X account", hint: "The account ScoreX acts as. It stops if another one is logged in." },
       h("div", { class: "form-row" },
         f({ path: "account.handle", type: "text", label: "Your X handle", placeholder: "your_handle", hint: "Without @" }),
         f({ path: "account.verifyAccount", type: "toggle", label: "Stop if a different account is logged in" })));
-    const generalSec = section({ hint: "Mode is also on the Dashboard; the theme is also in the top bar." },
+    const generalSec = section({ hint: h("span", null, "Mode is also on ", h("a", { href: "#overview" }, "Today"), " and in the top bar; the time zone is also in ", h("a", { href: "#safety" }, "Safety"), "; the theme is in the top bar.") },
       h("div", { class: "form-row" },
-        f({ path: "mode", type: "select", label: "Mode", options: [[MODE.REVIEW, "Review"], [MODE.AUTO, "Full auto"]] }),
+        labeled("Mode", modeSel, "Full auto asks first"),
         f({ path: "timezone", type: "select", label: "Time zone", options: timeZones(ctx.settings.timezone), hint: "Active hours, daily limits, dates" }),
         labeled("Theme", themeSel)));
 
@@ -97,7 +326,11 @@ export default {
         f({ path: "learning.coldAfterComments", type: "number", label: "Cool down after N comments without response", min: 2, max: 50 }),
         f({ path: "learning.coldCooldownDays", type: "number", label: "Cool-down length (days)", min: 1, max: 90 }),
         f({ path: "learning.engagementCheckAfterHours", type: "number", label: "Check reply engagement after (hours)", min: 1, max: 720 }),
-        f({ path: "learning.maxChecksPerRun", type: "number", label: "Max checks per run", min: 0, max: 10 })));
+        f({ path: "learning.maxChecksPerRun", type: "number", label: "Max checks per run", min: 0, max: 10 })),
+      sub("Replies to you",
+        h("div", { class: "form-row" },
+          f({ path: "learning.conversations.enabled", type: "toggle", label: "Check my mentions for replies from accounts I comment on", id: "convEnabled", hint: "They show under Needs you on Today and in the popup." }),
+          f({ path: "learning.conversations.everyMin", type: "number", label: "Check every (min)", min: 15, max: 240, id: "convEvery" }))));
 
     // ------------------------------------------------ cleanup
     const cleanupToggle = toggleEl("Unfollow accounts that don't follow back", ctx.settings.cleanup.enabled, async (v, input) => {
@@ -269,7 +502,18 @@ export default {
     syncTags();
     ctx.on("settings", syncTags);
 
+    const full = ctx.params && ctx.params.view === "diagnostics";
+    const diagSec = diagnosticsSection(ctx, { full });
+    if (full) {
+      ctx.setTitle("Settings › Diagnostics");
+      const ph = root.querySelector(":scope > .page-hint");
+      if (ph) ph.remove();
+      add(root, diagSec, h("p", { class: "small" }, h("a", { href: "#settings", id: "allSettingsLink" }, "← All settings")));
+      await diagSec.runQuick();
+      return;
+    }
     add(root,
+      diagSec,
       accountSec,
       watchSec,
       windowSec,
@@ -277,13 +521,18 @@ export default {
       advanced({ key: "settings.general", title: "Mode, time zone and theme", desc: "Also available on the Dashboard, in Safety and in the top bar" }, generalSec),
       advanced({ key: "settings.watch", title: "Watching details", desc: "Search batch size, profiles per check, check interval, quote posts" }, watchMoreSec),
       advanced({ key: "settings.review", title: "Review queue", desc: "Expiry of pending and approved items, max waiting, notifications" }, reviewSec),
-      advanced({ key: "settings.learning", title: "Learning", desc: "Engagement checks, cool-downs, automatic tier moves (follow checks: Targets tab)" }, learningSec),
+      advanced({ key: "settings.learning", title: "Learning and background checks", desc: "Engagement checks, replies to you, cool-downs, automatic tier moves (follow checks: Targets tab)" }, learningSec),
       cleanupAdv,
       advanced({ key: "settings.worker", title: "Worker tab and selectors", desc: "Pinned tab or separate window, debug logging, selector overrides" }, workerSec, selectorsSec),
       advanced({ key: "settings.data", title: "Data", desc: "Export and import backups, export history, reset everything" }, dataSec, resetSec));
 
     drawStrategy();
     await loadOverrides();
+    diagSec.runQuick();
+    if (ctx.params && ctx.params.focus === "handle") {
+      const inp = accountSec.querySelector("input");
+      if (inp) setTimeout(() => { accountSec.scrollIntoView({ block: "start" }); inp.focus({ preventScroll: true }); }, 0);
+    }
     ctx.on("settings", () => { if (!strategyHost.contains(document.activeElement)) drawStrategy(); else listUrls.hidden = ctx.settings.watch.strategy !== "list"; });
     ctx.on(K.selectorOverrides, () => { if (document.activeElement !== ovText) loadOverrides(); });
   },

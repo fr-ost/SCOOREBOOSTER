@@ -1,14 +1,18 @@
-// Tone & Prompts tab. Essentials: your Tone prompt (one text, sent with every comment) + the prompt preview.
+// Tone & Prompts tab. Essentials: your Tone prompt (one text, sent with every comment) + the prompt preview, a "Try it"
+// box (sampleReply: writes one reply to a pasted post with the real model and cost, nothing is posted) and the
+// "Learn from my edits" switch with this week's edit rate.
 // Advanced: extra rules, learning from your best-performing posted comments, built-in tone texts, custom
 // tones (per-target overrides and A/B variants), the fixed comment rules.
 // A/B testing (other tones and presets tested against your Tone prompt + learningSummary results) in its
 // own collapsed section.
 
-import { K, BUILTIN_TONES, PRESET_KEYS } from "../../lib/constants.js";
+import { K, HS, HARD, BUILTIN_TONES, PRESET_KEYS } from "../../lib/constants.js";
+import * as history from "../../lib/history.js";
+import { weightedLength } from "../../lib/quality.js";
 import { DEFAULT_TONES, DEFAULT_TONE_PROMPT } from "../../lib/store.js";
 import { allToneKeys, toneText, MAIN_TONE } from "../../lib/targets.js";
 import { num } from "../../lib/util.js";
-import { h, clear, section, advanced, btn, busy, toast, icon, renderTable, selectEl, labeled, confirmDialog, modal, fmtUsd, fmtPct, sectionTitle, uidShort, add, fill } from "../components.js";
+import { h, clear, section, advanced, btn, busy, toast, icon, renderTable, selectEl, labeled, confirmDialog, modal, fmtUsd, fmtPct, sectionTitle, uidShort, add, fill, tag, announce } from "../components.js";
 import { toneLabel } from "./targets.js";
 import { PRESET_LABEL } from "./models.js";
 
@@ -77,11 +81,16 @@ export default {
 
     // ------------------------------------------------ preview
     const previewTarget = selectEl([["", "Any target (sample)"]], "", { id: "previewTarget" });
+    function fillTargetSelect(sel, first) {
+      const cur = sel.value;
+      clear(sel);
+      for (const [v, l] of first) sel.appendChild(h("option", { value: v }, l));
+      for (const t of ctx.targetList().sort((a, b) => a.handle.localeCompare(b.handle))) sel.appendChild(h("option", { value: t.handle }, `@${t.handle} (T${Number(t.tier) === 1 ? 1 : 2})`));
+      sel.value = [...sel.options].some((o) => o.value === cur) ? cur : "";
+    }
     function fillPreviewTargets() {
-      const cur = previewTarget.value;
-      clear(previewTarget).appendChild(h("option", { value: "" }, "Any target (sample)"));
-      for (const t of ctx.targetList().sort((a, b) => a.handle.localeCompare(b.handle))) previewTarget.appendChild(h("option", { value: t.handle }, `@${t.handle} (T${Number(t.tier) === 1 ? 1 : 2})`));
-      previewTarget.value = [...previewTarget.options].some((o) => o.value === cur) ? cur : "";
+      fillTargetSelect(previewTarget, [["", "Any target (sample)"]]);
+      fillTargetSelect(tryTarget, [["", "A sample account (Tier 2)"], ["tier:1", "A sample account (Tier 1)"]]);
     }
     const previewBtn = btn("Preview prompt", (e) => {
       const b = e.currentTarget;
@@ -98,6 +107,74 @@ export default {
         });
       });
     }, { iconName: "eye", id: "previewPromptBtn" });
+
+    // ------------------------------------------------ Try it (sampleReply: nothing is posted, the cost is real)
+    const tryText = h("textarea", { class: "input", id: "tryText", rows: 4, maxLength: 1500, spellcheck: "false", placeholder: "Paste the text of a post from X (a sentence or more)" });
+    const tryTarget = selectEl([["", "A sample account (Tier 2)"]], "", { id: "tryTarget" });
+    const tryOut = h("div", { class: "try-out", id: "tryResult", "aria-live": "polite" });
+    let tryEstimate = null;
+    const tryLabel = h("span", null, "Write a sample reply");
+    const tryBtn = h("button", { type: "button", class: "btn btn-primary", id: "tryBtn", title: "One real API call with your current Tone prompt, rules and model. Nothing is posted." }, icon("play"), tryLabel);
+    const setTryLabel = () => { tryLabel.textContent = "Write a sample reply" + (tryEstimate ? ` · ~${fmtUsd(tryEstimate)}` : ""); };
+    async function loadEstimate() {
+      try {
+        const recent = (await history.latest(40)).map((r) => Number(r.cost)).filter((c) => Number.isFinite(c) && c > 0).sort((a, b) => a - b);
+        tryEstimate = recent.length ? recent[Math.floor(recent.length / 2)] : null;
+      } catch (_) { tryEstimate = null; }
+      setTryLabel();
+    }
+    function tryError(msg, cost) {
+      fill(tryOut, h("div", { class: "try-error", role: "alert" }, icon("alert"), h("span", null, msg, cost ? ` (this attempt cost ${fmtUsd(cost)})` : "")));
+    }
+    async function runTry() {
+      const text = tryText.value.trim();
+      if (/^https?:\/\/\S+$/i.test(text)) { tryError("Paste the post's text, not its link: ScoreX does not open X for a sample."); tryText.focus(); return; }
+      if (text.length < 10) { tryError("Paste the post text first (a sentence or more)."); tryText.focus(); return; }
+      const v = tryTarget.value;
+      const payload = { text };
+      if (v.startsWith("tier:")) payload.tier = Number(v.slice(5)) === 1 ? 1 : 2; else if (v) payload.handle = v; else payload.tier = 2;
+      fill(tryOut, h("div", { class: "try-wait" }, h("span", { class: "spinner" }), "Writing a sample reply…"));
+      const r = await ctx.send("sampleReply", payload, { raw: true, quiet: true, label: "Sample reply" });
+      if (!r || r.ok === false) { tryError((r && r.error) || "No answer from the background worker.", r && r.cost); return; }
+      const s = ctx.settings;
+      const comment = String(r.comment || "");
+      const n = weightedLength(comment);
+      const q = r.quality || {};
+      const notes = (Array.isArray(q.reasons) ? q.reasons : []).map(String);
+      if (q.modelVerdict && typeof q.modelVerdict === "object" && q.modelVerdict.issue) notes.push("Checker: " + q.modelVerdict.issue);
+      const passed = q.modelVerdict && typeof q.modelVerdict === "object" && q.modelVerdict.pass === true;
+      const copyBtn = btn("Copy", async () => {
+        try { await navigator.clipboard.writeText(comment); toast("Sample reply copied", { type: "success" }); } catch (_) { toast("Could not copy - select the text instead.", { type: "warn" }); }
+      }, { size: "sm", kind: "ghost", iconName: "copy" });
+      fill(tryOut, h("article", { class: "try-card", "aria-label": "Sample reply" },
+        h("div", { class: "try-head" }, h("strong", null, "Sample reply"), payload.handle ? h("span", { class: "muted small" }, `to a post by @${payload.handle}`) : null, tag("not posted"), h("span", { class: "spacer" }),
+          h("span", { class: ["char-count", n > HARD.maxCommentChars ? "is-over" : n > s.quality.maxChars ? "is-warn" : ""] }, `${n} / ${HARD.maxCommentChars}`)),
+        h("p", { class: "try-text" }, comment),
+        notes.length ? h("ul", { class: "quality-notes" }, notes.map((x) => h("li", null, x))) : null,
+        h("div", { class: "try-foot" },
+          h("div", { class: "try-meta" },
+            h("span", null, r.model || "model?"),
+            r.effort ? h("span", null, r.effort) : null,
+            r.tone ? h("span", null, "tone " + toneLabel(r.tone, s)) : null,
+            r.preset ? h("span", null, PRESET_LABEL[r.preset] || r.preset) : null,
+            h("span", { title: "Real OpenAI cost of this sample (recorded in your spend)" }, fmtUsd(r.cost)),
+            passed ? h("span", { class: "rc-pass" }, "check passed") : null),
+          copyBtn)));
+      announce("Sample reply ready.");
+      if (Number(r.cost) > 0) { tryEstimate = Number(r.cost); setTryLabel(); }
+    }
+    tryBtn.addEventListener("click", () => busy(tryBtn, runTry));
+    tryText.addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (!tryBtn.disabled) tryBtn.click(); } });
+
+    // ------------------------------------------------ learn from my edits (edit rate: posted in the last 7 days)
+    const editRate = h("p", { class: "muted small mono-nums", id: "editRate" }, "Edit rate this week: -");
+    async function loadEditRate() {
+      try {
+        const posted = (await history.since(Date.now() - 7 * 864e5)).filter((r) => r.status === HS.POSTED);
+        const edited = posted.filter((r) => r.edited === true).length;
+        editRate.textContent = posted.length ? `Edit rate this week: ${edited} of ${posted.length} posted replies` : "Edit rate this week: no posted replies yet";
+      } catch (_) { editRate.textContent = "Edit rate this week: -"; }
+    }
 
     // ------------------------------------------------ built-in tones
     const useBtn = (key) => btn("Use as Tone prompt", () => useAsTonePrompt(key).then((r) => r && toast("Tone prompt replaced", { type: "success" })), { size: "sm", kind: "ghost", title: "Copy this text into your Tone prompt" });
@@ -244,6 +321,15 @@ export default {
         h("div", { class: "toolbar" }, toneCount, h("span", { class: "spacer" }), toneReset),
         h("div", { class: "toolbar toolbar-end" }, labeled("Preview the prompt for", previewTarget), previewBtn)),
 
+      section({ title: "Try it", hint: "Write one reply to a post you paste, with your current Tone prompt, rules and model. Nothing is posted; the API call costs real money and counts toward your budget.", id: "tryIt" },
+        labeled("Post text", tryText),
+        h("div", { class: "toolbar try-bar" }, labeled("Written as a reply to", tryTarget), h("span", { class: "spacer" }), tryBtn),
+        tryOut),
+
+      section({ title: "Learn from my edits", hint: "Your recent edits in Review teach the model your voice: the drafts you changed and what you posted instead are shown to it as examples." },
+        ctx.field({ path: "prompt.learnFromEdits", type: "toggle", label: "Learn from my edits", id: "learnEditsToggle" }),
+        editRate),
+
       advanced({ key: "tones.advanced", desc: "Extra rules, learning from your best comments, built-in and custom tones, fixed comment rules" },
         section({ title: "Extra rules", hint: "Added to the instructions for every comment." },
           ctx.field({ path: "prompt.extraRules", type: "textarea", rows: 4, ariaLabel: "Extra rules", placeholder: "e.g. Never use the word 'game-changer'. Prefer lowercase. Mention numbers when the post has data." })),
@@ -261,6 +347,7 @@ export default {
         section({ wide: true, title: "Results", actions: abActions }, abResults)));
 
     syncTone(); drawBuiltins(); drawCustom(); fillPreviewTargets();
+    loadEstimate(); loadEditRate();
     drawAb(null);
     loadAb(false);
 
