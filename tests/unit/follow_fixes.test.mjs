@@ -265,6 +265,25 @@ describe("FOL-9: accounts that follow you are re-checked now and then", () => {
     await F.followStep({ tabId: 7, settings: s, me: "0x_nation" });
     assert.deepEqual(fx.navigations, [], "no profile visits while the badge is not trusted");
   });
+
+  test("at most 12 verify visits per 24 h, however many accounts follow you (X footprint)", async () => {
+    const fans = Array.from({ length: 30 }, (_, i) => target("fan" + i, { follows: true, checkedAgo: 11 * DAY + i * MIN }));
+    profileFollows = Object.fromEntries(fans.map((t) => [t.handle, true]));
+    await save({ [K.targets]: map(...fans) });
+    for (let run = 0; run < 10; run++) {
+      _setClock(() => NOW + run * 10 * MIN);
+      await patchState({ followBadgeOkAt: NOW + run * 10 * MIN, followersScanAt: NOW + run * 10 * MIN });
+      await F.followStep({ tabId: 7, settings, me: "0x_nation" });
+    }
+    assert.equal(fx.navigations.length, 12, "capped at 12 in 24 h");
+    const all = await getTargets();
+    assert.equal(Object.values(all).filter((t) => t.rel.verifiedAt).length, 12);
+    assert.ok(Object.values(all).every((t) => T.followStatus(t) === T.FS.FOLLOWS), "still following: nothing changes");
+    _setClock(() => NOW + 25 * HOUR);
+    await patchState({ followBadgeOkAt: NOW + 25 * HOUR, followersScanAt: NOW + 25 * HOUR });
+    await F.followStep({ tabId: 7, settings, me: "0x_nation" });
+    assert.equal(fx.navigations.length, 14, "the next day continues with the rest");
+  });
 });
 
 describe("XP-4: the followers scan honours Pause/Stop between scrolls", () => {

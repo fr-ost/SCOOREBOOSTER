@@ -319,6 +319,7 @@ async function checkReply(tabId, rec, settings) {
 
 // Store one check. results.views always holds the latest reading (viewsAt = when it was read); an early look also
 // keeps earlyViews / earlyAt and never counts as the engagement check (no checkedAt), so the 24 h look still happens.
+// The first regular look also keeps dayViews / dayViewsAt (the reach monitor's day-after reading, lib/reach.js).
 async function recordCheck(rec, c, kind) {
   const t = now();
   if (c.ok && c.gone) return H.patch(rec.id, (cur) => ({ results: { ...(cur.results || {}), checkedAt: t, checks: 2, gone: true } }));
@@ -330,7 +331,10 @@ async function recordCheck(rec, c, kind) {
       const out = { ...res, likes: s.likes, replies: s.replies, authorReplied: !!s.authorReplied || !!res.authorReplied };
       if (views != null) { out.views = views; out.viewsAt = t; }
       if (kind === "early") { out.earlyAt = t; if (views != null) out.earlyViews = views; }
-      else Object.assign(out, { checkedAt: t, checks: (res.checks || 0) + 1, failures: 0, nextCheckAt: null });
+      else {
+        if (views != null && !res.checkedAt && res.dayViews == null) { out.dayViews = views; out.dayViewsAt = t; }
+        Object.assign(out, { checkedAt: t, checks: (res.checks || 0) + 1, failures: 0, nextCheckAt: null });
+      }
       return { results: out };
     });
     if (s.authorReplied && !(rec.results && rec.results.authorReplied)) log("info", `@${rec.target} replied to your comment`);

@@ -35,19 +35,23 @@ const dropOf = (cur, before) => (cur == null || before == null || before <= 0 ? 
 // Pure. records: history records (any status). Day-after readings (results.views read >= ~24 h after posting) give the
 // median of the last WINDOW checked replies vs the WINDOW before, and the share of them under lowViews. Early readings
 // (results.earlyViews, ~3 h after posting) are compared only with each other, because a young reply has fewer views.
+// The first day-after reading is kept in results.dayViews / dayViewsAt (lib/learning.js), so a later look (the 72 h
+// one, which overwrites results.views) never moves a reply out of the comparison; older records only have views.
+const dayReading = (res) => (isNum(res.dayViews) && res.dayViewsAt ? { v: Number(res.dayViews), at: num(res.dayViewsAt) } : isNum(res.views) && res.viewsAt ? { v: Number(res.views), at: num(res.viewsAt) } : null);
 export function reachStats(records, settings, ts = now()) {
   const R = (settings && settings.safety && settings.safety.reach) || {};
   const lowViews = num(R.lowViews, 10);
   const posted = (records || []).filter((r) => r && r.status === HS.POSTED && r.postedAt && r.results && !r.results.gone && r.postedAt <= ts);
   const mature = posted
-    .filter((r) => { const res = r.results; const age = num(res.viewsAt) - r.postedAt; return isNum(res.views) && res.viewsAt && age >= MATURE_FROM_MS && age <= MATURE_UNTIL_MS; })
-    .sort((a, b) => b.postedAt - a.postedAt);
+    .map((r) => ({ r, d: dayReading(r.results) }))
+    .filter(({ r, d }) => d && d.at - r.postedAt >= MATURE_FROM_MS && d.at - r.postedAt <= MATURE_UNTIL_MS)
+    .sort((a, b) => b.r.postedAt - a.r.postedAt);
   const recent = mature.slice(0, WINDOW), prev = mature.slice(WINDOW, 2 * WINDOW);
   const early = posted.filter((r) => isNum(r.results.earlyViews)).sort((a, b) => b.postedAt - a.postedAt);
   const eRecent = early.slice(0, WINDOW), ePrev = early.slice(WINDOW, 2 * WINDOW);
   const vals = (list, key) => list.map((r) => Number(r.results[key]));
-  const medianViews = median(vals(recent, "views")), prevMedianViews = median(vals(prev, "views"));
-  const lowCount = recent.filter((r) => Number(r.results.views) < lowViews).length;
+  const medianViews = median(recent.map((x) => x.d.v)), prevMedianViews = median(prev.map((x) => x.d.v));
+  const lowCount = recent.filter((x) => x.d.v < lowViews).length;
   const eNow = median(vals(eRecent, "earlyViews")), eBefore = median(vals(ePrev, "earlyViews"));
   return {
     checked: recent.length, prevChecked: prev.length, totalChecked: mature.length,

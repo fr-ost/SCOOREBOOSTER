@@ -24,11 +24,13 @@ import { normalizeHandle, now, DAY, HOUR, MIN, sleep, humanDelay } from "./util.
 const BADGE_TRUST_MS = 3 * DAY; // negatives are trusted this long after the badge was last seen working
 const SCAN_RETRY_MS = 30 * MIN;
 // Accounts that follow you are looked at again now and then, so one that unfollows you gets comments again (after two
-// checks in a row). Heuristics: every 10 days, a missing badge is confirmed the next day, at most 2 per run, and
-// only with what is left of the run's profile-visit budget.
+// checks in a row). Heuristics: every 10 days, a missing badge is confirmed the next day, at most 2 per run and 12
+// per 24 h (rel.verifiedAt), and only with what is left of the run's profile-visit budget, so a long list of
+// accounts that follow you never adds many X page loads.
 const VERIFY_EVERY_MS = 10 * DAY;
 const VERIFY_CONFIRM_MS = DAY;
 const VERIFY_PER_RUN = 2;
+const VERIFY_PER_DAY = 12;
 // navigate()'s 3rd argument: the page-load purpose for the X footprint ledger (lib/tabs.js). valueOf keeps it a valid
 // timeout (45 s) for the older navigate(tabId, url, timeoutMs) signature.
 const NAV = (purpose) => ({ purpose, timeoutMs: 45000, valueOf: () => 45000 });
@@ -67,11 +69,12 @@ export function followPlan(targets, settings, st, ts = now()) {
     ...checking.filter(waitOk).map((t) => ({ handle: t.handle, why: "check" })),
     ...recheck.map((t) => ({ handle: t.handle, why: "recheck" })),
   ];
+  const verifiedToday = list.filter((t) => t.rel && t.rel.verifiedAt && ts - t.rel.verifiedAt < DAY).length;
   const verify = list
     .filter((t) => [FS.FOLLOWS, FS.FOLLOWED_BACK].includes(followStatus(t)) && waitOk(t))
     .filter((t) => !t.rel.checkedAt || ts - t.rel.checkedAt >= (t.rel.notFollowingSeen > 0 ? VERIFY_CONFIRM_MS : VERIFY_EVERY_MS))
     .sort((a, b) => (b.rel.notFollowingSeen || 0) - (a.rel.notFollowingSeen || 0) || (a.rel.checkedAt || 0) - (b.rel.checkedAt || 0))
-    .slice(0, VERIFY_PER_RUN)
+    .slice(0, Math.max(0, Math.min(VERIFY_PER_RUN, VERIFY_PER_DAY - verifiedToday)))
     .map((t) => ({ handle: t.handle, why: "verify" }));
   return { scan, deep: checking.length > 0, profiles, verify, counts: { checking: checking.length, active: active.length, giveUp: giveUp.length } };
 }
@@ -225,6 +228,12 @@ export async function followStep({ tabId, settings, me, shouldStop }) {
       if (r && r.aborted) return { did: "aborted" };
       if (r && r.budget) { visits--; break; } // page-load budget reached: nothing was loaded, the check stays due
       ts = now();
+      if (p.why === "verify") {
+        await updateTargets((all) => {
+          if (Object.hasOwn(all, p.handle)) all[p.handle].rel = { ...(all[p.handle].rel || {}), verifiedAt: ts }; // the 24 h cap
+          return all;
+        });
+      }
       if (r && r.ok && r.notFound) {
         await updateTargets((all) => {
           const t = Object.hasOwn(all, p.handle) ? all[p.handle] : null;

@@ -181,7 +181,8 @@ async function runDiscoveryInner(opts, stopFn) {
     for (const c of list) {
       if (targets[c.handle]) continue;
       const prev = all[c.handle] || {};
-      const merged = { ...prev, ...c, sources: [...new Set([...(prev.sources || []), ...c.sources])], foundAt: prev.foundAt || ts };
+      // seenAt: a repeat find counts as recent for the candidate cap (store.js keeps the 2,000 most recently seen).
+      const merged = { ...prev, ...c, sources: [...new Set([...(prev.sources || []), ...c.sources])], foundAt: prev.foundAt || ts, seenAt: ts };
       merged.overlap = Math.max(prev.overlap || 0, c.overlap || 0);
       merged.suggestedGroup = merged.followsYou ? "A" : "B";
       if (!merged.suggestedTier) merged.suggestedTier = merged.verified ? 1 : 2;

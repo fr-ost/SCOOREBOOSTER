@@ -9,7 +9,8 @@
 //   lastPostAt, lastCheckedAt,
 //   rel: { followsYou (null = not checked yet), youFollow, checkedAt, youFollowSince, followedBackAt,
 //          notFollowingSeen, unfollowedYouAt (it followed you, then unfollowed), gone (profile not found; cleared
-//          when the profile reads fine again or the target is turned on again) },
+//          when the profile reads fine again or the target is turned on again), verifiedAt (last "does it still
+//          follow you?" visit, follow.js) },
 //   score: { own, sorsa, combined, flags, bot, updatedAt, sorsaUpdatedAt, providers: { [id]: { score, max, at } },
 //            value (0-100 | null), propensity (0-1 | null), why }  (value/propensity/why: learning.updatePriorities),
 //   priority (0-100), coldUntil,

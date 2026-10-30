@@ -217,6 +217,20 @@ describe("learningStep stores views (and early views) from the checks", () => {
     const n = (await H.get(noViews.id)).results;
     assert.deepEqual([n.views, n.viewsAt], [77, NOW - HOUR], "an unreadable view count keeps the last reading");
     assert.ok(rawGet(K.state).reach, "state.reach refreshed after the checks");
+    assert.deepEqual([d.dayViews, d.dayViewsAt, e.dayViews], [321, NOW, undefined], "the first regular look is the day-after reading");
+  });
+
+  test("a later look (72 h, conversation alerts off) updates views but keeps the day-after reading for the reach monitor", async () => {
+    const s = sanitizeSettings({ learning: { conversations: { enabled: false } } });
+    const old = rec({ ageH: 110, views: 50, readAfterH: 24, results: { checks: 1 } });
+    old.results.dayViews = 50; old.results.dayViewsAt = old.results.viewsAt;
+    await H.put(old);
+    views = { [old.replyId]: 900 };
+    await learningStep({ tabId: 7, settings: s, me: "0x_nation" });
+    const res = (await H.get(old.id)).results;
+    assert.deepEqual([res.views, res.viewsAt, res.checks, res.dayViews], [900, NOW, 2, 50], "views = latest, dayViews unchanged");
+    const st = R.reachStats([await H.get(old.id)], s, NOW);
+    assert.deepEqual([st.checked, st.medianViews], [1, 50], "read 4.6 days after posting, still counted with its day-after views");
   });
 
   test("a reach drop with the 'stop' action stops the engine through learningStep", async () => {
