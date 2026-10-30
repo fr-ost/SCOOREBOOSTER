@@ -29,6 +29,7 @@ try {
   const so = st.providers.find((p) => p.id === "sorsa");
   assert(ts.mode === "public" && ts.granted, "TwitterScore without a key reads the free public page");
   assert(so.mode === "api" && so.hasKey && so.granted, "Sorsa uses its API with your key");
+  assert(ts.usage && ts.usage.cap === 100, "TwitterScore is asked at most 100 times a day by default (be polite to the site)");
 
   // ---- your own scores ----
   let r = await H.msg("scoresRefreshOwn", { force: true });
@@ -107,6 +108,15 @@ try {
   r = await H.msg("smartSweep", { handles: ["bigvc"] });
   await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.status !== "running" ? b.job : null; }, "second search finished", 60000);
   assert((await H.store("sx.candidates")).alpha.sources.length === 1, "repeated searches do not duplicate sources");
+  // Candidates stay at the newest / best 2,000: 2,100 old ones + a new search.
+  const seeded = { ...(await H.store("sx.candidates")) };
+  for (let i = 0; i < 2100; i++) seeded["old_cand_" + i] = { handle: "old_cand_" + i, foundAt: 1000 + i, sources: ["seed"], overlap: 1 };
+  await H.setStore({ "sx.candidates": seeded });
+  const sweep3At = Date.now();
+  r = await H.msg("smartSweep", { handles: ["bigvc"] });
+  await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.status !== "running" && b.job.startedAt >= sweep3At ? b.job : null; }, "third search finished", 60000);
+  const capped = await H.store("sx.candidates");
+  assert(Object.keys(capped).length === 2000 && capped.alpha && capped.alpha.seenAt && !capped.old_cand_0, "candidates are capped at the newest 2,000 (a repeat find counts as new): " + Object.keys(capped).length);
 
   // ---- target scores + caps ----
   M.sorsa.scores.delta = 444;
@@ -114,6 +124,12 @@ try {
   await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.kind === "targets" && b.job.status !== "running" ? b.job : null; }, "target scores", 60000);
   const tDelta = (await H.store("sx.targets")).delta;
   assert(tDelta.score.providers.sorsa.score === 444 && tDelta.score.sorsa === 444, "target scores stored per provider (Sorsa also in the Sorsa column)");
+  assert(tDelta.score.combined != null && tDelta.score.combined > 0, "the combined rank is recomputed from the new Sorsa score: " + tDelta.score.combined);
+  const sorsaCalls = M.sorsa.calls.length;
+  const targets2At = Date.now();
+  r = await H.msg("targetScores", { handles: ["delta"], provider: "sorsa" });
+  await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.kind === "targets" && b.job.status !== "running" && b.job.startedAt >= targets2At ? b.job : null; }, "cached target scores", 60000);
+  assert(M.sorsa.calls.length === sorsaCalls, "a target score fetched this week is not fetched again");
   await H.settings({ providers: { sorsa: { dailyCap: 1 } } });
   r = await H.msg("scoreCheck", { handle: "beta" });
   assert(/cap/i.test(r.results.sorsa.error || ""), "a provider's daily request cap is respected: " + r.results.sorsa.error);
@@ -131,6 +147,11 @@ try {
   r = await H.msg("selfTest");
   const home = r.checks.find((c) => c.id === "home");
   assert(home && !home.ok && /post text/.test(home.detail), "self-test names what X no longer shows: " + (home && home.detail));
+  M.pageMode = "captcha";
+  r = await H.msg("selfTest");
+  const stAfter = await H.store("sx.state");
+  assert(r.ok && r.stop === "captcha" && stAfter.status === "stopped" && stAfter.stopReason === "captcha" && stAfter.alert, "a captcha seen by the self-test is a safety stop like anywhere else: " + JSON.stringify({ stop: r.stop, status: stAfter.status, reason: stAfter.stopReason }));
+  await H.msg("clearAlert");
   M.pageMode = "ok";
 
   // ---- privacy: only handles go out, keys never in logs ----

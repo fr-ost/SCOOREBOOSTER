@@ -13,6 +13,10 @@ import { pageVerdict } from "./guard.js";
 import { applyProfile } from "./targets.js";
 import { now, DAY, MIN, randInt, sleep, humanDelay, clamp } from "./util.js";
 
+// navigate()'s 3rd argument: the page-load purpose for the X footprint ledger (lib/tabs.js). valueOf keeps it a valid
+// timeout (45 s) for the older navigate(tabId, url, timeoutMs) signature.
+const NAV = (purpose) => ({ purpose, timeoutMs: 45000, valueOf: () => 45000 });
+
 export function eligible(t, settings, ts = now()) {
   const c = settings.cleanup;
   const why = [];
@@ -58,7 +62,7 @@ async function followsYouCanary(tabId, settings, me, ts) {
   const st = await getState();
   if (st.followsYouCanaryAt && ts - st.followsYouCanaryAt < DAY) return { ok: true };
   if (!me) return { ok: false, reason: "no handle" };
-  const nav = await navigate(tabId, `https://x.com/${me}/followers`);
+  const nav = await navigate(tabId, `https://x.com/${me}/followers`, NAV("follow"));
   if (!nav.ok) return { ok: false, reason: "followers page did not load" };
   const w = await waitForPage(tabId, ["userCell", "emptyState"], 20000);
   const v = pageVerdict(w.page, settings);
@@ -105,7 +109,8 @@ export async function cleanupStep({ tabId, settings, me, shouldStop }) {
     return { did: "cleanup_skip" };
   };
   // Re-check the profile right before acting.
-  const nav = await navigate(tabId, `https://x.com/${pick.handle}`);
+  const nav = await navigate(tabId, `https://x.com/${pick.handle}`, NAV("follow"));
+  if (!nav.ok && nav.budget) return null; // X page-load budget reached: nothing was loaded, try again later
   if (!nav.ok) return postpone(false);
   const w = await waitForPage(tabId, ["profileUserName", "emptyState"], 20000);
   const v = pageVerdict(w.page, settings);

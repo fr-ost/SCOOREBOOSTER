@@ -68,10 +68,18 @@ export function conversionBy(key, targets, history) {
   return [...rows.values()].map((r) => ({ ...r, rate: r.accounts ? r.followBacks / r.accounts : 0 })).sort((a, b) => b.rate - a.rate || b.accounts - a.accounts);
 }
 
+// The `days` calendar days ending with the local day of ts, oldest first. Stepping by calendar date, not by 24 h:
+// around a DST change ts - n*24h repeats one day and skips another.
+function dayKeys(days, tz, ts) {
+  const [y, m, d] = dayKey(ts, tz).split("-").map(Number);
+  const keys = [];
+  for (let i = days - 1; i >= 0; i--) keys.push(new Date(Date.UTC(y, m - 1, d - i)).toISOString().slice(0, 10));
+  return keys;
+}
+
 // Daily series for the last `days` days (oldest first): posted, generated, follow-backs, cost, likes.
 export function dailySeries(history, targets, { days = 30, tz = "UTC", ts = Date.now() } = {}) {
-  const keys = [];
-  for (let i = days - 1; i >= 0; i--) keys.push(dayKey(ts - i * DAY, tz));
+  const keys = dayKeys(Math.max(1, Math.round(Number(days) || 30)), tz, ts);
   const idx = new Map(keys.map((k, i) => [k, i]));
   const rows = keys.map((d) => ({ d, posted: 0, generated: 0, followBacks: 0, cost: 0, replyLikes: 0 }));
   for (const r of history || []) {

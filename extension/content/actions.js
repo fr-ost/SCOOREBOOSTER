@@ -18,7 +18,9 @@
     return null;
   }
 
-  function openDialog() { return D.qa("dialog").find((d) => D.q("composerTextbox", d)) || null; }
+  // The reply modal: a dialog with a text box AND X's post textarea / Reply button (composerDialogMarker).
+  const isComposerDialog = (d) => !!D.q("composerTextbox", d) && !!D.q("composerDialogMarker", d);
+  function openDialog() { return D.qa("dialog").find(isComposerDialog) || null; }
 
   // The composer we are working with: the reply modal if open, else the inline reply box on the status page.
   function composer() {
@@ -43,7 +45,55 @@
 
   function boxText(box) { return box ? norm(box.innerText || box.textContent || "") : ""; }
 
-  async function like({ tweetId }) {
+  // Right before acting: the page must be logged in as the expected account (the worker passes expectMe when
+  // "verify account" is on). Unknown -> nothing is clicked or typed.
+  function accountCheck(expectMe) {
+    if (!expectMe) return null;
+    const me = X.myHandle();
+    if (!me) return { ok: false, error: "account_unknown" };
+    if (me !== String(expectMe).toLowerCase().replace(/^@/, "")) return { ok: false, error: "wrong_account", me };
+    return null;
+  }
+
+  // Plain-text sample of a prompt for the stop reason (shown as text, never as HTML).
+  const sample = (t) => String(t || "").replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 200);
+  function unknownPrompt(t, why) { return { ok: false, state: "unknown_prompt", detail: sample(t) || "(a dialog without text)", why }; }
+  // Text of the reply composer around the box: no typed reply, no quoted post, no names.
+  const composerChrome = (el) => D.textExcluding(el, ["composerTextbox", "tweet", "tweetText", "tweetUserName"], 1500);
+
+  // Fail closed on prompts X shows while ScoreX posts: any dialog / sheet / interstitial that is neither the
+  // reply composer nor a toast (or a known harmless overlay) is unknown, and text matching text.aiLabel
+  // ("made with AI", "may be hidden", ...) is a stop wherever it shows up. ScoreX never clicks such a prompt.
+  function promptCheck() {
+    // Text nodes joined with spaces (innerText runs adjacent inline elements together: "Made with" + "AI").
+    const words = (el) => D.textExcluding(el, [], 1500);
+    for (const el of D.qaAll("prompt")) {
+      if (!D.shown(el) || D.closest(el, "toast")) continue;
+      const own = words(el);
+      if (!own && !el.querySelector("button, [role=\"button\"], a[href], input, img, svg")) continue; // empty layer
+      if (isComposerDialog(el)) { // the reply composer (or a layer around it)
+        const around = composerChrome(el);
+        if (D.re("aiLabel").test(around)) return unknownPrompt(around, "ai_label");
+        continue;
+      }
+      if (D.matches(el, "knownOverlay") || D.closest(el, "knownOverlay")) {
+        if (D.re("aiLabel").test(own)) return unknownPrompt(own, "ai_label");
+        continue;
+      }
+      return unknownPrompt(own, D.re("aiLabel").test(own) ? "ai_label" : "dialog");
+    }
+    for (const t of D.qa("toast")) {
+      const txt = words(t);
+      if (D.re("aiLabel").test(txt)) return unknownPrompt(txt, "ai_label");
+    }
+    return null;
+  }
+
+  async function like({ tweetId, expectMe }) {
+    const acct = accountCheck(expectMe);
+    if (acct) return acct;
+    const p0 = promptCheck();
+    if (p0) return p0;
     const a = focalArticle(tweetId);
     if (!a) return { ok: false, error: "post_not_found" };
     if (D.q("unlikeButton", a)) return { ok: true, already: true };
@@ -56,7 +106,11 @@
     return ok ? { ok: true } : { ok: false, error: "like_not_confirmed" };
   }
 
-  async function openComposer({ tweetId }) {
+  async function openComposer({ tweetId, expectMe }) {
+    const acct = accountCheck(expectMe);
+    if (acct) return acct;
+    const p0 = promptCheck(); // never click anything while X shows something unknown
+    if (p0) return p0;
     const a = focalArticle(tweetId);
     if (!a) return { ok: false, error: "post_not_found" };
     const st = S.scrapeStatus(tweetId);
@@ -66,9 +120,11 @@
       const btn = D.q("replyButton", a);
       if (!btn) return { ok: false, error: "reply_button_missing", dom: true };
       D.humanClick(btn);
-      await D.waitFor(() => { const x = composer(); return x.box && D.visible(x.box) ? x : null; }, 8000, 250);
+      await D.waitFor(() => { const x = composer(); return x.box && D.visible(x.box) ? x : promptCheck(); }, 8000, 250);
       c = composer();
     }
+    const p1 = promptCheck(); // an interstitial instead of (or over) the reply box
+    if (p1) return p1;
     if (!c.box) return { ok: false, error: "composer_missing", dom: true };
     try { c.box.scrollIntoView({ block: "center" }); } catch (_) {}
     // Focus like a click into the box (no synthetic click: on some layouts it opens the modal twice).
@@ -94,6 +150,8 @@
 
   // Type the next chunk of characters at the end of the composer.
   async function type({ text }) {
+    const p = promptCheck(); // a prompt appeared while typing: stop typing, touch nothing
+    if (p) return p;
     const { box } = composer();
     if (!box) return { ok: false, error: "composer_missing", dom: true };
     if (document.activeElement !== box && !box.contains(document.activeElement)) caretToEnd(box);
@@ -140,15 +198,28 @@
     return { ok: !openDialog() };
   }
 
-  async function submitReply({ expectText }) {
+  async function submitReply({ expectText, expectMe }) {
+    const acct = accountCheck(expectMe);
+    if (acct) return acct;
+    const p0 = promptCheck();
+    if (p0) return p0;
     const c = composer();
     if (!c.box) return { ok: false, error: "composer_missing", dom: true };
     const got = boxText(c.box);
     if (expectText && norm(expectText) !== got) return { ok: false, error: "composer_text_mismatch", text: got };
     const key = c.where === "modal" ? "replySubmitModal" : "replySubmitInline";
     const find = () => D.q(key, c.root) || D.q("replySubmitModal") || D.q("replySubmitInline");
-    const btn = await D.waitFor(() => { const b = find(); return b && !D.isDisabled(b) ? b : null; }, 6000, 250);
-    if (!btn) {
+    let btn = null;
+    await D.waitFor(() => {
+      if (promptCheck()) return true;
+      const b = find();
+      if (b && !D.isDisabled(b)) { btn = b; return true; }
+      return null;
+    }, 6000, 250);
+    // Checked again right before the click: the account and any prompt that showed up while waiting.
+    const late = accountCheck(expectMe) || promptCheck();
+    if (late) return late;
+    if (!btn || !btn.isConnected || D.isDisabled(btn)) {
       // A present-but-disabled button usually means X rejects the text (e.g. over its weighted length).
       return find() ? { ok: false, error: "submit_button_disabled" } : { ok: false, error: "submit_button_missing", dom: true };
     }
@@ -156,12 +227,24 @@
     return { ok: true, where: c.where };
   }
 
+  // Did X take the reply? (no composer dialog left and the box is empty)
+  function composerCleared() {
+    const c = composer();
+    return !openDialog() && (!c.box || !boxText(c.box));
+  }
+
   // After submitting: wait for X's confirmation (toast with a link, composer cleared, or our reply in the thread).
+  // An unknown prompt (or AI-label text) ends the wait as state "unknown_prompt"; cleared/sent tell the worker
+  // whether the reply may have gone out anyway.
   async function replyResult({ tweetId, expectText, me, timeoutMs = 20000 }) {
     const want = norm(expectText).slice(0, 60).toLowerCase();
+    const sentToast = () => D.qa("toast").some((t) => D.re("replySent").test(D.text(t)) || !!t.querySelector('a[href*="/status/"]'));
+    const prompted = (p, sent) => ({ ...p, cleared: composerCleared(), sent: !!sent || sentToast() });
     const res = await D.waitFor(() => {
       const ts = X.toastState();
       if (ts) return { ok: false, state: ts.state, detail: ts.detail };
+      const p = promptCheck();
+      if (p) return prompted(p, false);
       for (const t of D.qa("toast")) {
         const txt = D.text(t);
         if (D.re("duplicate").test(txt)) return { ok: false, error: "duplicate", detail: txt.slice(0, 200) };
@@ -178,10 +261,16 @@
       }
       return null;
     }, timeoutMs, 400);
+    if (res && res.ok) {
+      // X sometimes follows a sent reply with a sheet (e.g. an AI label or "may be hidden" notice): look for a
+      // moment before reporting success, so it is never missed.
+      const late = await D.waitFor(() => promptCheck(), 1500, 250);
+      if (late) return { ...prompted(late, true), replyId: res.replyId, replyUrl: res.replyUrl };
+      return res;
+    }
     if (res) return res;
     // No explicit confirmation: if the composer emptied and no modal is left, X most likely accepted it.
-    const c = composer();
-    const cleared = !openDialog() && (!c.box || !boxText(c.box));
+    const cleared = composerCleared();
     return { ok: false, error: cleared ? "unconfirmed_cleared" : "not_confirmed", cleared };
   }
 
@@ -191,7 +280,11 @@
     return { ok: true, followsYou: profile.followsYou, youFollow: profile.youFollow, pending: profile.followPending, profile };
   }
 
-  async function unfollow({ handle }) {
+  async function unfollow({ handle, expectMe }) {
+    const acct = accountCheck(expectMe);
+    if (acct) return acct;
+    const p0 = promptCheck(); // never click "Following" while X shows something unknown
+    if (p0) return p0;
     const here = (location.pathname.split("/")[1] || "").toLowerCase();
     if (here !== String(handle || "").toLowerCase()) return { ok: false, error: "wrong_page" };
     const primary = D.q("primaryColumn") || document;

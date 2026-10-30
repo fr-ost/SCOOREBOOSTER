@@ -48,6 +48,13 @@
     if (!reCache.has(k)) reCache.set(k, new RegExp(src, flags));
     return reCache.get(k);
   }
+  // The same pattern, but it must match a whole string (e.g. a badge line that is exactly "Follows you").
+  function reExact(key) {
+    const src = cfg.text[key] != null ? cfg.text[key] : cfg.misc[key];
+    const k = "^|" + key + "|" + src;
+    if (!reCache.has(k)) reCache.set(k, new RegExp("^(?:" + src + ")$", "i"));
+    return reCache.get(k);
+  }
 
   function q(key, root) {
     const r = root || document;
@@ -62,6 +69,15 @@
       try { const els = r.querySelectorAll(s); if (els.length) return Array.from(els); } catch (_) {}
     }
     return [];
+  }
+  // Every element matching ANY of the key's selectors (not only the first selector that matches), in page order.
+  function qaAll(key, root) {
+    const r = root || document;
+    const set = new Set();
+    for (const s of list(key)) {
+      try { for (const el of r.querySelectorAll(s)) set.add(el); } catch (_) {}
+    }
+    return [...set].sort((a, b) => (a === b ? 0 : a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
   }
   function matches(el, key) {
     if (!el || !el.matches) return false;
@@ -84,6 +100,33 @@
   }
 
   function text(el) { return el ? String(el.innerText || el.textContent || "").replace(/ /g, " ").trim() : ""; }
+
+  // Rendered (not display:none / visibility:hidden, also through an ancestor). Unlike visible() it does not
+  // require a size or opacity: X's sheets can sit in a 0x0 layer or fade in, and an unknown prompt must not be
+  // missed because of that.
+  function shown(el) {
+    if (!el || !el.isConnected) return false;
+    if (typeof el.checkVisibility === "function") return el.checkVisibility({ visibilityProperty: true });
+    const s = getComputedStyle(el);
+    return s.display !== "none" && s.visibility !== "hidden" && el.getClientRects().length > 0;
+  }
+
+  // Text of root without the subtrees matching any of the selector keys (e.g. user cells, bios, posts), up to
+  // maxLen characters. Uses a tree walker that stops early, so it stays cheap on long pages.
+  function textExcluding(root, keys, maxLen = 2000) {
+    if (!root) return "";
+    const skip = (el) => keys.some((k) => matches(el, k));
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT, {
+      acceptNode(n) {
+        if (n.nodeType !== 1) return NodeFilter.FILTER_ACCEPT;
+        if (/^(SCRIPT|STYLE|NOSCRIPT|TEMPLATE)$/.test(n.tagName)) return NodeFilter.FILTER_REJECT;
+        return skip(n) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_SKIP;
+      },
+    });
+    let out = "";
+    for (let n = walker.nextNode(); n && out.length < maxLen; n = walker.nextNode()) out += " " + n.nodeValue;
+    return out.replace(/[\s ]+/g, " ").trim().slice(0, maxLen);
+  }
 
   // Wait until fn() returns a truthy value. Uses a MutationObserver (works in background tabs, where
   // timers are throttled) plus a slow poll as a safety net.
@@ -145,5 +188,5 @@
 
   function cfgNow() { return cfg; }
 
-  globalThis.SXDom = { q, qa, matches, closest, re, sleep, visible, text, waitFor, parseCount, humanClick, isDisabled, cfg: cfgNow };
+  globalThis.SXDom = { q, qa, qaAll, matches, closest, re, reExact, sleep, visible, shown, text, textExcluding, waitFor, parseCount, humanClick, isDisabled, cfg: cfgNow };
 })();

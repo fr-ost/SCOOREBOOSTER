@@ -1,5 +1,6 @@
 // ScoreX - Chrome desktop notifications and the toolbar badge. No remote channels.
-//   red "!"   engine stopped by a safety trigger (until you resume or dismiss)
+//   red "!"   engine stopped by a safety trigger (until you resume or dismiss), or an open reach alert
+//             (your replies are reaching far fewer people; until you dismiss it)
 //   blue N    comments waiting for your review
 //   green ON  running, nothing waiting
 //   (empty)   paused / stopped by you
@@ -26,6 +27,7 @@ export async function notify(id, title, message, { requireInteraction = false } 
 export async function setBadge(state, pendingReview = 0) {
   let text = "", color = COLORS.running, title = "ScoreX";
   if (state.alert) { text = "!"; color = COLORS.alert; title = "ScoreX stopped: " + (state.alert.label || state.alert.reason); }
+  else if (state.reachAlert) { text = "!"; color = COLORS.alert; title = "ScoreX: " + String(state.reachAlert.message || "your replies are reaching far fewer people").slice(0, 120); }
   else if (pendingReview > 0) { text = pendingReview > 99 ? "99+" : String(pendingReview); color = COLORS.review; title = `ScoreX: ${pendingReview} comment(s) to review`; }
   else if (state.status === STATUS.RUNNING) { text = "ON"; color = COLORS.running; title = "ScoreX is running"; }
   else if (state.status === STATUS.PAUSED) { text = "II"; color = COLORS.paused; title = "ScoreX is paused"; }

@@ -176,6 +176,22 @@
     return { un, fo, pend, userId: idm ? idm[1] : null };
   }
 
+  // X's "Follows you" badge as plain text: the line right after "@handle" that is exactly the badge text (a bio
+  // or display name that merely contains the words never counts).
+  function badgeLineAfterHandle(lines, handle) {
+    const at = lines.findIndex((l) => l.toLowerCase() === "@" + handle);
+    return at >= 0 && at + 1 < lines.length && D.reExact("followsYou").test(lines[at + 1]);
+  }
+
+  // The profile header's "Follows you": only next to the profile's own name, never a badge from a "Who to
+  // follow" / "You might like" user cell, a post or an overlay that is also in the primary column.
+  function profileFollowsYou(primary, nameEl, handle) {
+    const own = (b) => !D.closest(b, "userCell") && !D.closest(b, "tweet") && !D.closest(b, "dialog");
+    if (D.qaAll("followsYouBadge", primary).some(own)) return true;
+    const lines = D.text(nameEl).split("\n").map((s) => s.trim()).filter(Boolean);
+    return badgeLineAfterHandle(lines, handle);
+  }
+
   function scrapeProfile() {
     const primary = D.q("primaryColumn") || document;
     const m = location.pathname.match(/^\/([A-Za-z0-9_]{1,15})(?:\/|$)/);
@@ -197,7 +213,7 @@
       following: linkCount(primary, "profileFollowing", handle),
       verified: !!D.q("verifiedIcon", nameEl),
       protected: !!D.q("lockIcon", nameEl),
-      followsYou: !!D.q("followsYouBadge", primary) || D.re("followsYou").test(D.text(nameEl)),
+      followsYou: profileFollowsYou(primary, nameEl, handle),
       youFollow: rb.un ? true : rb.fo || rb.pend ? false : null,
       followPending: !!rb.pend,
       defaultAvatar: /default_profile/.test(avatar),
@@ -231,19 +247,24 @@
       const btn = cell.querySelector('[data-testid$="-follow"], [data-testid$="-unfollow"], [data-testid$="-cancel"]');
       const st = btn ? (btn.getAttribute("data-testid").match(/-(follow|unfollow|cancel)$/) || [])[1] : null;
       const img = D.q("avatar", cell);
+      // The badge element, or (if X renamed its testid) a line that is exactly the badge text right after the
+      // handle. Words in a bio ("this account follows you back") never count: the followers-list scan uses
+      // these hits as its proof that the badge still works.
+      const badge = !!D.q("followsYouBadge", cell);
       users.push({
         handle,
         name: lines[0] && !lines[0].startsWith("@") ? lines[0] : "",
         bio,
         verified: !!D.q("verifiedIcon", cell),
         protected: !!D.q("lockIcon", cell),
-        followsYou: !!D.q("followsYouBadge", cell) || lines.some((l) => D.re("followsYou").test(l)),
+        followsYou: badge || badgeLineAfterHandle(lines, handle),
+        badge,
         youFollow: st === "unfollow" ? true : st ? false : null,
         defaultAvatar: img ? /default_profile/.test(img.getAttribute("src") || "") : false,
       });
       if (users.length >= limit) break;
     }
-    return { users, cellCount: D.qa("userCell").length };
+    return { users, cellCount: D.qa("userCell").length, badgeCells: users.filter((u) => u.badge).length };
   }
 
   // Status page: the focal post, whether replying is possible, and replies already in the thread.

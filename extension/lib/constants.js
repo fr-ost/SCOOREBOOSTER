@@ -111,6 +111,8 @@ export const PAGE_TO_STOP = Object.freeze({
   rate_limit: STOP.RATE_LIMIT,
   warning: STOP.WARNING,
   dom_changed: STOP.DOM_CHANGED,
+  unknown_prompt: STOP.UNKNOWN_PROMPT, // (reported by content actions today; a page report with it stops as well)
+  wrong_account: STOP.WRONG_ACCOUNT,
 });
 
 // Content-script command names (SW -> content via chrome.tabs.sendMessage({ sx: CMD, ...args })).

@@ -8,24 +8,49 @@
   <script src="theme.js"></script>
   <script src="../content/selectors.js"></script>
   <link rel="stylesheet" href="dashboard.css">
+  <link rel="stylesheet" href="css/today.css">
+  <link rel="stylesheet" href="css/review.css">
+  <link rel="stylesheet" href="css/targets.css">
+  <link rel="stylesheet" href="css/discover.css">
+  <link rel="stylesheet" href="css/scores.css">
+  <link rel="stylesheet" href="css/results.css">
+  <link rel="stylesheet" href="css/setup.css">
   <link rel="icon" type="image/png" href="../icons/icon32.png">
 </head>
 <body>
   <a class="skip-link" href="#view">Skip to content</a>
-  <header class="appbar" id="appbar">
-    <div class="appbar-row shell">
-      <a class="wordmark" href="#overview" aria-label="ScoreX - Dashboard">Score<span class="wordmark-x" aria-hidden="true">X</span><span class="wordmark-sub">AI replies on X</span></a>
-      <span class="appbar-spacer"></span>
-      <span class="save-ind" id="saveInd" aria-live="polite"></span>
-      <div class="engine" id="engineBox" aria-live="polite"></div>
-      <div id="themeSlot"></div>
+  <div class="app" id="app">
+    <div class="rail-col" id="railCol">
+      <aside class="rail" id="rail" aria-label="ScoreX navigation">
+        <div class="rail-top">
+          <a class="wordmark" href="#overview" aria-label="ScoreX - Today"><span class="wordmark-text">Score</span><span class="wordmark-x" aria-hidden="true">X</span></a>
+          <button type="button" class="btn btn-sm btn-ghost btn-icon rail-close" id="railClose" aria-label="Close menu"></button>
+        </div>
+        <nav class="rail-nav" id="nav" aria-label="Sections"></nav>
+        <div class="rail-foot" id="railFoot"></div>
+      </aside>
     </div>
-    <nav class="tabstrip shell" id="nav" aria-label="Sections"></nav>
-  </header>
-  <div class="shell" id="alertSlot"></div>
-  <main id="view" class="view shell" tabindex="-1" aria-live="off"></main>
-  <footer class="foot shell" id="foot"></footer>
+    <div class="rail-scrim" id="railScrim" hidden></div>
+    <div class="main" id="main">
+      <header class="enginebar" id="appbar">
+        <button type="button" class="btn btn-sm btn-icon menu-btn" id="menuBtn" aria-label="Menu" aria-controls="rail" aria-expanded="false"></button>
+        <div class="bar-title">
+          <h1 class="screen-title" id="screenTitle">ScoreX</h1>
+          <span class="screen-sub" id="screenSub"></span>
+        </div>
+        <span class="bar-spacer"></span>
+        <span class="save-ind" id="saveInd" aria-live="polite"></span>
+        <div class="bar-chips" id="barChips"></div>
+        <div class="engine" id="engineBox" aria-live="polite"></div>
+        <div class="bar-theme" id="themeSlot"></div>
+      </header>
+      <div class="alert-slot" id="alertSlot"></div>
+      <main id="view" class="view" tabindex="-1" aria-live="off"></main>
+      <footer class="foot" id="foot"></footer>
+    </div>
+  </div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
+  <div id="announce" class="sr-only" aria-live="polite" aria-atomic="true"></div>
   <script type="module" src="dashboard.js"></script>
 </body>
 </html>

@@ -42,6 +42,32 @@ function verdictOf(resp, settings) {
   return null;
 }
 
+// The account ScoreX must act as (null when "verify account" is off or no handle is set).
+function expectedHandle(settings) {
+  const a = (settings && settings.account) || {};
+  const h = String(a.handle || "").trim().toLowerCase().replace(/^@/, "");
+  return a.verifyAccount && h ? h : null;
+}
+
+// Before acting on the page: the logged-in account must be the expected one. Unknown -> soft (nothing is done,
+// not a posting failure); a different account -> WRONG_ACCOUNT stop.
+function accountVerdict(page, want) {
+  if (!want) return null;
+  const me = page && page.me ? String(page.me).toLowerCase() : null;
+  if (!me) return { soft: "account_unknown" };
+  if (me !== want) return { stop: STOP.WRONG_ACCOUNT, detail: `Logged in as @${me}, expected @${want}` };
+  return null;
+}
+// What a content action's own account check means for the post.
+function accountRefusal(resp, want) {
+  if (!resp || resp.ok) return null;
+  if (resp.error === "account_unknown") return { soft: "account_unknown" };
+  if (resp.error === "wrong_account") return { stop: STOP.WRONG_ACCOUNT, detail: `Logged in as @${resp.me || "?"}, expected @${want}` };
+  return null;
+}
+// Soft "could not verify the account" result: the item stays queued, nothing was typed or submitted.
+const accountUnknown = (liked) => ({ ok: false, retry: true, soft: "account_unknown", reason: "account_unknown", liked: !!liked });
+
 // Clean up after a failure so nothing half-written stays in the page.
 async function cleanup(tabId) {
   await send(tabId, CMD.CLEAR_COMPOSER, {}, 8000);
@@ -56,17 +82,27 @@ async function cleanup(tabId) {
  *   { ok:false, skip:true, reason }       -> post gone / replies restricted (not a failure)
  *   { ok:false, fail:true, reason }       -> counts toward "repeated post failures"
  *   { ok:false, retry:true, reason }      -> the page did not load/render; the item stays queued
+ *   { ok:false, retry:true, soft:"account_unknown", reason:"account_unknown" }
+ *                                         -> the logged-in account could not be verified; nothing was liked,
+ *                                            typed or submitted after that (not a posting failure)
  *   { ok:false, aborted:true }            -> Pause/Stop pressed before submitting; nothing was posted
+ * unsure:true on a failure or stop means the reply may have been sent (count it toward the limits):
+ * every unconfirmed outcome after the Reply click, unless X explicitly rejected it.
+ * An unknown X prompt (dialog / sheet / AI-label notice) is the stop STOP.UNKNOWN_PROMPT with a plain-text
+ * sample of the prompt as detail; nothing on the page is touched after that.
  */
 export async function postReply(rec, ctx) {
   const { tabId, settings, me } = ctx;
   const stopped = ctx.shouldStop || (async () => false);
   const sf = settings.safety;
+  const want = expectedHandle(settings);
   const tweetId = rec.postId || tweetIdFromUrl(rec.postUrl);
   const text = String(rec.comment || "").trim();
   if (!text) return { ok: false, skip: true, reason: "empty_comment" };
 
   const nav = await navigate(tabId, rec.postUrl);
+  // The X page-load budget refused it: nothing was loaded, the item waits (not a failure).
+  if (nav.budget) return { ok: false, retry: true, budget: true, reason: "page_budget", until: nav.until };
   if (!nav.ok) return { ok: false, fail: true, reason: "navigation_" + nav.error };
   const w = await waitForPage(tabId, ["tweet", "emptyState"], 25000);
   let v = verdictOf(w, settings);
@@ -91,6 +127,10 @@ export async function postReply(rec, ctx) {
   }
   if (st.canReply === false) return { ok: false, skip: true, reason: "replies_restricted" };
   if (st.focalIndex > 0) return { ok: false, skip: true, reason: "reply_in_thread_not_original_post" };
+  // Nothing is liked, typed or submitted unless this page is logged in as your account.
+  const av = accountVerdict(st.page, want);
+  if (av && av.stop) return { ok: false, stop: av.stop, detail: av.detail };
+  if (av) return accountUnknown(false);
 
   // Read the post: base pause + time proportional to its length.
   const readMs = humanDelay(sf.readDelaySec.min * 1000, sf.readDelaySec.max * 1000) + Math.min(9000, norm(st.focal.text).length * randFloat(15, 35));
@@ -101,10 +141,13 @@ export async function postReply(rec, ctx) {
   if (await stopped()) return { ok: false, aborted: true };
   let liked = false;
   if (ctx.allowLike && !st.focal.liked) {
-    const lk = await send(tabId, CMD.LIKE, { tweetId }, 15000);
+    const lk = await send(tabId, CMD.LIKE, { tweetId, expectMe: want || undefined }, 15000);
     v = verdictOf(lk, settings);
     if (v) return { ok: false, stop: v.stop, detail: v.detail };
-    if (lk.state) return { ok: false, stop: lk.state === "warning" ? STOP.WARNING : lk.state === "rate_limit" ? STOP.RATE_LIMIT : STOP.WARNING, detail: lk.detail || "X warning after like" };
+    const ar = accountRefusal(lk, want);
+    if (ar && ar.stop) return { ok: false, stop: ar.stop, detail: ar.detail };
+    if (ar) return accountUnknown(false);
+    if (lk.state) return { ok: false, stop: stopFor(lk.state), detail: lk.detail || "X warning after like" };
     liked = !!(lk.ok && !lk.already);
     await sleep(humanDelay(900, 2600));
   }
@@ -112,9 +155,13 @@ export async function postReply(rec, ctx) {
   if (await stopped()) return { ok: false, aborted: true, liked };
   const restore = sf.bringTabToFront ? await bringToFront(tabId) : null;
   try {
-    const oc = await send(tabId, CMD.OPEN_COMPOSER, { tweetId }, 20000);
+    const oc = await send(tabId, CMD.OPEN_COMPOSER, { tweetId, expectMe: want || undefined }, 20000);
     v = verdictOf(oc, settings);
     if (v) return { ok: false, stop: v.stop, detail: v.detail, liked };
+    if (oc.state) return { ok: false, stop: stopFor(oc.state), detail: oc.detail || oc.state, liked, unsure: false }; // nothing typed
+    const ar = accountRefusal(oc, want);
+    if (ar && ar.stop) return { ok: false, stop: ar.stop, detail: ar.detail, liked };
+    if (ar) return accountUnknown(liked);
     if (!oc.ok) {
       if (oc.error === "replies_restricted") return { ok: false, skip: true, reason: "replies_restricted", liked };
       if (oc.error === "post_not_found") return { ok: false, skip: true, reason: "post_not_found", liked };
@@ -131,6 +178,7 @@ export async function postReply(rec, ctx) {
       await sleep(ch.delay);
       if (++k % 8 === 0 && (await stopped())) { await cleanup(tabId); return { ok: false, aborted: true, liked }; }
       const r = await send(tabId, CMD.TYPE, { text: ch.text }, 8000);
+      if (r.state) return { ok: false, stop: stopFor(r.state), detail: r.detail || r.state, liked, unsure: false }; // prompt: touch nothing
       if (r.page) { const vv = pageVerdict(r.page, settings); if (vv && vv.stop) { await cleanup(tabId); return { ok: false, stop: vv.stop, detail: vv.detail, liked }; } }
       if (!r.ok) { if (++misses >= 3) break; continue; }
       typed = r.text || typed;
@@ -140,7 +188,8 @@ export async function postReply(rec, ctx) {
     if (norm(ct.text) !== norm(text)) {
       await send(tabId, CMD.CLEAR_COMPOSER, {}, 8000);
       await sleep(humanDelay(400, 900));
-      await send(tabId, CMD.TYPE, { text }, 8000);
+      const t2 = await send(tabId, CMD.TYPE, { text }, 8000);
+      if (t2.state) return { ok: false, stop: stopFor(t2.state), detail: t2.detail || t2.state, liked, unsure: false };
       ct = await send(tabId, CMD.COMPOSER_TEXT, {}, 8000);
       if (norm(ct.text) !== norm(text)) {
         await cleanup(tabId);
@@ -150,34 +199,58 @@ export async function postReply(rec, ctx) {
     await sleep(humanDelay(1200, 3800)); // re-read before sending
     if (await stopped()) { await cleanup(tabId); return { ok: false, aborted: true, liked }; } // last chance: Pause/Stop wins
 
-    const sb = await send(tabId, CMD.SUBMIT_REPLY, { expectText: text }, 15000);
+    // The content script checks the account and looks for prompts once more right before the click.
+    const sb = await send(tabId, CMD.SUBMIT_REPLY, { expectText: text, expectMe: want || undefined }, 15000);
     v = verdictOf(sb, settings);
     if (v) { await cleanup(tabId); return { ok: false, stop: v.stop, detail: v.detail, liked }; }
+    if (sb.state) return { ok: false, stop: stopFor(sb.state), detail: sb.detail || sb.state, liked, unsure: false }; // not clicked
+    const ar2 = accountRefusal(sb, want);
+    if (ar2) { await cleanup(tabId); return ar2.stop ? { ok: false, stop: ar2.stop, detail: ar2.detail, liked } : accountUnknown(liked); }
     if (!sb.ok) { await cleanup(tabId); return { ok: false, fail: true, reason: sb.error || "submit_failed", liked }; }
 
-    const rr = await send(tabId, CMD.REPLY_RESULT, { tweetId, expectText: text, me, timeoutMs: 20000 }, 40000);
-    if (rr.state) return { ok: false, stop: stopFor(rr.state), detail: rr.detail || rr.state, liked };
+    // From here on the Reply button was clicked: anything short of a confirmation or an explicit rejection by
+    // X counts as "may have been sent" (unsure), so the daily and per-account limits never under-count.
+    let rr = await send(tabId, CMD.REPLY_RESULT, { tweetId, expectText: text, me, timeoutMs: 20000 }, 40000);
+    // The text is still in the box and nothing was confirmed: X may still be sending it. Wait once more
+    // before leaving the page (leaving would cancel a request in flight). Never re-submits.
+    if (!rr.ok && !rr.state && rr.error === "not_confirmed") {
+      const rr2 = await send(tabId, CMD.REPLY_RESULT, { tweetId, expectText: text, me, timeoutMs: 15000 }, 30000);
+      if (!rr2.noAnswer) rr = rr2;
+    }
+    if (rr.state === "unknown_prompt") {
+      // Leave the page exactly as it is (no cleanup clicks). It may have been sent if X cleared the box.
+      return { ok: false, stop: STOP.UNKNOWN_PROMPT, detail: rr.detail || "Unknown dialog", liked, unsure: !!(rr.cleared || rr.sent), replyUrl: rr.replyUrl || "" };
+    }
+    if (rr.state) { const s = stopFor(rr.state); return { ok: false, stop: s, detail: rr.detail || rr.state, liked, unsure: !REJECTED.has(s) }; } // a warning / limit toast = X refused it
     v = verdictOf(rr, settings);
-    if (v) return { ok: false, stop: v.stop, detail: v.detail, liked };
+    if (v) return { ok: false, stop: v.stop, detail: v.detail, liked, unsure: !REJECTED.has(v.stop) };
     if (rr.ok) return { ok: true, replyUrl: rr.replyUrl, replyId: rr.replyId, liked, via: rr.via };
     if (rr.error === "duplicate") { await cleanup(tabId); return { ok: false, fail: true, reason: "x_says_duplicate", liked }; }
 
-    // Unclear: look at the thread again for our reply before deciding (never re-submit).
+    // Unclear (not confirmed, no answer from the tab, an error): look at the thread again for our reply before
+    // deciding (never re-submit).
+    const reason = rr.cleared ? "sent_but_not_visible" : rr.noAnswer ? "no_answer_after_submit" : "not_confirmed";
     await sleep(humanDelay(2500, 4500));
     await navigate(tabId, rec.postUrl);
     await waitForPage(tabId, ["tweet"], 20000);
     const again = await send(tabId, CMD.SCRAPE_STATUS, { tweetId, me }, 20000);
     v = verdictOf(again, settings);
-    if (v) return { ok: false, stop: v.stop, detail: v.detail, liked };
+    if (v) return { ok: false, stop: v.stop, detail: v.detail, liked, unsure: true };
     const mine = again.ok && again.myReplies && again.myReplies.find((r) => norm(r.text).toLowerCase().startsWith(norm(text).toLowerCase().slice(0, 40)));
     if (mine) return { ok: true, replyUrl: mine.url, replyId: mine.id, liked, via: "recheck" };
     await cleanup(tabId);
-    return { ok: false, fail: true, reason: rr.cleared ? "sent_but_not_visible" : "not_confirmed", liked, unsure: !!rr.cleared };
+    return { ok: false, fail: true, reason, liked, unsure: true };
   } finally {
     if (restore) await restore();
   }
 }
 
+// Stops that mean X refused the action outright (nothing was posted).
+const REJECTED = new Set([STOP.WARNING, STOP.RATE_LIMIT]);
+
 function stopFor(state) {
-  return { warning: STOP.WARNING, rate_limit: STOP.RATE_LIMIT, captcha: STOP.CAPTCHA, locked: STOP.LOCKED, logged_out: STOP.LOGGED_OUT }[state] || STOP.WARNING;
+  return {
+    warning: STOP.WARNING, rate_limit: STOP.RATE_LIMIT, captcha: STOP.CAPTCHA, locked: STOP.LOCKED, logged_out: STOP.LOGGED_OUT,
+    unknown_prompt: STOP.UNKNOWN_PROMPT, wrong_account: STOP.WRONG_ACCOUNT,
+  }[state] || STOP.WARNING;
 }

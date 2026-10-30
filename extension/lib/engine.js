@@ -4,29 +4,36 @@
 
 import { STATUS, MODE, HS, STOP, STOP_LABEL, ALARM, K, HARD, OPEN_STATUSES } from "./constants.js";
 import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, getBlacklist, log, load, save } from "./store.js";
-import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration } from "./util.js";
+import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration, normalizeHandle, sleep } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
-import { effectiveMode, dailyLimit, generationLimit, likeLimit, accountsLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
+import { effectiveMode, dailyLimit, generationLimit, likeLimit, accountsLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart, watchCadence, riskReport } from "./safety.js";
 import { skipReason } from "./filters.js";
 import { effectiveTone, effectivePreset, isActive, followStatus, FS } from "./targets.js";
 import { generate } from "./generator.js";
 import { weightedLength } from "./quality.js";
-import { workerTab, releaseGuard } from "./tabs.js";
+import { workerTab, releaseGuard, withPurpose, pageBudget, footprintSummary } from "./tabs.js";
 import { watchOnce, refreshProfile } from "./watcher.js";
 import { postReply } from "./poster.js";
 import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
-import { followStep } from "./follow.js";
+import { followStep, badgeTrusted } from "./follow.js";
 import { conversationsStep } from "./conversations.js";
 import { catchUpCandidates, catchUpMaxAgeMin } from "./catchup.js";
 import { cancelDiscovery } from "./discovery.js";
 
-// Background X jobs started outside the tick (profile refreshes) check this flag; Pause/Stop set it.
+// Background X jobs started outside the tick (profile refreshes) get their own abort token from backgroundJob();
+// Pause/Stop abort every running one. A new request never clears the abort of a job that is already running.
+const backgroundJobs = new Set();
+export function backgroundJob(kind = "background") { const j = { kind, abort: false }; backgroundJobs.add(j); return j; }
+export function endBackgroundJob(j) { backgroundJobs.delete(j); }
+function abortBackground() { for (const j of backgroundJobs) j.abort = true; backgroundAbort.requested = true; }
+// Deprecated (kept for older callers): set by Pause/Stop, never read by ScoreX itself. Use backgroundJob().
 export const backgroundAbort = { requested: false };
 
 const SAFETY_STOPS = new Set(Object.values(STOP).filter((s) => s !== STOP.USER));
+const ACCOUNT_UNKNOWN_MAX = 3; // page loads in a row without a readable logged-in account -> safety stop
 let ticking = false;
 let rerunRequested = false;
 let tickTimer = null;
@@ -59,7 +66,9 @@ export async function requestTick(ms, why = "manual") {
 // yet, so a job lease in storage belongs to a worker that was killed mid-job.
 export async function onWorkerStart() {
   const st = await getState();
-  if (st.job) await patchState({ job: null });
+  // Compare-and-set: only the lease read above, and never one a job in this worker took meanwhile (an overdue
+  // alarm can start a tick while this runs).
+  if (st.job) { const staleId = st.job.id; await patchState((s) => (s.job && s.job.id === staleId && !heldLeases.has(staleId) ? { job: null } : {})); }
   // Nothing can be posting in a fresh worker: a POSTING record was interrupted (maybe already sent).
   // It counts toward the limits and the gap starts from its attempt, so the next post waits properly.
   let lastAttempt = 0;
@@ -89,8 +98,12 @@ export async function ensureAlarms() {
 export async function watchdog() {
   const st = await getState();
   if (st.status !== STATUS.RUNNING) return;
-  // A job lease far past its expiry means a worker died mid-job.
-  if (st.job && st.job.leaseUntil < now()) await patchState({ job: null });
+  // A job lease far past its expiry means a worker died mid-job - unless a job of this worker still holds it (its
+  // wall-clock expiry can pass while the computer sleeps). Compare-and-set, so a newer lease is never wiped.
+  if (st.job && st.job.leaseUntil < now() && !heldLeases.has(st.job.id)) {
+    const staleId = st.job.id;
+    await patchState((s) => (s.job && s.job.id === staleId && s.job.leaseUntil < now() && !heldLeases.has(staleId) ? { job: null } : {}));
+  }
   const a = await chrome.alarms.get(ALARM.TICK).catch(() => null);
   if (!a && (!st.nextTickAt || st.nextTickAt < now() - MIN)) await scheduleTick(randInt(5000, 15000), "watchdog");
 }
@@ -99,18 +112,26 @@ export async function watchdog() {
 
 // A lease lives LEASE_MS and is renewed every minute while its holder runs, so a killed holder's lease
 // expires within minutes while a long discovery keeps its lease for as long as it is alive.
+// heldLeases: leases held by jobs running in THIS worker instance. Only one service worker instance runs at a time,
+// so a lease in this set is alive even when its wall-clock expiry passed (system sleep, a stalled timer): it is
+// never taken over or cleared. A killed worker takes its set with it, so its leases simply expire.
 const LEASE_MS = 3 * MIN;
+const heldLeases = new Set();
+const LEASE_PURPOSE = { discovery: "discovery", selftest: "diagnostics", refresh: "profile" }; // page-load purpose per job kind
+const leaseLive = (job) => !!job && (job.leaseUntil > now() || heldLeases.has(job.id));
 async function acquireLease(kind) {
   let got = false;
   const id = uid("j");
   await patchState((s) => {
-    if (s.job && s.job.leaseUntil > now()) return {};
+    if (leaseLive(s.job)) return {};
     got = true;
+    heldLeases.add(id);
     return { job: { id, kind, startedAt: now(), leaseUntil: now() + LEASE_MS } };
   });
   return got ? id : null;
 }
 async function releaseLease(id) {
+  heldLeases.delete(id);
   await patchState((s) => (s.job && s.job.id === id ? { job: null } : {}));
 }
 export async function withLease(kind, fn) {
@@ -120,7 +141,7 @@ export async function withLease(kind, fn) {
   const beat = setInterval(() => {
     patchState((s) => (s.job && s.job.id === id ? { job: { ...s.job, leaseUntil: now() + LEASE_MS } } : {})).catch(() => {});
   }, 60 * 1000);
-  try { return await fn(); } finally { clearInterval(beat); await releaseLease(id); keepAlive(false); }
+  try { return await withPurpose(LEASE_PURPOSE[kind] || null, fn); } finally { clearInterval(beat); await releaseLease(id); keepAlive(false); }
 }
 
 // ---------- status ----------
@@ -131,10 +152,11 @@ export async function withLease(kind, fn) {
 export const countsAsPosted = (r) => r.status === HS.POSTED || r.status === HS.POSTING || !!r.maybePosted;
 const postedTime = (r) => r.postedAt || r.attemptAt || r.updatedAt || r.createdAt;
 
-export async function computeCounts(settings, ts = now()) {
+// opts.days: how far back to read history (9 days by default for the 7-day per-account caps; the status uses 2).
+export async function computeCounts(settings, ts = now(), opts = {}) {
   const tz = settings.timezone;
   const today = dayKey(ts, tz);
-  const recent = await H.since(ts - 9 * DAY);
+  const recent = await H.since(ts - (Number(opts.days) > 0 ? Number(opts.days) : 9) * DAY);
   const open = await H.openQueue();
   const c = { postedToday: 0, postedCalendarDay: 0, postedGroup: { A: 0, B: 0 }, generatedToday: 0, likedToday: 0, skippedToday: 0, failedToday: 0, costToday: 0,
     openQueue: 0, openGroup: { A: 0, B: 0 }, pendingReview: 0, queued: 0, targets: Object.create(null) };
@@ -168,21 +190,41 @@ export async function computeCounts(settings, ts = now()) {
   return c;
 }
 
+// getStatus() is polled by the popup and the dashboard (every few seconds and on state changes), so its history
+// read is small (2 days, enough for every 24 h / calendar-day number it shows) and reused for a moment.
+const STATUS_COUNTS_TTL = 2000;
+let statusCounts = null; // { at, tz, c }
+async function countsForStatus(settings, ts) {
+  if (statusCounts && statusCounts.tz === settings.timezone && ts - statusCounts.at >= 0 && ts - statusCounts.at < STATUS_COUNTS_TTL) return statusCounts.c;
+  const c = await computeCounts(settings, ts, { days: 2 });
+  statusCounts = { at: ts, tz: settings.timezone, c };
+  return c;
+}
+
 export async function getStatus() {
   const ts = now();
   const [settings, state, secrets, targets, spend, blacklist] = await Promise.all([getSettings(), getState(), getSecrets(), getTargets(), getSpend(), getBlacklist()]);
-  const c = await computeCounts(settings, ts);
+  const c = await countsForStatus(settings, ts);
   const total = dailyLimit(settings, state, ts);
   const b = budgetStatus(settings, spend, ts);
   const all = Object.values(targets);
   const ah = activeHours(settings, ts);
+  const footprint = footprintSummary(state.footprint, settings.safety.maxPageLoads24h || 0, ts);
+  const reach = { ...(state.reach && typeof state.reach === "object" ? state.reach : {}), alert: state.reachAlert || null };
+  const wc = watchCadence(settings, state);
+  const watch = { slow: wc.slow, intervalSec: wc.intervalSec, emptyStreak: wc.emptyStreak };
   let label = state.status === STATUS.RUNNING ? "Running" : state.status === STATUS.PAUSED ? "Paused" : "Stopped";
   if (state.status === STATUS.STOPPED && state.stopReason && state.stopReason !== STOP.USER) label += ` (${STOP_LABEL[state.stopReason] || state.stopReason})`;
   let sub = "";
   if (state.status === STATUS.RUNNING) {
+    const next = state.nextTickAt ? fmtDuration(Math.max(0, state.nextTickAt - ts)) : "";
     if (!ah.inside) sub = `Sleeping until ${new Date(ah.opensAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} (outside active hours)`;
     else if (state.breakUntil && state.breakUntil > ts) sub = `On a break for ${fmtDuration(state.breakUntil - ts)}`;
-    else if (state.nextTickAt) sub = `Next check in ${fmtDuration(Math.max(0, state.nextTickAt - ts))}`;
+    else if (state.nextTickAt && state.nextTickWhy === GATE_LABEL.footprint) sub = `${GATE_LABEL.footprint} (next check in ${next})`;
+    else if (state.nextTickAt && wc.slow) {
+      const since = Math.max(state.lastFreshAt || 0, state.startedAt || 0) || ts;
+      sub = `Watching slowly: nothing new for ${Math.max(1, Math.round((ts - since) / MIN))} min · next check in ${next}`;
+    } else if (state.nextTickAt) sub = `Next check in ${next}`;
   }
   return {
     state: { ...state },
@@ -206,6 +248,10 @@ export async function getStatus() {
     targetCount: all.length,
     activeTargetCount: all.filter((t) => isActive(t, settings)).length,
     follow: followCounts(all, blacklist),
+    footprint, // { total, cap, byPurpose, hourly[24] } X page loads in the last 24 h
+    risk: riskReport(settings, state, c, footprint, reach, ts), // { level, score, factors, hoursToLimit } (an estimate)
+    watch, // { slow, intervalSec, emptyStreak } adaptive watch cadence
+    reach, // { checked, medianViews, prevMedianViews, lowShare, at, alert } from the reach monitor
   };
 }
 
@@ -242,11 +288,13 @@ export async function start() {
     return { ok: false, error: any ? "Every target already follows you - add accounts that don't follow you yet (Targets)." : "Add at least one enabled target first (Targets)." };
   }
   if (settings.watch.strategy === "list" && !settings.watch.listUrls.length) log("warn", "Watch strategy is 'X List' but no list URL is set - using batched search instead.");
+  handoverRefresh();
   const ts = now();
   await patchState((s) => ({
     status: STATUS.RUNNING, stopReason: null, stopDetail: "", alert: null, startedAt: ts,
-    firstStartedAt: st.firstStartedAt || ts, consecutiveFailures: 0, softErrors: 0, internalErrors: 0, emptyStreak: 0,
-    job: s.job && s.job.leaseUntil > now() ? s.job : null, // never drop a live lease (e.g. a running discovery)
+    firstStartedAt: st.firstStartedAt || ts, consecutiveFailures: 0, softErrors: 0, tabErrors: 0, internalErrors: 0, emptyStreak: 0,
+    accountUnknownStreak: 0, emptyWatchStreak: 0,
+    job: leaseLive(s.job) ? s.job : null, // never drop a live lease (e.g. a running discovery)
   }));
   log("info", "Started");
   await scheduleTick(randInt(4000, 12000), "start");
@@ -256,7 +304,7 @@ export async function start() {
 }
 
 export async function pause() {
-  backgroundAbort.requested = true;
+  abortBackground();
   await cancelDiscovery().catch(() => {});
   await patchState({ status: STATUS.PAUSED, nextTickAt: null });
   clearTimeout(tickTimer);
@@ -270,7 +318,8 @@ export async function resume() {
   const st = await getState();
   if (st.status === STATUS.RUNNING) return { ok: true };
   if (st.status === STATUS.STOPPED) return start();
-  await patchState({ status: STATUS.RUNNING, alert: null, consecutiveFailures: 0, softErrors: 0, internalErrors: 0 });
+  handoverRefresh();
+  await patchState({ status: STATUS.RUNNING, alert: null, consecutiveFailures: 0, softErrors: 0, tabErrors: 0, internalErrors: 0, accountUnknownStreak: 0 });
   log("info", "Resumed");
   await scheduleTick(randInt(3000, 10000), "resume");
   await refreshBadge();
@@ -281,7 +330,7 @@ export async function resume() {
 export async function stop(reason = STOP.USER, detail = "") {
   const label = STOP_LABEL[reason] || reason;
   const safety = SAFETY_STOPS.has(reason);
-  backgroundAbort.requested = true; // Stop means stop everything that drives the X tab
+  abortBackground(); // Stop means stop everything that drives the X tab
   await cancelDiscovery().catch(() => {});
   await patchState({
     status: STATUS.STOPPED, stopReason: reason, stopDetail: truncate(detail, 300), stoppedAt: now(), nextTickAt: null,
@@ -329,6 +378,16 @@ async function compatLoader() {
   return (name) => ({ ...(map[name] || {}) });
 }
 
+// Your recent comments, NEWEST FIRST: waiting queue items (by when they were written) and posted replies (by when
+// they were posted) merged by time. The generator shows the head to the model and the quality check compares
+// openers with the most recent ones, so the order matters. excludeId leaves one record out (regenerate).
+export async function recentComments(excludeId = null) {
+  const open = (await H.openQueue()).filter((r) => r.id !== excludeId);
+  const posted = (await H.recentPosted(50)).filter((r) => r.id !== excludeId);
+  const at = (r) => r.postedAt || r.createdAt || 0;
+  return [...open, ...posted].sort((a, b) => at(b) - at(a)).map((r) => r.comment).filter(Boolean);
+}
+
 async function bestComments(n = 20) {
   const posted = await H.recentPosted(200);
   return posted.filter((r) => r.results && r.results.likes > 0).sort((a, b) => (b.results.likes || 0) - (a.results.likes || 0)).slice(0, n).map((r) => r.comment);
@@ -349,10 +408,37 @@ async function expireQueue(settings, ts = now()) {
     if (r.status === HS.PENDING_REVIEW && ts - r.createdAt > settings.review.pendingMaxAgeMin * MIN) why = "Expired while waiting for review";
     if (r.status === HS.APPROVED && ts - (r.approvedAt || r.createdAt) > settings.review.approvedMaxAgeMin * MIN) why = "Approved but expired before a posting slot";
     const maxQueuedAge = r.catchUp ? catchUpMaxAgeMin(settings) : settings.watch.maxPostAgeMin + 25;
-    if (r.status === HS.QUEUED && r.postCreatedAt && ts - r.postCreatedAt > maxQueuedAge * MIN) why = r.catchUp ? "Too late to post (older than the catch-up window)" : "Too late to post (post is no longer fresh)";
+    // A post without a known time is aged from when its comment was written, so it never waits for days either.
+    const postTime = r.postCreatedAt || r.createdAt;
+    if (r.status === HS.QUEUED && postTime && ts - postTime > maxQueuedAge * MIN) why = r.catchUp ? "Too late to post (older than the catch-up window)" : "Too late to post (post is no longer fresh)";
     if (r.status === HS.POSTING && ts - (r.attemptAt || r.updatedAt) > 10 * MIN) why = "Interrupted while posting - check the post manually";
     if (why) await H.patch(r.id, (cur) => (cur.status === r.status ? { status: r.status === HS.POSTING ? HS.FAILED : HS.SKIPPED, reason: why, maybePosted: r.status === HS.POSTING } : null));
   }
+}
+
+// The logged-in account could not be read on ACCOUNT_UNKNOWN_MAX page loads in a row (counted per page load in
+// tabs.js) -> safety stop. Only with account verification on and a handle set.
+async function stopIfAccountUnknown(settings) {
+  if (!settings.account.verifyAccount || !settings.account.handle) return false;
+  if (((await getState()).accountUnknownStreak || 0) < ACCOUNT_UNKNOWN_MAX) return false;
+  await stop(STOP.ACCOUNT_UNKNOWN, `Could not read which X account is logged in on ${ACCOUNT_UNKNOWN_MAX} pages in a row (expected @${settings.account.handle})`);
+  return true;
+}
+
+// Room for `need` more X page loads under settings.safety.maxPageLoads24h (left = Infinity without a cap).
+async function pageRoom(settings, need = 1) { return pageBudget(settings, await getState(), now(), need); }
+// Page loads a background step may use (followers list + profile checks, engagement checks, cleanup).
+const backgroundNeed = (settings) => Math.max(settings.follow.checksPerRun + 1, settings.learning.maxChecksPerRun, 2);
+// Budget reached: wait (never a stop) until loads leave the rolling 24 h window, re-checking at least every 30 min
+// (the budget may be raised meanwhile).
+async function budgetWait(pb, ts = now()) {
+  const st = await getState();
+  if (!st.footprintWaitLoggedAt || ts - st.footprintWaitLoggedAt > 60 * MIN) {
+    await patchState({ footprintWaitLoggedAt: ts });
+    log("info", `${GATE_LABEL.footprint} (${pb.used} of ${pb.cap} X page loads in 24 h)${pb.until ? " - room again at " + new Date(pb.until).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : ""}`);
+  }
+  const wait = pb.until ? Math.max(MIN, pb.until - ts) : 30 * MIN;
+  return { delay: Math.min(30 * MIN, wait) + randInt(5, 60) * 1000, why: GATE_LABEL.footprint };
 }
 
 // Main loop body. Returns the delay until the next tick.
@@ -385,14 +471,22 @@ async function tickBody(settings, secrets, reason = "timer") {
     for (const r of await H.byStatus(HS.QUEUED)) await H.patch(r.id, { status: HS.PENDING_REVIEW, scheduledFor: null, reason: "Moved to review (Review mode is on)" });
   }
 
-  // Worker tab
+  // X page-load budget: with no room left nothing loads an X page (the tab is not even reloaded) until loads leave
+  // the rolling 24 h window.
+  const pb0 = pageBudget(settings, state, ts);
+  if (pb0.left < 1) return budgetWait(pb0, ts);
+
+  // Worker tab. Its failures have their own counter (watch-page errors use softErrors, post-page retries the item's
+  // own retries), so each stop counts only failures of its own kind in a row.
   const tabId = await workerTab(settings);
   if (tabId == null) {
-    const n = (state.softErrors || 0) + 1;
-    await patchState({ softErrors: n });
+    const n = (state.tabErrors || 0) + 1;
+    await patchState({ tabErrors: n });
     if (n >= 3) { await stop(STOP.TAB_UNAVAILABLE, "Could not open or reach the x.com tab 3 times in a row"); return null; }
     return { delay: randInt(2, 4) * MIN, why: "retry tab" };
   }
+  if (state.tabErrors) await patchState({ tabErrors: 0 });
+  if (await stopIfAccountUnknown(settings)) return null;
   const me = String(settings.account.handle || "").toLowerCase();
   const mode = effectiveMode(settings, state, ts);
   let counts = await computeCounts(settings, ts);
@@ -414,8 +508,13 @@ async function tickBody(settings, secrets, reason = "timer") {
     }
     const gate = postGate(settings, state, { postedToday: counts.postedToday, accountsToday: counts.accountsToday, target: counts.targets[item.target] }, target, ts);
     if (gate.ok) {
+      // A post needs up to 2 page loads (the post, and a look at the thread when X's confirmation is unclear).
+      const room = await pageRoom(settings, 2);
+      if (room.left < 2) return budgetWait(room, ts);
       const res = await postOne(item, { tabId, settings, me, counts });
       if (res === "stopped") return null;
+      if (await stopIfAccountUnknown(settings)) return null;
+      if (res === "budget") return budgetWait(await pageRoom(settings, 2), now());
       if (res === "aborted" || res === "moved" || res === "gone") continue;
       return { delay: humanDelay(40 * 1000, 120 * 1000), why: "after post" };
     }
@@ -438,9 +537,14 @@ async function tickBody(settings, secrets, reason = "timer") {
     return { delay: minWatchGap - sinceWatch + 1000, why: "manual" };
   }
   if (counts.pendingReview < settings.review.maxPending && sinceWatch >= minWatchGap) {
+    const room = await pageRoom(settings, 1);
+    if (room.left < 1) return budgetWait(room, ts);
     const targets = await getTargets();
-    const w = await watchOnce(tabId, settings, targets, ts);
+    const w = await withPurpose("watch", () => watchOnce(tabId, settings, targets, ts));
     if (w.stop) { await stop(w.stop, `${w.detail || ""} (while checking ${w.source || "posts"})`); return null; }
+    if (w.aborted) return null; // Pause/Stop pressed during the check
+    if (await stopIfAccountUnknown(settings)) return null;
+    if (!w.ok && w.soft === "page_budget") return budgetWait(await pageRoom(settings, 1), now()); // not an X error
     if (!w.ok) {
       const n = (state.softErrors || 0) + 1;
       await patchState({ softErrors: n });
@@ -451,19 +555,25 @@ async function tickBody(settings, secrets, reason = "timer") {
     }
     const emptyStreak = w.visibleEmpty ? (state.emptyStreak || 0) + 1 : 0;
     const hiddenStreak = w.hiddenEmpty ? (state.hiddenEmptyStreak || 0) + 1 : 0;
-    await patchState({ softErrors: 0, emptyStreak, hiddenEmptyStreak: hiddenStreak, lastWatchAt: now(), lastWatchSource: w.source, lastWatchScanned: w.scanned });
+    // Adaptive cadence: watch checks in a row without a fresh target post (one about to enter the comment window
+    // counts as fresh). A check that read no page (no active targets) leaves the streak as it is.
+    const fresh = !!((w.posts && w.posts.length) || (w.waiting && w.waiting.length));
+    const emptyWatchStreak = !w.source ? state.emptyWatchStreak || 0 : fresh ? 0 : (state.emptyWatchStreak || 0) + 1;
+    await patchState({ softErrors: 0, emptyStreak, hiddenEmptyStreak: hiddenStreak, emptyWatchStreak, ...(fresh ? { lastFreshAt: now() } : {}), lastWatchAt: now(), lastWatchSource: w.source, lastWatchScanned: w.scanned });
     if (emptyStreak >= 4) { await stop(STOP.DOM_CHANGED, "No posts rendered on watch pages 4 times in a row - X may have changed its page"); return null; }
     if (hiddenStreak === 3) await notify("sx-hidden", "ScoreX: X tab not rendering", "X showed no posts while its tab was hidden. Open Settings > Advanced and switch to 'separate window', or enable 'bring X tab to front'.");
     if (w.posts.length) {
       counts = await computeCounts(settings, now());
       await handleFresh(w.posts, { settings, secrets, mode, counts, tabId, me });
       if (!(await stillRunning())) return null;
+      if (await stopIfAccountUnknown(settings)) return null;
     }
     // Revisit soon if a post is about to enter the comment window.
     if (w.waiting && w.waiting.length) {
       const soonest = Math.min(...w.waiting.map((p) => p.createdAt + settings.watch.minPostAgeMin * MIN));
-      const d = Math.max(soonest - now(), HARD.minCheckIntervalSec * 1000 - (now() - (await getState()).lastWatchAt || 0));
-      if (d > 0 && d < nextCheckMs(settings)) return { delay: d + randInt(10, 60) * 1000, why: "fresh post entering window" };
+      const st3 = await getState();
+      const d = Math.max(soonest - now(), HARD.minCheckIntervalSec * 1000 - (now() - st3.lastWatchAt || 0));
+      if (d > 0 && d < nextCheckMs(settings, st3)) return { delay: d + randInt(10, 60) * 1000, why: "fresh post entering window" };
     }
   }
 
@@ -480,22 +590,27 @@ async function tickBody(settings, secrets, reason = "timer") {
       if (cands.length) {
         await handleFresh(cands, { settings, secrets, mode, counts: c2, tabId, me, limit: 1 });
         if (!(await stillRunning())) return null;
+        if (await stopIfAccountUnknown(settings)) return null;
       }
     }
   }
 
-  // 3) Background work when idle: queued profile refreshes, follow checks, learning checks, optional cleanup.
+  // 3) Background work when idle: queued profile refreshes, follow checks, learning checks, optional cleanup
+  //    (only with room for a whole step under the page-load budget).
   let bg = null;
-  if (await stillRunning()) {
+  if ((await stillRunning()) && (await pageRoom(settings, backgroundNeed(settings))).left >= backgroundNeed(settings)) {
     bg = await backgroundStep({ tabId, settings, me });
     if (bg && bg.stop) { await stop(bg.stop, bg.detail); return null; }
+    if (await stopIfAccountUnknown(settings)) return null;
   }
 
-  // Next tick: random check interval, earlier if a queued comment becomes due. While newly added targets
-  // still wait for their follow check, come back a bit sooner (still a few profiles per 1.5-3 minutes).
-  let delay = nextCheckMs(settings);
-  if (bg && bg.did === "follow" && bg.checkingLeft > 0) delay = Math.min(delay, humanDelay(90 * 1000, 180 * 1000));
+  // Next tick: random check interval (stretched while targets post nothing new), earlier if a queued comment
+  // becomes due. While newly added targets still wait for their follow check, or manual re-checks are queued,
+  // come back a bit sooner (still a few profiles per 1.5-3 minutes).
   const st2 = await getState();
+  let delay = nextCheckMs(settings, st2);
+  if (bg && bg.did === "follow" && bg.checkingLeft > 0) delay = Math.min(delay, humanDelay(90 * 1000, 180 * 1000));
+  if (bg && bg.did === "refresh" && (st2.pendingRefresh || []).length) delay = Math.min(delay, humanDelay(90 * 1000, 180 * 1000));
   const open2 = await H.openQueue();
   const counts2 = await computeCounts(settings, now());
   const tg2 = await getTargets();
@@ -523,10 +638,12 @@ export async function tick(reason = "alarm") {
       await patchState((s) => (s.internalErrors ? { internalErrors: 0 } : {}));
       return out;
     });
-    if (res && res.busy) { await scheduleTick(reason === "manual" ? randInt(10, 20) * 1000 : randInt(45, 90) * 1000, reason === "manual" ? "manual" : "busy"); return; }
+    // A "check now" / approval that arrived while this tick ran (rerunRequested) is honoured on every path.
+    const manual = reason === "manual" || rerunRequested;
+    if (res && res.busy) { await scheduleTick(manual ? randInt(10, 20) * 1000 : randInt(45, 90) * 1000, manual ? "manual" : "busy"); return; }
     if (await stillRunning()) {
       const settings = await getSettings();
-      const d = res && res.delay ? res.delay : nextCheckMs(settings);
+      const d = res && res.delay ? res.delay : nextCheckMs(settings, await getState());
       if (rerunRequested) await scheduleTick(randInt(1500, 4000), "manual");
       else await scheduleTick(d, res && res.why ? res.why : "next check");
     }
@@ -534,7 +651,7 @@ export async function tick(reason = "alarm") {
     log("error", "Tick failed: " + String((e && e.message) || e));
     const st = await patchState((s) => ({ internalErrors: (s.internalErrors || 0) + 1 }));
     if (st.internalErrors >= 5) await stop(STOP.INTERNAL, String((e && e.message) || e));
-    else if (await stillRunning()) await scheduleTick(randInt(2, 4) * MIN, "retry after error");
+    else if (await stillRunning()) await scheduleTick(rerunRequested ? randInt(15, 30) * 1000 : randInt(2, 4) * MIN, rerunRequested ? "manual" : "retry after error");
   } finally {
     ticking = false;
     await refreshBadge().catch(() => {});
@@ -564,7 +681,9 @@ async function handleFresh(posts, ctx) {
     if (!(await stillRunning())) return;
     const already = await H.byPostId(p.id);
     if (already.length) continue;
-    const skip = skipReason(p, settings, { ts: now(), maxAgeMin: p.catchUp ? (settings.watch.catchUp.maxAgeHours || 48) * 60 : undefined });
+    // Without a post time nobody can tell whether the post is still fresh (X shows a time on every organic post;
+    // a missing one is usually an ad or a page that did not render): never comment on it.
+    const skip = !p.createdAt ? { text: "Post time unknown - cannot check that the post is fresh" } : skipReason(p, settings, { ts: now(), maxAgeMin: p.catchUp ? (settings.watch.catchUp.maxAgeHours || 48) * 60 : undefined });
     if (skip) {
       await H.put(H.newRecord({ status: HS.SKIPPED, reason: skip.text, mode, ...postFields(p, t), attempts: 0 }));
       continue;
@@ -632,8 +751,8 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
   const tone = arm.tone ? effectiveTone(t, settings, arm.tone) : effectiveTone(t, settings);
   const presetKey = arm.preset || preset0;
   if (budgetBlocks(settings, await getSpend(), presetKey)) { await stop(STOP.BUDGET, "The next comment would exceed your monthly budget"); return "stopped"; }
-  // Repetition is checked against comments still waiting in the queue too, not only posted ones.
-  const previous = [...(await H.openQueue()).map((r) => r.comment), ...(await H.recentPosted(50)).map((r) => r.comment)].filter(Boolean);
+  // Repetition is checked against comments still waiting in the queue too, not only posted ones (newest first).
+  const previous = await recentComments();
   const g = await generate({
     settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey, previous,
     bestComments: await bestComments(), myHandle: me, compatFor: await compatLoader(), onCall: await onCallFactory(settings), feedback,
@@ -654,7 +773,8 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
 
   const st = await getState();
   const liveMode = effectiveMode(await getSettings(), st);
-  if (mode === MODE.AUTO && liveMode === MODE.AUTO && !(g.quality && g.quality.needsReview)) {
+  // Only a post with a known time is queued for auto posting (its freshness window can expire the item).
+  if (mode === MODE.AUTO && liveMode === MODE.AUTO && post.createdAt && !(g.quality && g.quality.needsReview)) {
     const when = Math.max(now() + humanDelay(45 * 1000, 150 * 1000), st.nextCommentAt || 0, st.breakUntil || 0);
     await H.put({ ...base, comment: g.comment, originalComment: g.comment, status: HS.QUEUED, scheduledFor: when });
     log("info", `Queued a comment for @${post.author} (posts in ~${fmtDuration(when - now())})`);
@@ -695,11 +815,18 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     log("info", `Posting to @${rec.target} interrupted by you before submitting`);
     return "aborted";
   }
+  // The X page-load budget refused the post page (nothing was loaded): the item waits, nothing failed.
+  if (r.budget || (r.fail && /page_budget/.test(String(r.reason || "")))) {
+    await H.patch(rec.id, { status: prevStatus, reason: GATE_LABEL.footprint, ...(r.liked ? { liked: true, likedAt: ts } : {}) });
+    return "budget";
+  }
   if (r.retry) {
+    // Counted on the item only (3 tries): a page that did not render is not an X error, so it never feeds the
+    // watch-error counter behind the rate-limit / changed-page stops.
     const retries = (claimed.retries || 0) + 1;
     if (retries >= 3) await H.patch(rec.id, { status: HS.FAILED, retries, reason: "The post page did not load 3 times (" + r.reason + ")" });
     else await H.patch(rec.id, { status: prevStatus, retries, scheduledFor: ts + humanDelay(3 * MIN, 6 * MIN), reason: "Will retry: " + r.reason });
-    await patchState({ nextCommentAt: ts + humanDelay(2 * MIN, 4 * MIN), softErrors: (state.softErrors || 0) + 1 });
+    await patchState({ nextCommentAt: ts + humanDelay(2 * MIN, 4 * MIN) });
     log("warn", `The post page for @${rec.target} did not load (${r.reason})`);
     return "retry";
   }
@@ -720,7 +847,9 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     return "posted";
   }
   if (r.stop) {
-    await H.patch(rec.id, { status: HS.FAILED, reason: STOP_LABEL[r.stop] || r.stop, liked: !!r.liked, likedAt: r.liked ? ts : null });
+    // unsure: the stop came after the Reply click without a clear rejection, so the reply may be on X (counts
+    // toward every limit, like an unconfirmed post).
+    await H.patch(rec.id, { status: HS.FAILED, reason: STOP_LABEL[r.stop] || r.stop, liked: !!r.liked, likedAt: r.liked ? ts : null, ...(r.unsure ? { maybePosted: true, replyUrl: r.replyUrl || "" } : {}) });
     await stop(r.stop, r.detail);
     return "stopped";
   }
@@ -740,40 +869,74 @@ async function postOne(rec, { tabId, settings, me, counts }) {
 
 // ---------- background work ----------
 
+// Manual re-checks (Targets > Re-check, state.pendingRefresh) never starve follow tracking: while X's "Follows you"
+// badge is not verified, the follow step (its followers-list scan is the badge canary) always runs first; otherwise
+// re-checks and the rest of the background work take turns (state.lastBackground). Re-checks also run whenever the
+// rest has nothing to do.
 async function backgroundStep({ tabId, settings, me }) {
   const shouldStop = async () => !(await stillRunning());
   const st = await getState();
-  if (st.pendingRefresh && st.pendingRefresh.length) {
-    const [h, ...rest] = st.pendingRefresh;
-    await patchState({ pendingRefresh: rest });
-    const r = await refreshProfile(tabId, h, settings);
-    if (r && r.stop) return r;
-    return { did: "refresh" };
-  }
+  const pending = Array.isArray(st.pendingRefresh) && st.pendingRefresh.length > 0;
+  if (pending && st.lastBackground !== "refresh" && badgeTrusted(st, now())) return refreshStep({ tabId, settings, shouldStop });
+  const r = await routineBackground({ tabId, settings, me, shouldStop });
+  if (r && r.stop) return r;
+  if (r && r.did) { if (st.lastBackground !== "routine") await patchState({ lastBackground: "routine" }); return r; }
+  if (pending && !(await shouldStop())) return refreshStep({ tabId, settings, shouldStop });
+  return null;
+}
+
+// Follow tracking, conversation alerts, engagement checks and cleanup, first one with something to do.
+async function routineBackground({ tabId, settings, me, shouldStop }) {
   {
-    const r = await followStep({ tabId, settings, me, shouldStop });
+    const r = await withPurpose("follow", () => followStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }
   if (await shouldStop()) return null;
   if (settings.learning.conversations && settings.learning.conversations.enabled) {
-    const r = await conversationsStep({ tabId, settings, me, shouldStop });
+    const r = await withPurpose("mentions", () => conversationsStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }
   if (await shouldStop()) return null;
   if (settings.learning.enabled) {
-    const r = await learningStep({ tabId, settings, me, shouldStop });
+    const r = await withPurpose("check", () => learningStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }
   if (settings.cleanup.enabled) {
     if (await shouldStop()) return null;
-    const r = await cleanupStep({ tabId, settings, me, shouldStop });
+    const r = await withPurpose("follow", () => cleanupStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }
   return null;
+}
+
+// Up to follow.checksPerRun queued re-checks, a few seconds apart (taken from the queue atomically, so re-checks
+// queued meanwhile are kept).
+async function refreshStep({ tabId, settings, shouldStop }) {
+  let visits = 0;
+  for (let i = 0; i < settings.follow.checksPerRun; i++) {
+    if (i && (await shouldStop())) break;
+    let h = null;
+    await patchState((s) => {
+      const list = Array.isArray(s.pendingRefresh) ? s.pendingRefresh : [];
+      h = list[0] || null;
+      return { pendingRefresh: list.slice(1), lastBackground: "refresh" };
+    });
+    if (!h) break;
+    if (i) await sleep(humanDelay(3000, 8000));
+    const r = await withPurpose("profile", () => refreshProfile(tabId, h, settings, { shouldStop }));
+    if (r && r.stop) return r;
+    if (r && (r.aborted || r.budget || r.soft === "page_budget")) {
+      // Not visited (Pause/Stop, or the page-load budget): it stays first in the queue.
+      await patchState((s) => ({ pendingRefresh: [h, ...(s.pendingRefresh || []).filter((x) => x !== h)] }));
+      break;
+    }
+    visits++;
+  }
+  return { did: "refresh", visits };
 }
 
 // ---------- review actions (from the dashboard) ----------
@@ -808,7 +971,8 @@ async function reviewActionInner({ id, action, text }) {
     if (!res.ok) return res;
     const r = res.record;
     const st = await getState();
-    if (st.status === STATUS.RUNNING) await scheduleTick(randInt(15, 45) * 1000, "approved item");
+    // requestTick: a tick running right now would replace a plain timer with its own schedule.
+    if (st.status === STATUS.RUNNING) await requestTick(randInt(15, 45) * 1000, "approved item");
     await refreshBadge();
     return { ok: true, record: r };
   }
@@ -819,7 +983,7 @@ async function reviewActionInner({ id, action, text }) {
     const t = targets[rec.target] || { handle: rec.target, group: rec.group, tier: rec.tier, name: rec.targetName, recentPosts: [], profile: null, tone: "", preset: "" };
     const post = { id: rec.postId, url: rec.postUrl, author: rec.target, authorName: rec.targetName, text: rec.postText, lang: rec.postLang, createdAt: rec.postCreatedAt, metrics: rec.postMetrics, hasMedia: rec.postHasMedia, isQuote: rec.postIsQuote };
     const tone = rec.tone ? effectiveTone(t, settings, rec.tone) : effectiveTone(t, settings);
-    const previous = [rec.comment, ...(await H.openQueue()).filter((r) => r.id !== rec.id).map((r) => r.comment), ...(await H.recentPosted(50)).map((r) => r.comment)].filter(Boolean);
+    const previous = [rec.comment, ...(await recentComments(rec.id))].filter(Boolean);
     const g = await generate({
       settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey: rec.preset || effectivePreset(t, settings), previous,
       bestComments: await bestComments(), myHandle: settings.account.handle, compatFor: await compatLoader(), onCall: await onCallFactory(settings),
@@ -857,5 +1021,94 @@ export async function reviewBulk(action, ids) {
   await refreshBadge();
   return { ok: true, count: n };
 }
+
+// ---------- manual re-checks (Targets > Re-check follow status) ----------
+
+const REFRESH_NOW_MAX = 25; // profiles visited right away while the engine is not running (the rest wait for it)
+const PENDING_REFRESH_MAX = 500;
+let refreshJob = null; // { kind, abort, handover, queue } - the re-check running now while the engine is not running
+
+async function queueRefresh(list) {
+  if (!list.length) return;
+  await patchState((s) => ({ pendingRefresh: [...new Set([...(s.pendingRefresh || []), ...list])].slice(0, PENDING_REFRESH_MAX) }));
+}
+
+// Running engine: re-checks are queued for its idle steps (backgroundStep). Otherwise they run now in the
+// background under the job lease, 5-12 s apart. Pause/Stop abort that job (its own abort token, so a later click
+// can never undo a Stop); a later request while it runs adds its handles to it; Start hands its rest to the engine.
+export async function refreshTargetsNow(handles) {
+  const list = [...new Set((Array.isArray(handles) ? handles : []).map(normalizeHandle).filter(Boolean))];
+  if (!list.length) return { ok: true, queued: 0, when: "now" };
+  const st = await getState();
+  if (st.status === STATUS.RUNNING) {
+    await queueRefresh(list);
+    return { ok: true, queued: list.length, when: "next idle check" };
+  }
+  // After a safety stop (captcha, warning, rate limit...) nothing drives the X tab until you resume.
+  if (st.status === STATUS.STOPPED && SAFETY_STOPS.has(st.stopReason)) {
+    await queueRefresh(list);
+    return { ok: true, queued: list.length, when: "after you resume (ScoreX was stopped by a safety check)" };
+  }
+  let job = refreshJob && !refreshJob.abort ? refreshJob : null;
+  const fresh = !job;
+  if (fresh) { job = backgroundJob("refresh"); job.queue = []; job.handover = false; }
+  const room = Math.max(0, REFRESH_NOW_MAX - job.queue.length);
+  const nowList = list.filter((h) => !job.queue.includes(h)).slice(0, room);
+  job.queue.push(...nowList);
+  const later = list.filter((h) => !job.queue.includes(h));
+  await queueRefresh(later);
+  if (fresh) {
+    refreshJob = job;
+    runRefreshJob(job)
+      .catch((e) => log("error", "Refresh failed: " + String((e && e.message) || e)))
+      .finally(() => { endBackgroundJob(job); if (refreshJob === job) refreshJob = null; });
+  }
+  return { ok: true, queued: list.length, when: later.length ? `${nowList.length} now, the rest while running` : "now" };
+}
+
+async function runRefreshJob(job) {
+  const until = now() + 3 * MIN; // the X tab may be busy (a discovery, a self-test): wait up to 3 minutes for it
+  for (;;) {
+    if (job.abort) break;
+    const r = await withLease("refresh", async () => {
+      const settings = await getSettings();
+      const tabId = await workerTab(settings);
+      if (tabId == null) { log("warn", "Re-check: could not open the X tab - the re-checks wait for the next check while running"); return { keep: true }; }
+      let first = true;
+      while (job.queue.length && !job.abort) {
+        if (!first) await sleep(humanDelay(5000, 12000));
+        first = false;
+        if (job.abort) break;
+        const h = job.queue.shift();
+        const p = await refreshProfile(tabId, h, settings, { shouldStop: async () => job.abort });
+        if (p && p.stop) { job.queue.length = 0; await stop(p.stop, p.detail); return {}; }
+        if (p && p.aborted) { job.queue.unshift(h); break; }
+        if (p && (p.budget || p.soft === "page_budget")) { job.queue.unshift(h); log("info", "Re-check paused: " + GATE_LABEL.footprint); return { keep: true }; }
+        if (await stopIfAccountUnknown(settings)) { job.queue.length = 0; return {}; }
+      }
+      return {};
+    });
+    if (r && r.busy && !job.abort) {
+      if (now() < until) { await sleep(5000); continue; }
+      log("warn", "Re-check: ScoreX was busy in the X tab for 3 minutes - the re-checks wait for the next idle check");
+      await queueRefresh(job.queue.splice(0));
+      return;
+    }
+    if (r && r.keep) await queueRefresh(job.queue.splice(0));
+    break;
+  }
+  if (job.abort) {
+    if (job.handover) await queueRefresh(job.queue.splice(0)); // Start/Resume: the engine continues them
+    else if (job.queue.length) log("info", "Profile refresh stopped by you");
+    job.queue.length = 0;
+  }
+}
+
+// Start/Resume: a running re-check job hands its remaining handles to the engine's queue.
+function handoverRefresh() {
+  for (const j of backgroundJobs) if (j.kind === "refresh") { j.handover = true; j.abort = true; }
+}
+
+export const _test = { backgroundStep, expireQueue, handleFresh, postOne, heldLeases, get refreshJob() { return refreshJob; } };
 
 export { recordOutcomeForTarget };

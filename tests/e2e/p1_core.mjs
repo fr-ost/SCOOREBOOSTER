@@ -159,6 +159,42 @@ try {
   assert(!(await H.history()).find((x) => x.postId === pDave3.id), "no comments after the follow-back");
   assert(/followed you back/.test(JSON.stringify(await H.store("sx.logs"))), "follow-back logged");
 
+  // ---- unknown X prompt after Reply: stop, never click it, nothing further posted ----
+  M.addUser("hank", { name: "Hank", followers: 30000 });
+  M.addUser("ivy", { name: "Ivy", followers: 21000 });
+  const pHank = M.addPost("hank", "Why onboarding emails beat in-app product tours for B2B activation, with real numbers.", 2);
+  const pIvy = M.addPost("ivy", "Our churn dropped after we moved the pricing page next to the signup form. Small change.", 2);
+  await H.msg("targetsUpsert", { rows: ["hank", "ivy"], defaults: { tier: 2 } });
+  await untilChecked(["hank", "ivy"]);
+  await H.runNow();
+  const two = await H.waitFor(async () => {
+    const h = await H.history();
+    const a = h.find((x) => x.postId === pHank.id && x.status === "pending_review"), b = h.find((x) => x.postId === pIvy.id && x.status === "pending_review");
+    return a && b ? [a, b] : null;
+  }, "hank + ivy pending", 120000);
+  for (const x of two) assert((await H.msg("reviewAction", { id: x.id, action: "approve" })).ok, "approved @" + x.target);
+  M.replyMode = "prompt";
+  const repliesBefore = M.replies.length;
+  const attemptsBefore = M.log.filter((x) => x.kind === "reply").length;
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: Date.now() - 15 * 60000 });
+  await H.runNow();
+  st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" ? s : null; }, "stop on an unknown prompt", 150000);
+  assert(st.stopReason === "unknown_prompt" && st.alert && st.alert.reason === "unknown_prompt", "AUTO-STOP on an unknown X prompt after Reply (" + st.stopReason + ")");
+  assert(st.stopDetail.includes("Before you reply") && st.stopDetail.length <= 300, "the stop shows the prompt's text: " + st.stopDetail);
+  assert(!M.log.some((x) => x.kind === "promptClick"), "ScoreX never clicked the prompt");
+  assert(M.replies.length === repliesBefore, "nothing was posted");
+  let h4 = await H.history();
+  const tried = h4.filter((x) => two.some((y) => y.id === x.id) && x.status === "failed");
+  assert(tried.length === 1 && !tried[0].maybePosted, "the attempted item failed and does not count as maybe posted (the text was still in the box)");
+  assert((await H.msg("runNow")).ok === false, "the engine stays stopped until you resume");
+  await sleep(6000);
+  h4 = await H.history();
+  const left = h4.find((x) => two.some((y) => y.id === x.id) && x.id !== tried[0].id);
+  assert(left.status === "approved" && M.replies.length === repliesBefore && M.log.filter((x) => x.kind === "reply").length === attemptsBefore + 1, "nothing further was posted or submitted after the stop");
+  await H.msg("reviewAction", { id: left.id, action: "skip" });
+  M.replyMode = "ok";
+  assert((await H.msg("resume")).ok, "resume after reviewing the prompt");
+
   // ---- auto-stop: captcha ----
   M.pageMode = "captcha";
   M.addPost("dave", "Another fresh post that should never be acted on while a captcha is up.", 2);

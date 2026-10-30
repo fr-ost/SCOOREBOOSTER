@@ -213,6 +213,27 @@ try {
   assert(!catchRecs.some((x) => x.postId === old3.id), "only the 2 latest per account (setting), the 25 h old one is left alone");
   assert(M.replies.filter((r) => r.inReplyTo === old1.id || r.inReplyTo === old2.id).length === 2, "both catch-up replies are on X");
 
+  // ---- X footprint, risk meter, adaptive watch in the status; the page-load budget makes the engine wait ----
+  s = (await H.msg("getStatus")).status;
+  assert(s.footprint && s.footprint.total > 0 && s.footprint.hourly.length === 24 && s.footprint.byPurpose.post >= 1 && s.footprint.byPurpose.watch >= 1, "status.footprint counts X page loads by purpose " + JSON.stringify(s.footprint && s.footprint.byPurpose));
+  assert(s.footprint.hourly.reduce((a, b) => a + b, 0) === s.footprint.total, "footprint hourly bars add up to the 24 h total (" + s.footprint.total + ")");
+  assert(s.risk && ["low", "medium", "high"].includes(s.risk.level) && s.risk.score >= 0 && s.risk.score <= 100 && s.risk.factors.some((f) => f.id === "auto"), "status.risk is an estimate with factors: " + s.risk.level + " " + s.risk.score);
+  assert(s.watch && typeof s.watch.intervalSec === "number" && typeof s.watch.slow === "boolean" && typeof s.watch.emptyStreak === "number", "status.watch: " + JSON.stringify(s.watch));
+  assert(s.reach && "alert" in s.reach, "status.reach present");
+  await H.waitFor(async () => { const x = await H.store("sx.state"); return !x.job || x.job.leaseUntil < Date.now(); }, "idle engine", 180000, 400);
+  const capSet = (await H.msg("getStatus")).status.footprint.total;
+  await H.settings({ safety: { maxPageLoads24h: capSet } });
+  await H.runNow();
+  const wst = await H.waitFor(async () => { const x = await H.store("sx.state"); return x.nextTickWhy === "X page-load budget reached - waiting" ? x : null; }, "page-load budget wait", 90000);
+  assert(wst.status === "running" && !wst.alert, "at the page-load budget the engine waits, it never stops");
+  const loadsAtCap = (await H.msg("getStatus")).status.footprint.total;
+  await H.runNow();
+  await sleep(4000);
+  s = (await H.msg("getStatus")).status;
+  assert(s.footprint.total === loadsAtCap && loadsAtCap <= capSet + 2 && s.footprint.cap === capSet, "no X page is loaded over the budget (" + s.footprint.total + "/" + s.footprint.cap + ")");
+  assert(/page-load budget reached/.test(s.sub), "status line says it waits for the budget: " + s.sub);
+  await H.settings({ safety: { maxPageLoads24h: 0 } });
+
   log(`\nPhase 2 e2e: ${passCount()} checks passed`);
 } catch (e) {
   failed = true;

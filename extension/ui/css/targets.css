@@ -1,0 +1,3 @@
+/* ScoreX - Targets (#targets): status chips, toolbar, table, bulk bar, Add targets / Edit rules sheets, target drawer.
+   Screen-specific styles only. Tokens, the shell and shared components live in ../dashboard.css (use its
+   custom properties: --text*, --border*, --lime, --mark-edge, --accent-text, --amber*, --red*, --viz-1..6, --fs-*, --s1..s7). */

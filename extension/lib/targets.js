@@ -7,8 +7,11 @@
 //   profile: { handle, name, bio, followers, following, verified, protected, defaultAvatar, joinedAt, avatar, updatedAt },
 //   recentPosts: [{ id, text, createdAt, metrics }]  (newest first, max 5)
 //   lastPostAt, lastCheckedAt,
-//   rel: { followsYou (null = not checked yet), youFollow, checkedAt, youFollowSince, followedBackAt },
-//   score: { own, sorsa, combined, flags, bot, updatedAt, sorsaUpdatedAt },
+//   rel: { followsYou (null = not checked yet), youFollow, checkedAt, youFollowSince, followedBackAt,
+//          notFollowingSeen, unfollowedYouAt (it followed you, then unfollowed), gone (profile not found; cleared
+//          when the profile reads fine again or the target is turned on again) },
+//   score: { own, sorsa, combined, flags, bot, updatedAt, sorsaUpdatedAt, providers: { [id]: { score, max, at } },
+//            value (0-100 | null), propensity (0-1 | null), why }  (value/propensity/why: learning.updatePriorities),
 //   priority (0-100), coldUntil,
 //   stats: { comments, firstCommentAt, lastCommentAt, engaged, noResponseStreak, likes, replies, authorReplies, lastEngagedAt }
 // }
@@ -168,12 +171,20 @@ export async function upsert(rows, defaults = {}, overwrite = false) {
   return { added, updated, blacklisted };
 }
 
+// Turning a target on again means the user checked the account is back: clear "not found" (rel.gone), so follow
+// tracking includes it again (follow-back re-checks, give-up) instead of only watching it.
+function applyPatch(t, clean) {
+  Object.assign(t, clean);
+  if (clean.enabled === true && t.rel && t.rel.gone) t.rel = { ...t.rel, gone: false };
+  return t;
+}
+
 export async function patch(handle, p) {
   const h = normalizeHandle(handle);
   const clean = sanitizePatch(p || {});
   let out = null;
   await updateTargets((all) => {
-    if (Object.hasOwn(all, h)) { Object.assign(all[h], clean); out = all[h]; }
+    if (Object.hasOwn(all, h)) out = applyPatch(all[h], clean);
     return all;
   });
   return out;
@@ -189,7 +200,7 @@ export async function removeMany(handles) {
 export async function bulk(handles, p) {
   const set = new Set((handles || []).map(normalizeHandle));
   const clean = sanitizePatch(p || {});
-  await updateTargets((all) => { for (const h of set) if (Object.hasOwn(all, h)) Object.assign(all[h], clean); return all; });
+  await updateTargets((all) => { for (const h of set) if (Object.hasOwn(all, h)) applyPatch(all[h], clean); return all; });
 }
 
 // Record one observation of whether the target follows you (profile badge or your followers list).
@@ -205,7 +216,13 @@ export function applyFollow(t, followsYou, ts = now()) {
     // A missing "Follows you" badge could be a rendering/markup problem: downgrade only after two
     // consecutive observations.
     t.rel.notFollowingSeen = (t.rel.notFollowingSeen || 0) + 1;
-    if (t.rel.notFollowingSeen >= 2) t.rel.followsYou = false;
+    if (t.rel.notFollowingSeen >= 2) {
+      // The account unfollowed you: it is treated as not following again (comments resume), and the give-up window
+      // starts again with the next comment instead of counting from comments before it followed you.
+      t.rel.followsYou = false;
+      t.rel.unfollowedYouAt = ts;
+      if (t.stats) t.stats.firstCommentAt = null;
+    }
   } else {
     t.rel.followsYou = false;
   }
@@ -221,6 +238,7 @@ export function applyProfile(t, profile, posts, blend = 0.5) {
     t.profile = { ...(t.profile || {}), ...stripUndefined(profile), updatedAt: now() };
     if (profile.name) t.name = profile.name;
     t.rel = t.rel || {};
+    if (t.rel.gone) t.rel.gone = false; // the profile rendered: the account exists (again)
     if (profile.followsYou != null) applyFollow(t, !!profile.followsYou);
     if (profile.youFollow != null) {
       if (profile.youFollow && !t.rel.youFollowSince) t.rel.youFollowSince = now();

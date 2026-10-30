@@ -16,8 +16,6 @@ import { exportData, importData, clearHistory, resetAll } from "../lib/backup.js
 import { blacklistAdd, blacklistRemove } from "../lib/follow.js";
 import { normalizeHandle, now, sleep } from "../lib/util.js";
 import * as H from "../lib/history.js";
-import { refreshProfile } from "../lib/watcher.js";
-import { workerTab } from "../lib/tabs.js";
 import { recordSpend, getSpend, budgetStatus } from "../lib/costs.js";
 import * as SB from "../lib/scoreboard.js";
 import { runSelfTest } from "../lib/diagnostics.js";
@@ -132,32 +130,8 @@ async function startDiscovery(opts, jobId) {
   return { ok: false, error: "busy" };
 }
 
-async function refreshTargetsNow(handles) {
-  const st = await getState();
-  const list = handles.map(normalizeHandle).filter(Boolean);
-  if (st.status === STATUS.RUNNING) {
-    await patchState((s) => ({ pendingRefresh: [...new Set([...(s.pendingRefresh || []), ...list])] }));
-    return { ok: true, queued: list.length, when: "next idle check" };
-  }
-  // Not running: refresh now in the background (same lease + page checks); Pause/Stop abort it.
-  const now50 = list.slice(0, 50);
-  engine.backgroundAbort.requested = false;
-  (async () => {
-    await engine.withLease("refresh", async () => {
-      const settings = await getSettings();
-      const tabId = await workerTab(settings);
-      if (tabId == null) return;
-      for (const h of now50) {
-        if (engine.backgroundAbort.requested) { log("info", "Profile refresh stopped by you"); break; }
-        const r = await refreshProfile(tabId, h, settings);
-        if (r && r.stop) { await engine.stop(r.stop, r.detail); break; }
-        await sleep(3000 + Math.random() * 5000);
-      }
-    });
-  })().catch((e) => log("error", "Refresh failed: " + e.message));
-  if (list.length > now50.length) await patchState((s) => ({ pendingRefresh: [...new Set([...(s.pendingRefresh || []), ...list.slice(50)])] }));
-  return { ok: true, queued: list.length, when: list.length > 50 ? "50 now, the rest while running" : "now" };
-}
+// Manual re-checks: engine.refreshTargetsNow (queued for the running engine, else a background job with its own
+// abort token, 25 profiles at most right away, the rest while running).
 
 async function previewPrompt(handle) {
   const [settings, targets] = await Promise.all([getSettings(), getTargets()]);
@@ -202,7 +176,7 @@ const handlers = {
   },
   targetsBulk: async (m) => { await T.bulk(m.handles || [], m.patch || {}); return { ok: true }; },
   targetsRemove: async (m) => ({ ok: true, removed: await T.removeMany(m.handles || []) }),
-  targetRefresh: (m) => refreshTargetsNow(m.handles || (m.handle ? [m.handle] : [])),
+  targetRefresh: (m) => engine.refreshTargetsNow(m.handles || (m.handle ? [m.handle] : [])),
 
   candidatesAdd: async (m) => {
     const r = await candidatesToTargets(m.handles || [], Number(m.tier) === 1 ? 1 : 2, T.upsert);
@@ -287,7 +261,7 @@ const handlers = {
 
   // ---- conversations (author replies) + reach monitor ----
   conversationDone: (m) => conversationDone(String(m.id || ""), m.done !== false),
-  reachDismiss: async () => { await patchState({ reachAlert: null, reachDismissedAt: now() }); return { ok: true }; },
+  reachDismiss: async () => { await patchState({ reachAlert: null, reachDismissedAt: now() }); await engine.refreshBadge(); return { ok: true }; },
 
   learningRun: async () => {
     await patchState({ lastLearningAt: 0, learningForce: true });

@@ -11,7 +11,8 @@
 //     New keys include 100 free requests. The web app needs a login and shows no follower names for free.
 //   TwitterScore: public profile https://twitterscore.io/twitter/<handle>/ (title "... Twitter Score 385/1000",
 //     score in the server-rendered HTML; the smart-followers panel is filled by JavaScript and shows the first 3
-//     for free). API v1 (paid key): get_twitter_score?username= -> { twitter_score },
+//     for free; logged in with a PRO plan your own browser tab shows more rows, so the tab reader takes up to 50).
+//     ScoreX asks it at most 100 times a day by default. API v1 (paid key): get_twitter_score?username= -> { twitter_score },
 //     top_followers_paginate?username=&page=&size= -> { top_followers: [{ username, name, twitter_score, followers_count }] }.
 //   Ethos: free public API v2, GET /api/v2/user/by/x/<handle> -> { score (0-2800 credibility), profileId (null = no
 //     Ethos profile), username, displayName }. No follower data. Header X-Ethos-Client identifies the app.
@@ -55,7 +56,7 @@ export const PROVIDER_DEFS = {
     keyName: "twitterscoreKey",
     keyHelp: "https://twitterscore.io/api/prices",
     keyNote: "Optional: without a key ScoreX reads the free public profile page (score + the first 3 smart followers).",
-    dailyCap: 300,
+    dailyCap: 100, // be polite to the site: the public page and the browser-tab mode are read like a person would
     notFound: "(?:page|account|user) (?:was )?not found|doesn't exist|no data for this account",
     modes: {
       public: {
@@ -63,7 +64,7 @@ export const PROVIDER_DEFS = {
         score: { kind: "html", url: "https://twitterscore.io/twitter/{handle}/", value: { regex: "Twitter Score(?: of| is)?\\s*:?\\s*(\\d+(?:\\.\\d+)?)" } },
         smartFollowers: {
           kind: "tab", url: "https://twitterscore.io/twitter/{handle}/",
-          list: { selector: "a[href*='/twitter/']", containerText: "smart followers", fields: { handle: { attr: "href", regex: "/twitter/([A-Za-z0-9_]{1,15})(?:[/?#]|$)" }, score: { regex: "(\\d{1,4}(?:\\.\\d+)?)\\s*(?:/\\s*1000)?\\s*$" } }, limit: 6 },
+          list: { selector: "a[href*='/twitter/']", containerText: "smart followers", fields: { handle: { attr: "href", regex: "/twitter/([A-Za-z0-9_]{1,15})(?:[/?#]|$)" }, score: { regex: "(\\d{1,4}(?:\\.\\d+)?)\\s*(?:/\\s*1000)?\\s*$" } }, limit: 50 },
         },
       },
       page: {
@@ -71,7 +72,7 @@ export const PROVIDER_DEFS = {
         score: { kind: "tab", url: "https://twitterscore.io/twitter/{handle}/", value: { regex: "Twitter Score(?: of| is)?\\s*:?\\s*(\\d+(?:\\.\\d+)?)" } },
         smartFollowers: {
           kind: "tab", url: "https://twitterscore.io/twitter/{handle}/",
-          list: { selector: "a[href*='/twitter/']", containerText: "smart followers", fields: { handle: { attr: "href", regex: "/twitter/([A-Za-z0-9_]{1,15})(?:[/?#]|$)" }, score: { regex: "(\\d{1,4}(?:\\.\\d+)?)\\s*(?:/\\s*1000)?\\s*$" } }, limit: 6 },
+          list: { selector: "a[href*='/twitter/']", containerText: "smart followers", fields: { handle: { attr: "href", regex: "/twitter/([A-Za-z0-9_]{1,15})(?:[/?#]|$)" }, score: { regex: "(\\d{1,4}(?:\\.\\d+)?)\\s*(?:/\\s*1000)?\\s*$" } }, limit: 50 },
         },
       },
       api: {

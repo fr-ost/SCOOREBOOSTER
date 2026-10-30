@@ -14,15 +14,20 @@
     <header class="p-head">
       <span class="wordmark">Score<span class="wordmark-x" aria-hidden="true">X</span></span>
       <span class="p-spacer"></span>
-      <span id="pMode" class="p-mode"></span>
+      <span id="pHealthSlot"></span>
+      <span id="pRiskSlot"></span>
+      <span id="pMode" class="tag p-mode"></span>
     </header>
-    <section class="p-status" id="pStatusBox" aria-live="polite"></section>
+    <section class="p-pad p-status" id="pStatusBox" aria-live="polite"></section>
     <div id="pAlert" class="p-alert" role="alert" hidden></div>
     <div class="p-controls" id="pControls"></div>
-    <section class="p-quota" id="pQuota" aria-label="Today's quota"></section>
-    <div id="pPendingSlot"></div>
-    <div class="p-costs" id="pCosts"></div>
-    <button type="button" class="btn p-open" id="pOpen">Open dashboard</button>
+    <div id="pConvosSlot"></div>
+    <section class="p-pad p-quota" id="pQuota" aria-label="Comments posted in the last 24 hours"></section>
+    <div class="p-grid" id="pGrowth"></div>
+    <section class="p-pad p-review" id="pPendingSlot" aria-label="Review next"></section>
+    <section class="p-pad p-profile" id="pProfile" aria-label="This profile" hidden></section>
+    <div class="p-grid p-costs" id="pCosts"></div>
+    <div class="p-foot"><button type="button" class="btn p-open" id="pOpen">Open dashboard</button></div>
   </div>
   <div id="toasts" class="toasts" aria-live="polite"></div>
   <script type="module" src="popup.js"></script>

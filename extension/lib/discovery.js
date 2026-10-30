@@ -15,6 +15,9 @@ import { ownScore, suggestTier, passesDiscoveryFilters, combinedScore } from "./
 import { normalizeHandle, now, sleep, humanDelay, clamp } from "./util.js";
 
 let cancelRequested = false;
+// navigate()'s 3rd argument: the page-load purpose for the X footprint ledger (lib/tabs.js). valueOf keeps it a valid
+// timeout (45 s) for the older navigate(tabId, url, timeoutMs) signature.
+const NAV = (purpose) => ({ purpose, timeoutMs: 45000, valueOf: () => 45000 });
 
 async function setJob(patch) {
   const cur = await load(K.discovery, {});
@@ -37,7 +40,7 @@ export function sourceUrls(source, { me, handles, query }) {
 
 // Scroll a user list and collect cells until maxUsers or the list stops growing.
 async function collectUsers(tabId, url, maxUsers, settings, onProgress) {
-  const nav = await navigate(tabId, url);
+  const nav = await navigate(tabId, url, NAV("discovery"));
   if (!nav.ok) return { ok: false, soft: nav.error };
   const w = await waitForPage(tabId, ["userCell", "emptyState"], 20000);
   const v = pageVerdict(w.page, settings);
@@ -62,7 +65,7 @@ async function collectUsers(tabId, url, maxUsers, settings, onProgress) {
 }
 
 async function profileOf(tabId, handle, settings) {
-  const nav = await navigate(tabId, `https://x.com/${handle}`);
+  const nav = await navigate(tabId, `https://x.com/${handle}`, NAV("discovery"));
   if (!nav.ok) return { ok: false };
   const w = await waitForPage(tabId, ["profileUserName", "emptyState"], 20000);
   const v = pageVerdict(w.page, settings);
@@ -83,9 +86,10 @@ function majorityLang(posts) {
   return best;
 }
 
-// Rough pre-rank before profile visits (we only know cell data): verified + follows-you + overlap.
+// Rough pre-rank before profile visits (we only know cell data): overlap + verified. Accounts that already follow you
+// are never commented on, so they go last (and are never visited for scoring).
 function preRank(c) {
-  return (c.overlap || 1) * 10 + (c.verified ? 8 : 0) + (c.followsYou ? 3 : 0) - (c.defaultAvatar ? 10 : 0) - (/\d{6,}$/.test(c.handle) ? 6 : 0);
+  return (c.overlap || 1) * 10 + (c.verified ? 8 : 0) - (c.followsYou ? 50 : 0) - (c.defaultAvatar ? 10 : 0) - (/\d{6,}$/.test(c.handle) ? 6 : 0);
 }
 
 /**
@@ -147,7 +151,7 @@ async function runDiscoveryInner(opts, stopFn) {
   let enriched = 0;
   for (const c of list) {
     if (cancelRequested || enriched >= enrichMax) break;
-    if (targets[c.handle]) continue;
+    if (targets[c.handle] || c.followsYou) continue; // a follower can never become a usable candidate: no page visit
     enriched++;
     await setJob({ step: `Scoring profiles ${enriched}/${Math.min(enrichMax, list.length)}`, message: "@" + c.handle });
     const p = await profileOf(tabId, c.handle, settings);

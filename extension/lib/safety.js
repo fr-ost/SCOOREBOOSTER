@@ -2,12 +2,20 @@
 // scheduler, the dashboard and the tests all agree on the same numbers.
 
 import { HARD, MODE } from "./constants.js";
-import { DAY, MIN, clamp, humanDelay, randInt, inWindow, nextWindowStart, currentWindowEnd, now } from "./util.js";
+import { DAY, HOUR, MIN, clamp, humanDelay, randInt, inWindow, nextWindowStart, currentWindowEnd, now, parseHHMM } from "./util.js";
+
+// ---------- reach monitor hooks ----------
+// The reach monitor (lib/reach.js) sets state.reachAlert = { ..., action } when your replies' views drop sharply.
+// Until the alert is dismissed: action "review" puts the engine in Review mode, action "halve" halves the daily limit.
+export const reachAction = (state) => (state && state.reachAlert && state.reachAlert.action) || null;
+export const reachHalved = (state) => reachAction(state) === "halve";
 
 // ---------- mode ----------
 
-// Review or Full auto, exactly as chosen in the dashboard (no forced warm-up period).
-export function effectiveMode(settings) {
+// Review or Full auto, as chosen in the dashboard (no forced warm-up period); Review while a reach alert with
+// action "review" is open.
+export function effectiveMode(settings, state) {
+  if (reachAction(state) === "review") return MODE.REVIEW;
   return settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW;
 }
 
@@ -17,10 +25,12 @@ export function daysSinceStart(state, ts = now()) {
   if (!state.firstStartedAt) return 0;
   return Math.max(0, Math.floor((ts - state.firstStartedAt) / DAY));
 }
-// Week 1 -> ramp[0], week 2 -> ramp[1], then ramp[2]; always <= HARD.dailyComments.
+// Week 1 -> ramp[0], week 2 -> ramp[1], then ramp[2]; always <= HARD.dailyComments. Halved (at least 1) while a
+// reach alert with action "halve" is open.
 export function rampStage(state, ts = now()) { return Math.min(2, Math.floor(daysSinceStart(state, ts) / 7)); }
 export function dailyLimit(settings, state, ts = now()) {
-  return clamp(settings.safety.ramp[rampStage(state, ts)] || 0, 0, HARD.dailyComments);
+  const base = clamp(settings.safety.ramp[rampStage(state, ts)] || 0, 0, HARD.dailyComments);
+  return reachHalved(state) && base > 0 ? Math.max(1, Math.floor(base / 2)) : base;
 }
 export function generationLimit(settings, state, ts = now()) {
   return Math.ceil(dailyLimit(settings, state, ts) * settings.safety.generationFactor);
@@ -74,11 +84,32 @@ export function afterPost(settings, state, ts = now()) {
   return patch;
 }
 
-// Random delay until the next watch check.
-export function nextCheckMs(settings) {
+// Adaptive watch cadence (settings.safety.adaptiveWatch): after `afterEmpty` watch checks in a row found no fresh
+// target post (state.emptyWatchStreak), each further empty check stretches the interval 1.5x, up to maxIntervalMin
+// (never below HARD.minCheckIntervalSec, never shorter than the configured interval). A fresh post resets it.
+// Returns { slow, factor, loMs, hiMs, intervalSec, emptyStreak }.
+export function watchCadence(settings, state) {
   const c = settings.watch.checkIntervalSec;
   const lo = Math.max(HARD.minCheckIntervalSec, c.min) * 1000;
-  return humanDelay(lo, Math.max(lo, c.max * 1000)); // upper bound never below the HARD floor either
+  const hi = Math.max(lo, c.max * 1000); // upper bound never below the HARD floor either
+  const aw = settings.safety && settings.safety.adaptiveWatch;
+  const streak = Math.max(0, Number(state && state.emptyWatchStreak) || 0);
+  let factor = 1;
+  if (aw && aw.enabled && state && streak >= aw.afterEmpty) factor = Math.pow(1.5, Math.min(30, streak - aw.afterEmpty + 1));
+  let loMs = lo, hiMs = hi;
+  if (factor > 1) {
+    const cap = Math.max(hi, (Number(aw.maxIntervalMin) || 15) * MIN);
+    loMs = Math.min(cap, lo * factor);
+    hiMs = Math.min(cap, hi * factor);
+  }
+  const slow = hiMs > hi;
+  return { slow, factor: slow ? factor : 1, loMs, hiMs, intervalSec: Math.round((loMs + hiMs) / 2000), emptyStreak: streak };
+}
+
+// Random delay until the next watch check (stretched by the adaptive cadence when `state` is given).
+export function nextCheckMs(settings, state) {
+  const w = watchCadence(settings, state);
+  return humanDelay(w.loMs, w.hiMs);
 }
 
 // ---------- gates ----------
@@ -129,4 +160,75 @@ export const GATE_LABEL = {
   target_has_open_item: "A comment for this account is already queued",
   target_cold: "Account is cooling down (no response)",
   generation_limit: "Daily generation limit reached",
+  footprint: "X page-load budget reached - waiting",
 };
+
+// ---------- risk meter ----------
+// A rough estimate of how much the current setup stands out to X, from settings and the last 24 hours. Every
+// threshold and weight below is a HEURISTIC chosen by hand (X publishes no numbers): it orders setups from calmer
+// to busier, it is not a probability and not a guarantee. Pure: riskReport(settings, state, counts, footprint,
+// reach) with counts = computeCounts() (postedToday), footprint = footprintSummary() (total) and
+// reach = { ...state.reach, alert: state.reachAlert }.
+// Returns { level: "low"|"medium"|"high", score: 0-100, factors: [{ id, label, detail, points }], hoursToLimit }.
+export const RISK_LEVELS = Object.freeze({ medium: 30, high: 60 }); // heuristic score cut-offs
+
+export function activeHoursPerDay(settings) {
+  const ah = settings.safety && settings.safety.activeHours;
+  if (!ah || !ah.enabled) return 24;
+  const a = parseHHMM(ah.start), b = parseHHMM(ah.end);
+  if (a == null || b == null) return 24;
+  const mins = (b - a + 24 * 60) % (24 * 60);
+  return mins === 0 ? 24 : Math.round((mins / 60) * 10) / 10;
+}
+
+export function riskReport(settings, state, counts, footprint, reach, ts = now()) {
+  const st = state || {};
+  const factors = [];
+  const add = (id, label, detail, points) => { if (points > 0) factors.push({ id, label, detail, points: Math.round(points) }); };
+  const limit = dailyLimit(settings, st, ts);
+  const posted = Math.max(0, Number(counts && counts.postedToday) || 0);
+
+  // 1) Replies per 24 h (actual, up to 25) plus the daily limit you allow (up to 5). Heuristic: ~100 replies a
+  //    day is a lot for one person; limits above 100 a day leave room for that.
+  const volPts = clamp(posted / 100, 0, 1) * 25 + (limit > 100 ? 5 : limit > 50 ? 3 : 0);
+  add("volume", "Replies per day", `${posted} replies in the last 24 h (daily limit ${limit})`, volPts);
+
+  // 2) Hours active per day (active hours off = 24 h). People sleep; heuristic: 20 h+ is the busiest pattern.
+  const hrs = activeHoursPerDay(settings);
+  add("hours", "Hours active per day", hrs >= 24 ? "Works around the clock (active hours are off)" : `Active ${hrs} h a day`, hrs >= 20 ? 15 : hrs >= 16 ? 9 : hrs >= 12 ? 4 : 0);
+
+  // 3) Full auto: no person looks at each reply before it goes out.
+  if (effectiveMode(settings, st) === MODE.AUTO) add("auto", "Full auto", "Replies are posted without you checking each one", 15);
+
+  // 4) A like on every reply doubles the actions per reply.
+  if (settings.safety.like && settings.safety.like.enabled) add("likes", "Like on every reply", "Every reply comes with a like on the post", 5);
+
+  // 5) Reply speed after a post (the earliest a reply may go out). Heuristic: within ~2 min is fast for a person.
+  const minAge = Number(settings.watch && settings.watch.minPostAgeMin) || 0;
+  add("speed", "Reply speed", `Replies can go out ${minAge < 1 ? "less than a minute" : minAge === 1 ? "1 minute" : `${minAge} minutes`} after a post`, minAge <= 1 ? 10 : minAge <= 3 ? 5 : minAge <= 5 ? 2 : 0);
+
+  // 6) X page loads in the last 24 h (watch pages, posts, profiles...). Heuristic tiers at 250 / 500 / 1000.
+  const loads = Math.max(0, Number(footprint && footprint.total) || 0);
+  add("footprint", "X page loads", `${loads} X page loads in the last 24 h${footprint && footprint.cap ? ` (budget ${footprint.cap})` : ""}`, loads >= 1000 ? 10 : loads >= 500 ? 6 : loads >= 250 ? 3 : 0);
+
+  // 7) Reach trend: a sharp drop in your replies' views can mean X is already limiting them (views are a proxy).
+  const r = reach || {};
+  const alert = r.alert || st.reachAlert || null;
+  const nowMed = Number(r.medianViews), before = Number(r.prevMedianViews);
+  if (alert) add("reach", "Reach dropped", String(alert.message || "Your replies are reaching far fewer people than before").slice(0, 200), 20);
+  else if (before > 0 && Number.isFinite(nowMed) && nowMed < before * 0.7) add("reach", "Reach trend", `Median views per reply ${Math.round(nowMed)} (before ${Math.round(before)})`, 8);
+
+  factors.sort((a, b) => b.points - a.points);
+  const score = clamp(Math.round(factors.reduce((s, f) => s + f.points, 0)), 0, 100);
+  const level = score >= RISK_LEVELS.high ? "high" : score >= RISK_LEVELS.medium ? "medium" : "low";
+
+  // Hours until the daily limit at the pace of the last 24 h (null when nothing was posted yet).
+  let hoursToLimit = null;
+  if (posted >= limit) hoursToLimit = 0;
+  else if (posted > 0) {
+    const ran = st.startedAt ? (ts - st.startedAt) / HOUR : 24;
+    const pace = posted / clamp(ran, 1, 24);
+    hoursToLimit = Math.round(((limit - posted) / pace) * 10) / 10;
+  }
+  return { level, score, factors, hoursToLimit };
+}

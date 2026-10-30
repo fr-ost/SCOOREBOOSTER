@@ -8,7 +8,7 @@
 // async handlers never lose an update.
 
 import { K, STATUS, MODE, HARD, SCHEMA_VERSION } from "./constants.js";
-import { deepMerge, deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact, parseHandleList } from "./util.js";
+import { deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact, parseHandleList } from "./util.js";
 import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK, MODELS_REV } from "./models.js";
 import { PROVIDER_DEFS } from "./providerdefs.js";
 import { db, STORES } from "./db.js";
@@ -204,6 +204,7 @@ export const DEFAULT_SETTINGS = {
   // Score providers (lib/providerdefs.js): all OFF until you turn them on in the Scores tab.
   // { [id]: { enabled, mode: "auto" | "api" | "public" | "page", dailyCap } }
   providers: {},
+  providersRev: 1, // revision of the provider defaults these settings have seen (1: TwitterScore 100 requests/day)
 
   discovery: {
     minFollowers: 1000,
@@ -274,11 +275,37 @@ function range(r, lo, hi, defMin, defMax) {
   return { min: a, max: b };
 }
 
+const PROTO_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const isPlainObject = (v) => v != null && typeof v === "object" && !Array.isArray(v);
+// Drops prototype keys everywhere (JSON.parse turns "__proto__" into an own key that would otherwise
+// re-parent merged objects). Mutates and returns its argument, which must be a private clone.
+function stripProto(v) {
+  if (Array.isArray(v)) { for (let i = 0; i < v.length; i++) v[i] = stripProto(v[i]); return v; }
+  if (isPlainObject(v)) {
+    for (const k of PROTO_KEYS) if (Object.hasOwn(v, k)) delete v[k];
+    for (const k of Object.keys(v)) v[k] = stripProto(v[k]);
+  }
+  return v;
+}
+// Sections that are objects in the defaults stay objects: null, an array or a plain value there (corrupt storage, a
+// hand-edited or crafted backup) falls back to the default section instead of crashing every getSettings() call.
+// Arrays and plain values are taken over as they are; the sanitising below checks them. Legacy array forms that the
+// sanitising converts are listed here.
+const ARRAY_OK = new Set(["learning.abTones"]);
+function mergeShape(def, raw, path = "") {
+  if (!isPlainObject(def)) return raw === undefined ? deepClone(def) : raw;
+  if (!isPlainObject(raw)) return Array.isArray(raw) && ARRAY_OK.has(path) ? raw : deepClone(def);
+  const out = {};
+  for (const k of Object.keys(def)) out[k] = Object.hasOwn(raw, k) ? mergeShape(def[k], raw[k], path ? path + "." + k : k) : deepClone(def[k]);
+  for (const k of Object.keys(raw)) if (!Object.hasOwn(def, k)) out[k] = raw[k];
+  return out;
+}
+
 // Merge stored settings over defaults and clamp everything safety-relevant to HARD caps.
 export function sanitizeSettings(raw) {
-  // Clone both sides: deepMerge shares untouched sub-objects with its inputs, and the clamping below mutates
-  // in place (it would otherwise rewrite DEFAULT_SETTINGS / DEFAULT_PRESETS / DEFAULT_FALLBACK or the caller's object).
-  const s = deepMerge(deepClone(DEFAULT_SETTINGS), deepClone(raw || {}));
+  // Works on clones only: the clamping below mutates in place (it would otherwise rewrite DEFAULT_SETTINGS /
+  // DEFAULT_PRESETS / DEFAULT_FALLBACK or the caller's object).
+  const s = mergeShape(DEFAULT_SETTINGS, stripProto(deepClone(raw == null ? {} : raw)));
   s.account.handle = String(s.account.handle || "").trim().replace(/^@+/, "").trim();
   if (!isValidTimeZone(s.timezone)) s.timezone = DEFAULT_SETTINGS.timezone;
   if (![MODE.REVIEW, MODE.AUTO].includes(s.mode)) s.mode = MODE.REVIEW;
@@ -347,6 +374,11 @@ export function sanitizeSettings(raw) {
   q.minChars = clamp(Math.round(num(q.minChars, 12)), 1, 200);
   q.maxChars = clamp(Math.round(num(q.maxChars, 220)), q.minChars + 10, HARD.maxCommentChars);
 
+  // Custom tones: a list of { id, name, text }; anything else would break tone lookups (and with them generation).
+  s.customTones = (Array.isArray(s.customTones) ? s.customTones : [])
+    .filter((c) => isPlainObject(c) && c.id != null && String(c.id).trim())
+    .map((c) => ({ ...c, id: String(c.id).trim().slice(0, 60), name: String(c.name || "").slice(0, 80), text: String(c.text || "").slice(0, 2000) }));
+
   // Settings from before the Tone prompt existed: take over the tone the user had chosen, and drop the old
   // default A/B tone lists (they would test other tones against the user's own prompt).
   const legacy = !(raw && raw.prompt && typeof raw.prompt.tone === "string");
@@ -408,16 +440,21 @@ export function sanitizeSettings(raw) {
   // Providers: one entry per known provider; the legacy Sorsa switch maps onto providers.sorsa.
   const prov = s.providers && typeof s.providers === "object" ? s.providers : {};
   const legacySorsa = !!(s.scores && s.scores.sorsaEnabled);
+  // Settings saved before providersRev 1 carry TwitterScore's old default cap (300/day) as a stored value: it moves
+  // to the new, politer default. A cap chosen after the upgrade sticks.
+  const provRev = Number(raw && raw.providersRev) || 0;
   s.providers = {};
   for (const [id, def] of Object.entries(PROVIDER_DEFS)) {
-    const cur = prov[id] && typeof prov[id] === "object" ? prov[id] : {};
+    const cur = Object.hasOwn(prov, id) && isPlainObject(prov[id]) ? prov[id] : {};
     const modes = Object.keys(def.modes || {});
+    const oldDefault = provRev < 1 && id === "twitterscore" && num(cur.dailyCap) === 300;
     s.providers[id] = {
       enabled: cur.enabled != null ? !!cur.enabled : id === "sorsa" ? legacySorsa : false,
       mode: cur.mode === "auto" || modes.includes(cur.mode) ? cur.mode : "auto",
-      dailyCap: clamp(Math.round(num(cur.dailyCap, def.dailyCap || 100)), 1, 5000),
+      dailyCap: clamp(Math.round(num(oldDefault ? undefined : cur.dailyCap, def.dailyCap || 100)), 1, 5000),
     };
   }
+  s.providersRev = 1;
   s.scores.sorsaEnabled = !!(s.providers.sorsa && s.providers.sorsa.enabled);
   s.scores.blendSorsa = clamp(num(s.scores.blendSorsa, 0.5), 0, 1);
   s.scores.autoRefreshOwn = s.scores.autoRefreshOwn !== false;
@@ -435,6 +472,7 @@ export function sanitizeSettings(raw) {
     s.groups[g].dailyLimit = clamp(Math.round(num(s.groups[g].dailyLimit, g === "A" ? 10 : 20)), 0, HARD.dailyComments);
     s.groups[g].enabled = s.groups[g].enabled !== false;
   }
+  if (Array.isArray(s.models)) s.models = s.models.filter(isPlainObject); // a null or string entry would crash below
   if (!Array.isArray(s.models) || !s.models.length) s.models = deepClone(DEFAULT_MODELS);
   // Built-in models added in a newer model-list revision are offered once (models you deleted stay deleted),
   // and the old default last-resort fallback moves to GPT-5 mini.
@@ -473,7 +511,9 @@ export function sanitizeSettings(raw) {
 // ---------- typed accessors ----------
 
 export async function getSettings() { return sanitizeSettings(await load(K.settings, {})); }
-export async function saveSettings(s) { await save({ [K.settings]: s }); return sanitizeSettings(s); }
+// Stores the sanitized form, so what every context reads back is exactly what was checked (ids of models without
+// one are fixed once instead of being re-generated on every read).
+export async function saveSettings(s) { const clean = sanitizeSettings(s); await save({ [K.settings]: clean }); return clean; }
 
 // API keys live in the extension's own IndexedDB, NOT in chrome.storage: content scripts running on x.com
 // can read chrome.storage.local (and receive its change events), but cannot open the extension's IndexedDB.
@@ -488,18 +528,31 @@ async function migrateSecrets() {
   return merged;
 }
 const stripId = (o) => { const { id, ...rest } = o || {}; return rest; };
+// Key values this context has seen, so log() can blank them even where no pattern recognises them (provider keys
+// have no fixed prefix). Never persisted.
+const knownSecrets = new Set();
+function remember(secrets) {
+  for (const v of Object.values(secrets || {})) if (typeof v === "string" && v.length >= 6) knownSecrets.add(v);
+  return secrets;
+}
 export async function getSecrets() {
   const migrated = await migrateSecrets();
-  if (migrated) return migrated;
-  return { ...DEFAULT_SECRETS, ...stripId(await db().get(STORES.kv, SECRETS_ID)) };
+  if (migrated) return remember(migrated);
+  return remember({ ...DEFAULT_SECRETS, ...stripId(await db().get(STORES.kv, SECRETS_ID)) });
 }
+const SECRET_NAMES = new Set([...Object.keys(DEFAULT_SECRETS), ...Object.values(PROVIDER_DEFS).map((d) => d.keyName).filter(Boolean)]);
 export function setSecrets(patch) {
   return withLock("secrets", async () => {
-    const cur = await getSecrets();
-    const next = { ...DEFAULT_SECRETS, ...cur, ...patch };
-    await db().put(STORES.kv, { id: SECRETS_ID, ...next });
+    await migrateSecrets();
+    // Known key names only; pasted keys are trimmed (a trailing newline makes every request fail).
+    const clean = {};
+    for (const [k, v] of Object.entries(patch || {})) if (SECRET_NAMES.has(k)) clean[k] = String(v == null ? "" : v).trim();
+    // One IndexedDB transaction: a dashboard tab and the service worker (or two dashboard tabs) saving different
+    // keys at the same time cannot overwrite each other's key (withLock only covers this JS context).
+    const stored = await db().update(STORES.kv, SECRETS_ID, (cur) => ({ ...DEFAULT_SECRETS, ...stripId(cur), ...clean, id: SECRETS_ID }));
+    const next = remember(stripId(stored));
     // Which keys are set (names only, never key material), so open pages can show "key saved" states.
-    const has = Object.fromEntries(Object.entries(next).filter(([k]) => k !== "id").map(([k, v]) => [k, !!v]));
+    const has = Object.fromEntries(Object.entries(next).map(([k, v]) => [k, !!v]));
     await save({ [K.secretsRev]: { rev: now(), hasOpenai: !!next.openaiKey, hasSorsa: !!next.sorsaKey, has } });
     return next;
   });
@@ -521,13 +574,54 @@ export async function getBlacklist() { return load(K.blacklist, {}); }
 export function updateBlacklist(fn) { return update(K.blacklist, {}, fn); }
 
 export async function getCandidates() { return load(K.candidates, {}); }
-export function updateCandidates(fn) { return update(K.candidates, {}, fn); }
+// Every write keeps sx.candidates at the CANDIDATES_CAP newest / best entries (repeated sweeps and discovery runs
+// would otherwise grow it without bound inside chrome.storage's quota, which the engine's own state shares).
+export function updateCandidates(fn) {
+  return update(K.candidates, {}, async (all) => {
+    const out = await fn(all);
+    const val = out === undefined ? all : out;
+    if (isPlainObject(val)) capCandidates(val);
+    return val;
+  });
+}
+
+export const CANDIDATES_CAP = 2000;
+// Keeps the `cap` best candidates of a { handle: candidate } map in place; returns how many were dropped.
+// Order: candidates that passed the filters first, then the most recently found (seenAt from a repeat find, else
+// foundAt), then the best: listed by more of your big accounts (overlap), by more score providers, higher rank.
+export function capCandidates(all, cap = CANDIDATES_CAP) {
+  const keys = Object.keys(all || {});
+  if (keys.length <= cap) return 0;
+  const rank = (h) => {
+    const c = isPlainObject(all[h]) ? all[h] : {};
+    const sc = isPlainObject(c.score) ? num(c.score.combined != null ? c.score.combined : c.score.own, 0) : 0;
+    const best = num(c.overlap, 0) * 1e4 + (isPlainObject(c.providerScores) ? Object.keys(c.providerScores).length : 0) * 1e3 + sc;
+    return [c.pass === false ? 0 : 1, num(c.seenAt || c.foundAt, 0), best];
+  };
+  const r = new Map(keys.map((h) => [h, rank(h)]));
+  keys.sort((a, b) => { const x = r.get(a), y = r.get(b); return y[0] - x[0] || y[1] - x[1] || y[2] - x[2] || (a < b ? -1 : 1); });
+  for (const h of keys.slice(cap)) delete all[h];
+  return keys.length - cap;
+}
 
 // ---------- activity log (capped, redacted) ----------
 const LOG_CAP = 400;
+// util.redact() plus what it does not cover: provider key names, key-bearing query strings (TwitterScore's API takes
+// api_key=...), key headers, and the key values this context knows.
+export function redactSecrets(v) {
+  let s = redact(v)
+    .replace(/([?&](?:api[_-]?key|apikey|key|token|access_token)=)[^&#\s"']+/gi, "$1***")
+    .replace(/("?(?:twitterscoreKey|moniKey|sorsaKey|openaiKey|x-api-key|api-key|apikey|secret|token)"?\s*[:=]\s*"?)[^"\s,}&]+/gi, "$1***");
+  for (const k of knownSecrets) {
+    if (s.includes(k)) s = s.split(k).join("***");
+    const enc = encodeURIComponent(k);
+    if (enc !== k && s.includes(enc)) s = s.split(enc).join("***");
+  }
+  return s;
+}
 export function log(level, msg, data) {
-  const entry = { ts: now(), level, msg: redact(String(msg)).slice(0, 500) };
-  if (data !== undefined) entry.data = redact(data).slice(0, 800);
+  const entry = { ts: now(), level, msg: redactSecrets(String(msg)).slice(0, 500) };
+  if (data !== undefined) entry.data = redactSecrets(data).slice(0, 800);
   if (level === "error" || level === "warn") { try { console[level]("[ScoreX]", entry.msg, entry.data || ""); } catch (_) {} }
   return update(K.logs, [], (arr) => {
     arr.push(entry);

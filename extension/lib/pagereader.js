@@ -13,9 +13,10 @@
 //                           | { selector: "a.row", fields: { handle: { attr: "href", regex: "..." }, score: { selector: ".s" } }, limit } (tab only)
 // A spec can also say where JSON lives in a page: { json: "nextData" | "ldjson" | "<css selector of a script tag>" }.
 
-import { now, sleep, redact } from "./util.js";
+import { now, sleep, redact, normalizeHandle } from "./util.js";
 
 const HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
+const TIMED_OUT = Symbol("timed out");
 
 // ---------- pure helpers (shared by the service worker side; the in-page copy is inside pageExtract) ----------
 
@@ -48,9 +49,11 @@ export function toNumber(v) {
   return Math.round(n * mult * 100) / 100;
 }
 
+// Lists come from third-party pages (untrusted): X's reserved paths ("home", "search", ...) and object-prototype
+// names ("__proto__", "constructor") are never handles - they would become candidates or re-parent handle maps.
 export function cleanHandle(v) {
   const s = String(v == null ? "" : v).trim().replace(/^@+/, "").replace(/^https?:\/\/(www\.)?(x|twitter)\.com\//i, "").split(/[/?#]/)[0];
-  return HANDLE_RE.test(s) ? s.toLowerCase() : "";
+  return HANDLE_RE.test(s) ? normalizeHandle(s) : "";
 }
 
 // Apply a value spec to JSON and/or text. Returns the raw value (string/number) or undefined.
@@ -113,26 +116,41 @@ export function textFromHtml(html) {
 
 // ---------- fetch (json / html) ----------
 
-// Classified fetch with a timeout. Never throws. Returns { ok, status, json?, text?, error?, message? }.
+// Classified fetch with a timeout that covers the whole answer (headers AND body: a stalled body would otherwise
+// hang the score job forever while keepAlive keeps the worker up). Never throws.
+// Returns { ok, status, json?, text?, error?, message? }.
 export async function fetchData(url, { headers = {}, as = "json", timeoutMs = 20000, fetchImpl } = {}) {
   const f = fetchImpl || globalThis.fetch;
   const ctl = typeof AbortController === "function" ? new AbortController() : null;
-  const timer = ctl ? setTimeout(() => ctl.abort(), timeoutMs) : null;
+  let timer = null;
+  const expired = new Promise((resolve) => { timer = setTimeout(() => { if (ctl) ctl.abort(); resolve(TIMED_OUT); }, timeoutMs); });
+  const timedOut = { ok: false, status: 0, error: "timeout", message: "The site did not answer in time" };
   let res;
-  try {
-    res = await f(url, { headers: { Accept: as === "json" ? "application/json" : "text/html,application/xhtml+xml", ...headers }, credentials: "include", signal: ctl ? ctl.signal : undefined });
-  } catch (e) {
-    return { ok: false, status: 0, error: e && e.name === "AbortError" ? "timeout" : "network", message: redact(String((e && e.message) || e)) };
-  } finally { if (timer) clearTimeout(timer); }
   let text = "";
-  try { text = await res.text(); } catch (_) {}
+  try {
+    try {
+      res = await Promise.race([f(url, { headers: { Accept: as === "json" ? "application/json" : "text/html,application/xhtml+xml", ...headers }, credentials: "include", signal: ctl ? ctl.signal : undefined }), expired]);
+    } catch (e) {
+      return { ok: false, status: 0, error: e && e.name === "AbortError" ? "timeout" : "network", message: redact(String((e && e.message) || e)) };
+    }
+    if (res === TIMED_OUT) return timedOut;
+    try {
+      const body = await Promise.race([Promise.resolve(res.text()), expired]);
+      if (body === TIMED_OUT) return timedOut;
+      text = String(body == null ? "" : body);
+    } catch (e) {
+      if (e && e.name === "AbortError") return timedOut;
+      return { ok: false, status: res.status, error: "network", message: "The connection broke while reading the answer" };
+    }
+  } finally { clearTimeout(timer); }
   const challenge = /cf-chl|challenge-platform|Just a moment\.\.\.|Attention Required! \| Cloudflare/i.test(text.slice(0, 5000));
   if (res.status === 401) return { ok: false, status: 401, error: "auth", message: "The site rejected the API key (401)" };
-  if (res.status === 403) return { ok: false, status: 403, error: challenge ? "blocked" : "auth", message: challenge ? "Blocked by the site's bot check - try the browser-tab mode" : "Access denied (403) - check the key or plan" };
+  // A bot-check page can come with 403, 503 or even 200: it is "blocked" (stop and try the tab mode), not an outage.
+  if (challenge) return { ok: false, status: res.status, error: "blocked", message: "Blocked by the site's bot check - try the browser-tab mode" };
+  if (res.status === 403) return { ok: false, status: 403, error: "auth", message: "Access denied (403) - check the key or plan" };
   if (res.status === 429) return { ok: false, status: 429, error: "rate", message: "Rate limit or quota reached (429)" };
   if (res.status === 404) return { ok: false, status: 404, error: "not_found", message: "Not found (404)" };
   if (!res.ok) return { ok: false, status: res.status, error: "http", message: `HTTP ${res.status}` };
-  if (challenge) return { ok: false, status: res.status, error: "blocked", message: "Blocked by the site's bot check - try the browser-tab mode" };
   if (as === "json") {
     try { return { ok: true, status: res.status, json: JSON.parse(text) }; } catch (_) { return { ok: false, status: res.status, error: "parse", message: "The answer was not JSON (site changed?)" }; }
   }
@@ -237,7 +255,8 @@ export function pageExtract(spec) {
 export function normalizeExtract(raw, spec = {}) {
   if (!raw || typeof raw !== "object") return { ok: false, error: "parse", message: "Nothing could be read from the page" };
   if (raw.notFound) return { ok: false, error: "not_found", message: "The site has no data for this account" };
-  const out = { ok: true, url: typeof raw.url === "string" ? raw.url.slice(0, 300) : "" };
+  // The page's own address becomes a link in the dashboard: https only.
+  const out = { ok: true, url: typeof raw.url === "string" && /^https:\/\//i.test(raw.url) ? raw.url.slice(0, 300) : "" };
   if (spec.score) {
     out.score = toNumber(raw.score);
     if (out.score == null) return { ok: false, error: raw.loginWall ? "login" : "parse", message: raw.loginWall ? "The site wants you to log in - open it once in Chrome and log in" : "Score not found on the page (site changed? update the provider in Settings > Scores)" };
@@ -259,36 +278,69 @@ export function normalizeExtract(raw, spec = {}) {
   return out;
 }
 
+function withTimeout(p, ms) {
+  let t = null;
+  return Promise.race([p, new Promise((resolve) => { t = setTimeout(() => resolve(TIMED_OUT), Math.max(0, ms)); })]).finally(() => clearTimeout(t));
+}
+
+// A reader tab left open by a worker that was killed mid-read is closed by the next read (and by
+// closeStaleReaderTab() at worker start). Its id lives in chrome.storage.session, which the browser clears when it
+// closes: tab ids restart then, so an id from an earlier session can never close one of your own tabs.
+const READER_KEY = "sx.readerTab";
+const sessionArea = () => (globalThis.chrome && chrome.storage && chrome.storage.session) || null;
+async function noteReaderTab(id) {
+  const s = sessionArea();
+  if (!s) return;
+  try { if (id == null) await s.remove(READER_KEY); else await s.set({ [READER_KEY]: { id, at: now() } }); } catch (_) {}
+}
+export async function closeStaleReaderTab() {
+  const s = sessionArea();
+  if (!s) return false;
+  try {
+    const rec = (await s.get(READER_KEY))[READER_KEY];
+    if (!rec || rec.id == null) return false;
+    await s.remove(READER_KEY);
+    const tab = await chrome.tabs.get(rec.id).catch(() => null);
+    if (!tab || tab.active) return false; // gone, or you are looking at it: leave it to you
+    await chrome.tabs.remove(rec.id);
+    return true;
+  } catch (_) { return false; }
+}
+
 let readerLock = Promise.resolve();
 // Open `url` in a background tab, poll pageExtract(spec) until it finds data (pages that render with
-// JavaScript need a moment), close the tab. One page at a time. Never throws.
+// JavaScript need a moment), close the tab. One page at a time. Never throws, never outlives timeoutMs by much:
+// every Chrome call that waits on the page is bounded (a busy page can leave executeScript pending forever).
 export function readPageInTab(url, spec, { timeoutMs = 30000, settleMs = 1500, windowId } = {}) {
   const run = async () => {
     let tab = null;
     const until = now() + timeoutMs;
     try {
+      await closeStaleReaderTab();
       tab = await chrome.tabs.create({ url, active: false, ...(windowId != null ? { windowId } : {}) });
+      await noteReaderTab(tab.id);
       try { await chrome.tabs.update(tab.id, { autoDiscardable: false }); } catch (_) {}
       await waitComplete(tab.id, Math.min(timeoutMs, 25000));
-      await sleep(settleMs);
+      await sleep(Math.min(settleMs, Math.max(0, until - now())));
       let last = null;
       while (now() < until) {
         let res = null;
         try {
-          const r = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageExtract, args: [spec] });
+          const r = await withTimeout(chrome.scripting.executeScript({ target: { tabId: tab.id }, func: pageExtract, args: [spec] }), Math.max(1000, until - now()));
+          if (r === TIMED_OUT) return { ok: false, error: "timeout", message: "The page did not answer in time" };
           res = r && r[0] ? r[0].result : null;
         } catch (e) {
           return { ok: false, error: "permission", message: "Chrome did not allow reading this site - enable the provider again to grant access" };
         }
         last = normalizeExtract(res, spec);
         if (last.ok || last.error === "not_found") return last;
-        await sleep(1500);
+        await sleep(Math.min(1500, Math.max(0, until - now())));
       }
       return last || { ok: false, error: "timeout", message: "The page did not finish loading" };
     } catch (e) {
       return { ok: false, error: "tab", message: redact(String((e && e.message) || e)) };
     } finally {
-      if (tab) { try { await chrome.tabs.remove(tab.id); } catch (_) {} }
+      if (tab) { try { await chrome.tabs.remove(tab.id); } catch (_) {} await noteReaderTab(null); }
     }
   };
   const p = readerLock.then(run, run);

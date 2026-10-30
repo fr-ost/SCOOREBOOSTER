@@ -34,7 +34,8 @@ export async function fetchScore(handle, key) {
   const r = await get("/score?username=" + encodeURIComponent(handle), key);
   if (!r.ok) return r;
   const v = r.body && r.body.score;
-  return { ok: true, score: typeof v === "number" ? v : v == null ? null : Number(v) };
+  const n = v == null || v === "" ? NaN : Number(v);
+  return { ok: true, score: Number.isFinite(n) ? n : null }; // a non-numeric score is "no score", never NaN
 }
 
 export async function keyUsage(key) {
@@ -60,21 +61,34 @@ export async function testSorsa() {
   return { ok: true, score: s.score, remaining: u.ok ? u.remaining : null };
 }
 
+const MAX_FAILURES_IN_A_ROW = 3; // an outage (5xx, network) ends the refresh instead of hitting Sorsa for every target
+const FAIL_BACKOFF_MS = 1500; // first pause after a failed request, doubled for each further failure in a row
+
 // Refresh Sorsa scores for handles (all targets when empty). Skips scores fetched in the last 24h.
+// Returns { ok, updated, failed } or { ok: false, error, updated, failed } (also when every request failed).
 export async function refreshScores(handles) {
   const r = await ready();
   if (!r.ok) return r;
   const targets = await getTargets();
   const list = (handles && handles.length ? handles : Object.keys(targets)).filter((h) => targets[h]);
-  let updated = 0;
+  let updated = 0, failed = 0, inARow = 0, lastError = "";
   for (const h of list) {
     const t = targets[h];
     if (t.score && t.score.sorsaUpdatedAt && now() - t.score.sorsaUpdatedAt < DAY) continue;
     const s = await fetchScore(h, r.key);
     if (!s.ok) {
-      if (s.error === "auth" || s.error === "rate") return { ok: false, error: s.message, updated };
+      if (s.error === "auth" || s.error === "rate") return { ok: false, error: s.message, updated, failed: failed + 1 };
+      failed++;
+      inARow++;
+      lastError = s.message || s.error || "Sorsa error";
+      if (inARow >= MAX_FAILURES_IN_A_ROW) {
+        log("warn", `Sorsa: stopped after ${inARow} failed requests in a row (${lastError})`);
+        return { ok: false, error: `Sorsa is not answering properly (${lastError}) - try again later`, updated, failed };
+      }
+      await sleep(FAIL_BACKOFF_MS * Math.pow(2, inARow - 1));
       continue;
     }
+    inARow = 0;
     await updateTargets((all) => {
       if (all[h]) {
         all[h].score = { ...(all[h].score || {}), sorsa: s.score, sorsaUpdatedAt: now() };
@@ -85,6 +99,7 @@ export async function refreshScores(handles) {
     updated++;
     await sleep(250);
   }
-  log("info", `Sorsa: updated ${updated} score(s)`);
-  return { ok: true, updated };
+  log("info", `Sorsa: updated ${updated} score(s)${failed ? `, ${failed} failed` : ""}`);
+  if (failed && !updated) return { ok: false, error: `Sorsa: no score could be updated (${lastError})`, updated, failed };
+  return { ok: true, updated, failed };
 }

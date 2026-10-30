@@ -10,7 +10,7 @@
 // Capabilities: score (an account's score) and smartFollowers (an account's top / smart followers).
 
 import { fetchData, pickValue, pickList, jsonFromHtml, textFromHtml, readPageInTab, toNumber } from "./pagereader.js";
-import { deepMerge, deepClone } from "./util.js";
+import { deepMerge, deepClone, clamp, num } from "./util.js";
 import { PROVIDER_DEFS } from "./providerdefs.js";
 
 export const CAPS = ["score", "smartFollowers"];
@@ -26,7 +26,11 @@ export function providerDefs(overrides) {
   return base;
 }
 
-// Overrides may only change URLs on the provider's own hosts (https), headers, paths, selectors and regexes.
+// Overrides may only change URLs on the provider's own hosts (https), headers, paths, selectors and regexes of the
+// modes the provider already has. Identity fields (id, keyName, hosts, profileUrl, site, caps...) are never taken:
+// e.g. a keyName override would send another secret (your OpenAI key) to this provider's site.
+const TOP_KEYS = new Set(["notFound", "loginWall", "max", "listLimit", "minIntervalMs", "modes"]);
+const SPEC_KINDS = ["json", "html", "tab"];
 function sanitizeOverride(o, def) {
   const hostsOk = (url) => {
     try {
@@ -42,18 +46,54 @@ function sanitizeOverride(o, def) {
       const out = {};
       for (const [k, x] of Object.entries(v)) {
         if (k === "__proto__" || k === "constructor" || k === "prototype" || k === "hosts") continue;
-        if (k === "url" && !hostsOk(x)) continue;
+        if ((k === "url" || k === "pageUrl") && !hostsOk(x)) continue;
+        if (k === "headers") { const h = cleanHeaders(x); if (h) out[k] = h; continue; }
+        if (k === "kind" && !SPEC_KINDS.includes(x)) continue;
         const c = clean(x, depth + 1);
         if (c !== undefined) out[k] = c;
       }
       return out;
     }
     if (typeof v === "string") return v.slice(0, 500);
-    if (typeof v === "number" || typeof v === "boolean") return v;
+    if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
+    if (typeof v === "boolean") return v;
     return undefined;
   };
-  return clean(o) || {};
+  const out = {};
+  if (!o || typeof o !== "object" || Array.isArray(o)) return out;
+  for (const k of Object.keys(o)) {
+    if (!TOP_KEYS.has(k)) continue;
+    if (k === "modes") {
+      if (!o.modes || typeof o.modes !== "object") continue;
+      const modes = {};
+      for (const [mode, m] of Object.entries(o.modes)) {
+        if (!Object.hasOwn(def.modes || {}, mode) || !m || typeof m !== "object") continue; // no new modes
+        const mm = {};
+        for (const cap of CAPS) if (m[cap] && typeof m[cap] === "object" && !Array.isArray(m[cap])) mm[cap] = clean(m[cap]);
+        modes[mode] = mm;
+      }
+      out.modes = modes;
+    } else if (k === "notFound" || k === "loginWall") {
+      if (typeof o[k] === "string") out[k] = o[k].slice(0, 500);
+    } else if (typeof o[k] === "number" && Number.isFinite(o[k])) out[k] = o[k];
+  }
+  return out;
 }
+
+// Header names are HTTP tokens; values never carry line breaks or control characters (no header injection).
+const HEADER_NAME = /^[A-Za-z0-9!#$%&'*+.^_`|~-]{1,64}$/;
+const FORBIDDEN_HEADERS = new Set(["cookie", "cookie2", "host", "origin", "referer", "connection", "content-length", "proxy-authorization"]);
+function cleanHeaders(h) {
+  if (!h || typeof h !== "object" || Array.isArray(h)) return null;
+  const out = {};
+  for (const [k, v] of Object.entries(h).slice(0, 10)) {
+    if (!HEADER_NAME.test(k) || FORBIDDEN_HEADERS.has(k.toLowerCase()) || k.toLowerCase().startsWith("sec-") || k.toLowerCase().startsWith("proxy-")) continue;
+    if (typeof v !== "string" && typeof v !== "number") continue;
+    out[k] = headerValue(String(v)).slice(0, 500);
+  }
+  return out;
+}
+const headerValue = (v) => String(v).replace(/[\u0000-\u001f\u007f]/g, "").trim();
 
 export function allHosts(def) {
   return [...new Set(Object.values(def.modes || {}).flatMap((m) => m.hosts || []))];
@@ -88,17 +128,23 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
   const m = def && def.modes && def.modes[mode];
   const spec = m && m[cap];
   if (!spec) return { ok: false, error: "unsupported", message: `${def ? def.name : "Provider"} cannot do that in this mode` };
-  const vars = { handle: String(handle || "").replace(/^@/, "").toLowerCase(), key };
-  const url = fill(spec.url, vars);
-  const pageUrl = spec.pageUrl ? fill(spec.pageUrl, vars) : (def.profileUrl ? fill(def.profileUrl, vars) : url);
-  if (spec.kind === "tab") {
-    const r = await readPage(url, { json: spec.json, score: cap === "score" ? spec.value : undefined, max: spec.max, list: cap === "smartFollowers" ? spec.list : undefined, notFound: spec.notFound || def.notFound, loginWall: spec.loginWall || def.loginWall }, { timeoutMs: spec.timeoutMs || 30000 });
+  const k = headerValue(key || "");
+  const plain = { handle: String(handle || "").replace(/^@/, "").toLowerCase() };
+  const vars = { ...plain, key: k };
+  // The key only ever goes into a request to the provider's own API host. A browser tab URL (it lands in your
+  // history) and the page link (stored in chrome.storage and shown as a link) never carry it.
+  const tab = spec.kind === "tab";
+  const url = fill(spec.url, tab ? plain : vars);
+  const pageUrl = spec.pageUrl ? fill(spec.pageUrl, plain) : (def.profileUrl ? fill(def.profileUrl, plain) : (tab || !/\{key\}/.test(String(spec.url)) ? url : ""));
+  const timeoutMs = clamp(num(spec.timeoutMs, tab ? 30000 : 20000), 2000, 60000);
+  if (tab) {
+    const r = await readPage(url, { json: spec.json, score: cap === "score" ? spec.value : undefined, max: spec.max, list: cap === "smartFollowers" ? spec.list : undefined, notFound: spec.notFound || def.notFound, loginWall: spec.loginWall || def.loginWall }, { timeoutMs });
     return finish(def, cap, r, pageUrl, vars.handle);
   }
   const headers = {};
-  for (const [k, v] of Object.entries(spec.headers || {})) headers[k] = String(v).replace(/\{key\}/g, key);
+  for (const [hk, v] of Object.entries(cleanHeaders(spec.headers) || {})) headers[hk] = headerValue(String(v).replace(/\{key\}/g, k));
   const as = spec.kind === "html" ? "text" : "json";
-  const r = await fetchData(url, { headers, as, fetchImpl, timeoutMs: spec.timeoutMs || 20000 });
+  const r = await fetchData(url, { headers, as, fetchImpl, timeoutMs });
   if (!r.ok && r.error === "not_found") return { ...r, message: `${def.name} has no data for @${vars.handle}`, url: pageUrl };
   if (!r.ok) return { ...r, url: pageUrl };
   const json = as === "json" ? r.json : (spec.json ? jsonFromHtml(r.text, spec.json) : undefined);
@@ -122,6 +168,6 @@ function finish(def, cap, r, pageUrl, self = "") {
   if (!r || !r.ok) return { ...(r || { ok: false, error: "unknown" }), url: (r && r.url) || pageUrl };
   const out = { ...r, url: r.url || pageUrl };
   if (cap === "score" && out.max == null && def.max) out.max = def.max;
-  if (cap === "smartFollowers" && Array.isArray(out.list)) out.list = out.list.filter((x) => x.handle !== self).slice(0, def.listLimit || 50);
+  if (cap === "smartFollowers" && Array.isArray(out.list)) out.list = out.list.filter((x) => x.handle !== self).slice(0, clamp(Math.round(num(def.listLimit, 50)), 1, 200));
   return out;
 }

@@ -10,13 +10,18 @@
 // }
 
 import { K } from "./constants.js";
-import { load, update, getSettings, getSecrets, getTargets, updateTargets, updateCandidates, getBlacklist, log } from "./store.js";
+import { load, update, withLock, getSettings, getSecrets, getTargets, updateTargets, updateCandidates, getBlacklist, log } from "./store.js";
 import { providerDefs, pickMode, modeNeeds, runCapability, CAPS } from "./providers.js";
-import { now, DAY, HOUR, sleep, dayKey, normalizeHandle } from "./util.js";
+import { combinedScore } from "./scores.js";
+import { now, DAY, HOUR, sleep, dayKey, normalizeHandle, clamp, num } from "./util.js";
 
 const CAP_CHECKS = 150;
 const CAP_SMART = 150;
 const HISTORY_POINTS = 400;
+export const TARGET_SCORE_MAX_AGE = 7 * DAY; // provider scores of targets are re-asked at most once a week
+const FAIL_STREAK = 3; // a target-score run stops after this many failures in a row (outage, changed site)
+// Errors that every following request would hit too: the run stops at the first one.
+const FATAL = ["auth", "rate", "cap", "disabled", "permission", "no_mode", "blocked", "unsupported", "unknown", "login"];
 const lastCall = new Map(); // providerId -> ts (pacing inside one worker instance)
 
 export async function getBoard() { return load(K.scoreboard, {}); }
@@ -67,27 +72,33 @@ async function ready(id, cap, { settings, secrets, defs }) {
   return { ok: true, def, mode, key, cap: cfg.dailyCap || 100 };
 }
 
-// One provider call with pacing and the daily request cap.
+// One provider call with pacing and the daily request cap. Calls to one provider run one at a time (a background
+// job and a one-off check from the popup no longer fire together), and the request is reserved against today's cap
+// inside the scoreboard lock, so two calls at once can never both pass a cap that only one of them fits under.
 async function call(id, cap, handle, ctx) {
   const r = await ready(id, cap, ctx);
   if (!r.ok) return r;
-  const today = dayKey(now(), ctx.settings.timezone);
-  const board = await getBoard();
-  const u = (board.usage || {})[id];
-  if (u && u.d === today && u.n >= r.cap) return { ok: false, error: "cap", message: `${r.def.name}: daily request cap reached (${r.cap})` };
-  const spec = r.def.modes[r.mode][cap];
-  const gap = r.def.minIntervalMs || (spec.kind === "tab" ? 4000 : 1200);
-  const wait = (lastCall.get(id) || 0) + gap - now();
-  if (wait > 0) await sleep(wait);
-  lastCall.set(id, now());
-  await updateBoard((b) => {
-    b.usage = b.usage || {};
-    const cur = b.usage[id];
-    b.usage[id] = cur && cur.d === today ? { d: today, n: cur.n + 1 } : { d: today, n: 1 };
-    return b;
+  return withLock("sx.provider." + id, async () => {
+    const today = dayKey(now(), ctx.settings.timezone);
+    let allowed = false;
+    await updateBoard((b) => {
+      b.usage = b.usage || {};
+      const cur = b.usage[id];
+      const n = cur && cur.d === today ? num(cur.n, 0) : 0;
+      if (n >= r.cap) return b;
+      allowed = true;
+      b.usage[id] = { d: today, n: n + 1 };
+      return b;
+    });
+    if (!allowed) return { ok: false, error: "cap", message: `${r.def.name}: daily request cap reached (${r.cap})` };
+    const spec = r.def.modes[r.mode][cap];
+    const gap = ctx.gapMs != null ? ctx.gapMs : clamp(num(r.def.minIntervalMs, spec.kind === "tab" ? 4000 : 1200), 250, 60000);
+    const wait = (lastCall.get(id) || 0) + gap - now();
+    if (wait > 0) await sleep(wait);
+    lastCall.set(id, now());
+    const res = await runCapability(r.def, r.mode, cap, handle, { key: r.key, fetchImpl: ctx.fetchImpl, readPage: ctx.readPage });
+    return { ...res, provider: id, mode: r.mode };
   });
-  const res = await runCapability(r.def, r.mode, cap, handle, { key: r.key, fetchImpl: ctx.fetchImpl, readPage: ctx.readPage });
-  return { ...res, provider: id, mode: r.mode };
 }
 
 async function context(extra = {}) {
@@ -108,7 +119,7 @@ export async function refreshOwn({ force = false, only = null, ...extra } = {}) 
   for (const def of enabledWith(ctx, "score")) {
     if (only && !only.includes(def.id)) continue;
     const cur = (board.own || {})[def.id];
-    if (!force && cur && cur.at && now() - cur.at < 20 * HOUR) { results[def.id] = { ok: true, cached: true, score: cur.score }; continue; }
+    if (!force && cur && cur.at && now() - cur.at < 20 * HOUR) { results[def.id] = { ok: true, cached: true, score: cur.score, max: cur.max != null ? cur.max : null, url: cur.url || "" }; continue; }
     const r = await call(def.id, "score", me, ctx);
     results[def.id] = r;
     const d = dayKey(now(), ctx.settings.timezone);
@@ -169,7 +180,9 @@ export async function smartFollowersOf(handle, { providers = null, maxAgeMs = 3 
   }
   await updateBoard((b) => {
     b.smart = b.smart || {};
-    b.smart[h] = { at: now(), results };
+    // Results of providers not asked this time (a `providers` filter) stay in the cache.
+    const kept = b.smart[h] && b.smart[h].results && typeof b.smart[h].results === "object" ? b.smart[h].results : {};
+    b.smart[h] = { at: now(), results: { ...kept, ...results } };
     capMap(b.smart, CAP_SMART);
     return b;
   });
@@ -220,9 +233,14 @@ export async function sweepSmartFollowers(handles, extra = {}) {
     }
   }
   const ts = now();
+  // The search can take minutes: accounts added as targets or blacklisted meanwhile are left out too.
+  const [targetsNow, blackNow] = await Promise.all([getTargets(), getBlacklist()]);
+  // sx.candidates stays at the newest / best CANDIDATES_CAP entries (updateCandidates, lib/store.js); seenAt marks a
+  // repeat find as recent.
   await updateCandidates((all) => {
     for (const c of found.values()) {
-      const prev = all[c.handle] || {};
+      if (Object.hasOwn(targetsNow, c.handle) || Object.hasOwn(blackNow, c.handle)) continue;
+      const prev = Object.hasOwn(all, c.handle) && all[c.handle] && typeof all[c.handle] === "object" ? all[c.handle] : {};
       all[c.handle] = {
         ...prev,
         handle: c.handle,
@@ -232,6 +250,7 @@ export async function sweepSmartFollowers(handles, extra = {}) {
         overlap: Math.max(prev.overlap || 0, c.overlap),
         providerScores: { ...(prev.providerScores || {}), ...c.scores },
         foundAt: prev.foundAt || ts,
+        seenAt: ts,
         suggestedTier: prev.suggestedTier || (c.followers != null && c.followers >= 50000 ? 1 : 2),
         smart: true,
         pass: prev.pass != null ? prev.pass : null,
@@ -241,39 +260,54 @@ export async function sweepSmartFollowers(handles, extra = {}) {
     return all;
   });
   log("info", `Smart followers: ${found.size} candidates from ${list.length} account${list.length === 1 ? "" : "s"}`);
+  // Nothing found and every request failed: an error, not "done".
+  if (!found.size && errors.length) return { ok: false, error: errors[0] + (errors.length > 1 ? ` (and ${errors.length - 1} more)` : ""), found: 0, errors };
   return { ok: true, found: found.size, errors };
 }
 
-// Provider scores of targets (stored in target.score.providers[id]); Sorsa also keeps target.score.sorsa.
-export async function refreshTargetScores(handles, providerId, { maxAgeMs = DAY, ...extra } = {}) {
+// Provider scores of targets (stored in target.score.providers[id] = { score, max, at }); Sorsa also keeps
+// target.score.sorsa, and target.score.combined is recomputed (lib/scores.js combinedScore). Scores are cached for
+// TARGET_SCORE_MAX_AGE; an account the provider has no data for is remembered as { score: null } for as long, so it
+// is not asked again every run. The run stops at an error every request would hit (key, cap, bot check...) and after
+// FAIL_STREAK failures in a row; it reports ok:false when nothing could be updated.
+export async function refreshTargetScores(handles, providerId, { maxAgeMs = TARGET_SCORE_MAX_AGE, ...extra } = {}) {
   const ctx = await context(extra);
   const def = ctx.defs[providerId];
   if (!def) return { ok: false, error: "Unknown provider" };
+  const blend = ctx.settings.scores.blendSorsa;
   const targets = await getTargets();
-  const list = (handles && handles.length ? handles.map(normalizeHandle) : Object.keys(targets)).filter((h) => h && targets[h]);
-  let updated = 0, done = 0;
+  const list = (handles && handles.length ? handles.map(normalizeHandle) : Object.keys(targets)).filter((h) => h && Object.hasOwn(targets, h) && targets[h]);
+  let updated = 0, done = 0, failed = 0, streak = 0, lastError = "";
   for (const h of list) {
     if (extra.shouldStop && (await extra.shouldStop())) break;
     if (extra.onProgress) await extra.onProgress({ done: done++, total: list.length, current: h, updated });
     const prev = targets[h].score && targets[h].score.providers && targets[h].score.providers[providerId];
     if (prev && prev.at && now() - prev.at < maxAgeMs) continue;
     const r = await call(providerId, "score", h, ctx);
-    if (!r.ok) {
-      if (["auth", "rate", "cap", "disabled", "permission", "no_mode", "blocked"].includes(r.error)) return { ok: false, error: r.message || r.error, updated };
+    const missing = !r.ok && r.error === "not_found";
+    if (!r.ok && !missing) {
+      failed++; streak++; lastError = r.message || r.error || "error";
+      if (FATAL.includes(r.error)) return { ok: false, error: lastError, updated, failed };
+      if (streak >= FAIL_STREAK) return { ok: false, error: `${def.name}: ${streak} failures in a row, stopped (${lastError})`, updated, failed };
       continue;
     }
+    streak = 0;
     await updateTargets((all) => {
       const t = Object.hasOwn(all, h) ? all[h] : null;
       if (!t) return all;
-      t.score = t.score || {};
-      t.score.providers = { ...(t.score.providers || {}), [providerId]: { score: r.score, max: r.max != null ? r.max : null, at: now() } };
-      if (providerId === "sorsa") { t.score.sorsa = r.score; t.score.sorsaUpdatedAt = now(); }
+      t.score = t.score && typeof t.score === "object" ? t.score : {};
+      const before = t.score.providers && t.score.providers[providerId];
+      if (missing && before && before.score != null) return all; // keep a score it had before
+      t.score.providers = { ...(t.score.providers || {}), [providerId]: missing ? { score: null, max: null, at: now() } : { score: r.score, max: r.max != null ? r.max : null, at: now() } };
+      if (!missing && providerId === "sorsa") { t.score.sorsa = r.score; t.score.sorsaUpdatedAt = now(); }
+      t.score.combined = combinedScore(t.score.own, t.score.sorsa, blend);
       return all;
     });
-    updated++;
+    if (!missing) updated++;
   }
   if (updated) log("info", `${def.name}: updated ${updated} target score${updated === 1 ? "" : "s"}`);
-  return { ok: true, updated };
+  if (!updated && failed) return { ok: false, error: `${def.name}: no target score could be updated (${lastError})`, updated, failed };
+  return { ok: true, updated, failed };
 }
 
 function capMap(map, cap) {

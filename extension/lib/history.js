@@ -79,11 +79,31 @@ export const all = () => db().all(S);
 export const count = () => db().count(S);
 export const clearAll = () => db().clear(S);
 
-// Retention (settings.history): compacts old skipped/failed records and deletes very old unposted ones; posted
-// records are kept. sw.js runs it at most about once a day. Returns { compacted, deleted }.
-// eslint-disable-next-line no-unused-vars
+// Retention (settings.history): skipped / failed records older than compactAfterDays are shortened to COMPACT_FIELDS
+// (dedupe by post id and the History list keep working; post text, comment, model calls and cost go), and the ones
+// older than keepUnpostedDays are deleted. Posted records are never touched (their results stay), nor are open queue
+// items or "probably posted" records (maybePosted: they may be live replies on X). sw.js runs it about once a day.
+// One pass over the createdAt index inside one transaction, one record in memory at a time. Returns { compacted, deleted }.
+export const COMPACT_FIELDS = Object.freeze(["id", "createdAt", "status", "reason", "target", "postId", "postUrl", "tier", "mode"]);
+const COMPACT_SET = new Set(COMPACT_FIELDS);
+export function compactRecord(r) {
+  const out = {};
+  for (const k of COMPACT_FIELDS) if (r[k] !== undefined) out[k] = r[k];
+  return out;
+}
 export async function maintain(settings, ts = now()) {
-  return { compacted: 0, deleted: 0 };
+  const h = (settings && settings.history) || {};
+  // Settings are sanitized already; the floors here only guard callers that pass something else.
+  const compactDays = Math.max(7, num(h.compactAfterDays, 30));
+  const keepDays = Math.max(14, compactDays, num(h.keepUnpostedDays, 90));
+  const deleteBefore = ts - keepDays * DAY;
+  const r = await db().rewrite(S, "createdAt", ts - compactDays * DAY, (rec) => {
+    if ((rec.status !== HS.SKIPPED && rec.status !== HS.FAILED) || rec.maybePosted) return null;
+    if (rec.createdAt < deleteBefore) return "delete";
+    if (Object.keys(rec).every((k) => COMPACT_SET.has(k))) return null; // compacted on an earlier run
+    return compactRecord(rec);
+  });
+  return { compacted: r.updated, deleted: r.deleted };
 }
 
 // Last n posted comments (newest first), for style/similarity.

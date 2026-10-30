@@ -34,11 +34,23 @@ const p = (req) => new Promise((res, rej) => { req.onsuccess = () => res(req.res
 
 function idbAdapter() {
   let dbp = null;
-  const db = () => (dbp ||= openIdb().catch((e) => { dbp = null; throw e; }));
+  // A connection Chrome closed (site data cleared, storage error) or that a newer version needs closed is dropped, so
+  // the next call reconnects instead of failing until the worker restarts.
+  const db = () => (dbp ||= openIdb().then((d) => {
+    d.onversionchange = () => { try { d.close(); } catch (_) {} dbp = null; };
+    d.onclose = () => { dbp = null; };
+    return d;
+  }).catch((e) => { dbp = null; throw e; }));
   async function tx(store, mode, fn) {
-    const d = await db();
+    let d = await db();
+    let t;
+    try { t = d.transaction(store, mode); } catch (e) {
+      if (!e || e.name !== "InvalidStateError") throw e;
+      dbp = null; // closed under us: reconnect once
+      d = await db();
+      t = d.transaction(store, mode);
+    }
     return new Promise((resolve, reject) => {
-      const t = d.transaction(store, mode);
       const s = t.objectStore(store);
       let out;
       Promise.resolve(fn(s)).then((v) => { out = v; }, reject);
@@ -94,8 +106,30 @@ function idbAdapter() {
       };
       req.onerror = () => reject(req.error);
     })),
+    // Walk the records whose index value is < hi (oldest first) inside ONE readwrite transaction, one record in
+    // memory at a time. fn(record) -> "delete" | a replacement record (same id) | anything else = keep as is.
+    // fn must be synchronous (awaiting other work would end the transaction). Returns { scanned, updated, deleted }.
+    rewrite: (store, index, hi, fn) => tx(store, "readwrite", (s) => new Promise((resolve, reject) => {
+      const out = { scanned: 0, updated: 0, deleted: 0 };
+      const req = s.index(index).openCursor(IDBKeyRange.upperBound(hi, true));
+      req.onsuccess = () => {
+        const c = req.result;
+        if (!c) return resolve(out);
+        out.scanned++;
+        let r;
+        try { r = fn(c.value); } catch (e) { try { s.transaction.abort(); } catch (_) {} reject(e); return; }
+        if (r === "delete") { c.delete(); out.deleted++; } else if (r && typeof r === "object") { c.update(r); out.updated++; }
+        c.continue();
+      };
+      req.onerror = () => reject(req.error);
+    })),
   };
 }
+
+// IndexedDB only indexes records whose key-path value is a valid key (number, string, Date, array); records with
+// null / undefined / boolean there are invisible to index queries. The memory adapter mirrors that so unit tests see
+// what the real database does.
+const validKey = (v) => (typeof v === "number" && !Number.isNaN(v)) || typeof v === "string" || v instanceof Date || Array.isArray(v);
 
 export function memoryAdapter() {
   const stores = new Map();
@@ -119,18 +153,37 @@ export function memoryAdapter() {
     async clear(name) { st(name).clear(); },
     async count(name) { return st(name).size; },
     async range(name, index, lo, hi) {
-      const all = [...st(name).values()].filter((r) => (lo == null || r[index] >= lo) && (hi == null || r[index] <= hi));
+      const all = indexed(name, index).filter((r) => (lo == null || r[index] >= lo) && (hi == null || r[index] <= hi));
       return clone(sorted(all, index));
     },
-    async byIndex(name, index, value) { return clone(sorted([...st(name).values()].filter((r) => r[index] === value), "id")); },
+    async byIndex(name, index, value) { return clone(sorted(indexed(name, index).filter((r) => r[index] === value), "id")); },
     async all(name) { return clone([...st(name).values()]); },
-    async latest(name, index, limit) { return clone(sorted([...st(name).values()], index).reverse().slice(0, limit)); },
+    async latest(name, index, limit) { return clone(sorted(indexed(name, index), index).reverse().slice(0, limit)); },
     async deleteBelow(name, index, hi) {
       let n = 0;
-      for (const [k, r] of st(name)) if (r[index] < hi) { st(name).delete(k); n++; }
+      for (const [k, r] of st(name)) if (validKey(r[index]) && r[index] < hi) { st(name).delete(k); n++; }
       return n;
     },
+    // Same contract as the IndexedDB version (synchronous fn, oldest first, one pass).
+    async rewrite(name, index, hi, fn) {
+      const out = { scanned: 0, updated: 0, deleted: 0 };
+      const store = st(name);
+      const recs = sorted(indexed(name, index).filter((r) => r[index] < hi), index);
+      const before = new Map(store);
+      try {
+        for (const rec of recs) {
+          out.scanned++;
+          const r = fn(clone(rec));
+          if (r === "delete") { store.delete(rec.id); out.deleted++; } else if (r && typeof r === "object") { store.set(rec.id, clone({ ...r, id: rec.id })); out.updated++; }
+        }
+      } catch (e) {
+        store.clear(); for (const [k, v] of before) store.set(k, v); // all or nothing, like an aborted transaction
+        throw e;
+      }
+      return out;
+    },
   };
+  function indexed(name, index) { return [...st(name).values()].filter((r) => validKey(r[index])); }
 }
 
 let adapter = null;

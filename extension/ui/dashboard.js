@@ -1,26 +1,65 @@
-// ScoreX dashboard - app shell, hash router, top app bar (tab strip, engine status + one primary
-// Start/Pause/Resume button, Stop, theme), shared context for the tabs. Storage rules: the UI reads
-// everything, but writes only settings (sanitized), secrets and selector overrides. Everything else
-// goes through messages.
+// ScoreX dashboard - app shell ("Growth ledger"): a grouped left rail (WORK / GROWTH / SETUP) that collapses to an
+// icon rail (721-1100 px) and a Menu sheet (<= 720 px), a sticky engine bar (screen title, date/time, account chip,
+// mode tag, risk chip, status + reason, ONE primary engine button, Stop, theme menu, saved indicator), a red safety
+// banner, a health square in the rail footer, the hash router (#route?h=&view=&s=&resume=1) and the shared ctx.
+// Storage rules: the UI reads everything, but writes only settings (sanitized), secrets and selector/provider
+// overrides. Everything else goes through messages.
+//
+// ctx (passed to every tab's render(root, ctx)):
+//   settings, data[K.x] (watched storage), status (getStatus), counts { pending, queued }, state, targets, targetList()
+//   on(evt, fn) (tab-scoped; events: status, counts, settings, tick, secrets, health, params, and each watched key)
+//   send(name, payload, opts), field(spec), save(mutator), addRefresher(fn), onDispose(fn), interval/timeout(fn, ms)
+//   route (screen id), params ({ h, view, s, ... } from #route?h=..), setParams(patch, { push }) (no re-render; tabs that
+//   listen to "params" also get same-screen hash changes instead of a re-render), setTitle(text), navigate(id),
+//   openReviewStop(), confirmFullAuto(), setMode(mode), health ({ level, issues }), refreshStatus(), refreshCounts()
 
-import { K, STATUS, STOP_LABEL, VERSION } from "../lib/constants.js";
+import { K, STATUS, STOP_LABEL, VERSION, MODE } from "../lib/constants.js";
 import { getSettings, saveSettings, sanitizeSettings, DEFAULT_STATE } from "../lib/store.js";
 import { deepClone } from "../lib/util.js";
 import * as history from "../lib/history.js";
-import { h, clear, icon, btn, busy, send, toast, statusPill, statusInfo, primaryAction, segmented, boundField, setTz, debounce, fmtDateTime, fmtAgo, add, fill } from "./components.js";
+import {
+  h, clear, icon, btn, busy, send, toast, statusInfo, primaryAction, statusPill, isSafetyStop, setTz, debounce,
+  fmtDateTime, fmtAgo, fmtTime, fmtWeekday, fill, menu, accountChip, modeTag, riskChip, safetyBanner, reviewStopDialog,
+  confirmFullAuto, switchMode, healthCheck, healthLabel, healthShort, diagSquare, resetTableStates, boundField, registerOverlay,
+} from "./components.js";
 
 import overview from "./tabs/overview.js";
-import targets from "./tabs/targets.js";
 import review from "./tabs/review.js";
-import models from "./tabs/models.js";
-import tones from "./tabs/tones.js";
-import safety from "./tabs/safety.js";
+import targets from "./tabs/targets.js";
+import discover from "./tabs/discover.js";
+import scores from "./tabs/scores.js";
 import historyTab from "./tabs/history.js";
+import tones from "./tabs/tones.js";
+import models from "./tabs/models.js";
+import safety from "./tabs/safety.js";
 import settingsTab from "./tabs/settings.js";
 
-// Tab strip order.
-const TABS = [overview, review, targets, models, tones, safety, historyTab, settingsTab];
-const WATCH = [K.state, K.targets, K.candidates, K.blacklist, K.discovery, K.logs, K.spend, K.learning];
+// Rail: groups, labels (also the screen titles) and icons. Route ids stay the old ones (#history = Results).
+const NAV = [
+  { group: "Work", items: [
+    { id: "overview", label: "Today", icon: "today" },
+    { id: "review", label: "Review", icon: "review" },
+    { id: "targets", label: "Targets", icon: "targets" },
+    { id: "discover", label: "Discover", icon: "discover" },
+  ] },
+  { group: "Growth", items: [
+    { id: "scores", label: "Scores", icon: "scores" },
+    { id: "history", label: "Results", icon: "results" },
+  ] },
+  { group: "Setup", items: [
+    { id: "tones", label: "Tone", icon: "tones" },
+    { id: "models", label: "Models & costs", icon: "models" },
+    { id: "safety", label: "Safety", icon: "safety" },
+    { id: "settings", label: "Settings", icon: "settings" },
+  ] },
+];
+const MODULES = { overview, review, targets, discover, scores, history: historyTab, tones, models, safety, settings: settingsTab };
+const NAV_ITEMS = NAV.flatMap((g) => g.items);
+const TABS = NAV_ITEMS.map((it) => MODULES[it.id]).filter(Boolean);
+const LABEL = Object.fromEntries(NAV_ITEMS.map((it) => [it.id, it.label]));
+// Old and friendly names that open a screen (with default params).
+const ALIASES = { results: ["history", {}], diagnostics: ["settings", { view: "diagnostics" }], today: ["overview", {}], dashboard: ["overview", {}] };
+const WATCH = [K.state, K.targets, K.candidates, K.blacklist, K.discovery, K.logs, K.spend, K.learning, K.scoreboard, K.conversations, K.secretsRev];
 
 // ---------------------------------------------------------------- event bus + scopes
 
@@ -67,15 +106,19 @@ function setSaveIndicator(stateName) {
   clearTimeout(saveIndTimer);
   el.className = "save-ind is-" + stateName;
   el.textContent = stateName === "saving" ? "Saving…" : stateName === "saved" ? "Saved" : stateName === "error" ? "Not saved" : "";
-  if (stateName === "saved") saveIndTimer = setTimeout(() => { el.className = "save-ind"; el.textContent = ""; }, 2200);
+  if (stateName === "saved") saveIndTimer = setTimeout(() => { el.className = "save-ind"; el.textContent = ""; }, 2000);
 }
 
+let current = { id: null, params: {} };
 const ctx = {
   settings: null,
   data: {},
   status: null,
   counts: { pending: 0, queued: 0 },
+  health: null,
   tabs: TABS,
+  route: null,
+  params: {},
   get state() { return { ...DEFAULT_STATE, ...(ctx.data[K.state] || {}) }; },
   get targets() { return ctx.data[K.targets] || {}; },
   targetList() { return Object.values(ctx.data[K.targets] || {}).filter((t) => t && t.handle); },
@@ -88,8 +131,28 @@ const ctx = {
   send,
   field(spec) { return boundField(ctx, spec); },
   navigate(id) { if (location.hash !== "#" + id) location.hash = "#" + id; else route(); },
+  // Update the route params in the URL without re-rendering the screen (e.g. a drawer: #targets?h=naval).
+  setParams(patch = {}, { push = false } = {}) {
+    const next = { ...ctx.params, ...patch };
+    for (const k of Object.keys(next)) if (next[k] == null || next[k] === "" || next[k] === false) delete next[k];
+    const qs = new URLSearchParams(next).toString();
+    const hash = "#" + (ctx.route || "overview") + (qs ? "?" + qs : "");
+    if (location.hash !== hash) window.history[push ? "pushState" : "replaceState"](null, "", hash);
+    ctx.params = next;
+    current.params = next;
+  },
+  setTitle(text) {
+    const t = text || LABEL[ctx.route] || "ScoreX";
+    const el = document.getElementById("screenTitle");
+    if (el) el.textContent = t;
+    document.title = `${t} · ScoreX`;
+  },
+  openReviewStop: () => openReviewStop(),
+  confirmFullAuto: () => confirmFullAuto(ctx),
+  setMode: (mode) => switchMode(ctx, mode),
   refreshStatus: () => refreshStatus(),
   refreshCounts: () => refreshCounts(),
+  refreshHealth: () => refreshHealth(),
   // Build the full settings object, sanitize, save, re-render bound fields with the sanitized values.
   save(mutator, { from = null } = {}) {
     const run = async () => {
@@ -106,6 +169,7 @@ const ctx = {
         emit("settings", saved, from);
         updateHeader(true);
         setSaveIndicator("saved");
+        refreshHealthSoon();
         return saved;
       } catch (e) {
         setSaveIndicator("error");
@@ -118,7 +182,7 @@ const ctx = {
   },
 };
 
-// ---------------------------------------------------------------- status + counts
+// ---------------------------------------------------------------- status, counts, health
 
 async function refreshStatus() {
   const r = await send("getStatus", {}, { quiet: true });
@@ -136,23 +200,41 @@ async function refreshCounts() {
     if (changed) emit("counts", next);
   } catch (_) { /* history not available yet */ }
 }
+async function refreshHealth() {
+  try {
+    ctx.health = await healthCheck({ settings: ctx.settings, state: ctx.state, secretsRev: ctx.data[K.secretsRev] });
+  } catch (e) { console.error("[ScoreX UI] health", e); }
+  renderHealth();
+  emit("health", ctx.health);
+}
 const refreshStatusSoon = debounce(refreshStatus, 300);
+const refreshHealthSoon = debounce(refreshHealth, 600);
 
 // ---------------------------------------------------------------- shell
 
+const app = document.getElementById("app");
 const view = document.getElementById("view");
 const nav = document.getElementById("nav");
 const alertSlot = document.getElementById("alertSlot");
+const railFoot = document.getElementById("railFoot");
+const menuBtn = document.getElementById("menuBtn");
+const railScrim = document.getElementById("railScrim");
 
 function buildNav() {
   clear(nav);
-  for (const t of TABS) {
-    nav.appendChild(h("a", { href: "#" + t.id, class: "tab", dataset: { tab: t.id } },
-      h("span", { class: "tab-label" }, t.title),
-      t.id === "review" ? h("span", { class: "tab-count", hidden: true }) : null,
-      t.id === "overview" ? h("span", { class: "tab-alert", hidden: true, role: "img", "aria-label": "Safety alert" }) : null));
-  }
+  NAV.forEach((g, gi) => {
+    const gid = "navg-" + g.group.toLowerCase();
+    if (gi) nav.appendChild(h("div", { class: "rail-group-sep", "aria-hidden": "true" }));
+    nav.appendChild(h("div", { class: "rail-group", id: gid }, g.group));
+    nav.appendChild(h("div", { class: "rail-list", role: "group", "aria-labelledby": gid },
+      g.items.map((it) => h("a", { href: "#" + it.id, class: "tab rail-item", dataset: { tab: it.id }, title: it.label },
+        icon(it.icon, "rail-icon"),
+        h("span", { class: "tab-label rail-label" }, it.label),
+        it.id === "review" ? h("span", { class: "tab-count rail-count", hidden: true }) : null,
+        it.id === "overview" ? h("span", { class: "tab-alert", hidden: true, role: "img", "aria-label": "Safety alert" }) : null))));
+  });
   fill(document.getElementById("foot"), `ScoreX v${VERSION}`);
+  renderHealth();
 }
 function updateNavBadges() {
   const b = nav.querySelector('[data-tab="review"] .tab-count');
@@ -160,25 +242,99 @@ function updateNavBadges() {
     const n = ctx.counts.pending || 0;
     b.hidden = !n; b.textContent = String(n || "");
     b.setAttribute("aria-label", `${n} waiting for review`);
+    b.closest(".tab").title = n ? `Review: ${n} waiting` : "Review";
   }
   const a = nav.querySelector('[data-tab="overview"] .tab-alert');
   if (a) a.hidden = !ctx.state.alert;
 }
+function renderHealth() {
+  const hc = ctx.health;
+  const lvl = hc ? hc.level : null;
+  const label = healthLabel(hc);
+  const short = healthShort(hc);
+  const tip = [label, ...(hc ? hc.issues.map((i) => "- " + i.text) : []), "Open Settings > Diagnostics"].join("\n");
+  fill(railFoot,
+    h("a", { class: ["health", lvl && "health-" + lvl], href: "#diagnostics", id: "healthLink", title: tip, "aria-label": label + ". Open Diagnostics." },
+      diagSquare(lvl === "fail" ? "fail" : lvl === "warn" ? "warn" : lvl === "ok" ? "pass" : "skip", label),
+      h("span", { class: "txt" }, "Health: ", h("b", null, short))),
+    h("span", { class: "ver" }, `ScoreX v${VERSION}`));
+}
 
+// ---------------------------------------------------------------- Menu sheet (<= 720 px)
+
+const narrowMq = window.matchMedia("(max-width: 720px)");
+let railLayer = null, railPrevFocus = null;
+function setMenuOpen(open) {
+  if (open === app.classList.contains("menu-open")) return;
+  app.classList.toggle("menu-open", open);
+  railScrim.hidden = !open;
+  menuBtn.setAttribute("aria-expanded", String(open));
+  const rail = document.getElementById("rail");
+  if (open) {
+    railPrevFocus = document.activeElement;
+    railLayer = registerOverlay("rail");
+    rail.setAttribute("role", "dialog");
+    rail.setAttribute("aria-modal", "true");
+    (nav.querySelector(".tab.active") || nav.querySelector(".tab")).focus();
+  } else {
+    if (railLayer) { railLayer.release(); railLayer = null; }
+    rail.removeAttribute("role");
+    rail.removeAttribute("aria-modal");
+    if (railPrevFocus && railPrevFocus.isConnected) railPrevFocus.focus();
+    else menuBtn.focus();
+  }
+}
+function initMenuSheet() {
+  menuBtn.appendChild(icon("menu"));
+  const closeBtn = document.getElementById("railClose");
+  closeBtn.appendChild(icon("x"));
+  menuBtn.addEventListener("click", () => setMenuOpen(!app.classList.contains("menu-open")));
+  closeBtn.addEventListener("click", () => setMenuOpen(false));
+  railScrim.addEventListener("mousedown", () => setMenuOpen(false));
+  nav.addEventListener("click", (e) => { if (e.target.closest(".tab") && app.classList.contains("menu-open")) { railPrevFocus = null; setMenuOpen(false); } });
+  document.addEventListener("keydown", (e) => {
+    if (!app.classList.contains("menu-open") || !railLayer || !railLayer.isTop()) return;
+    if (e.key === "Escape") { e.preventDefault(); setMenuOpen(false); return; }
+    if (e.key === "Tab") {
+      const rail = document.getElementById("rail");
+      const f = [...rail.querySelectorAll("a[href], button:not([disabled])")].filter((x) => x.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (!rail.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+  }, true);
+  const onMq = () => { if (!narrowMq.matches) setMenuOpen(false); };
+  if (narrowMq.addEventListener) narrowMq.addEventListener("change", onMq); else narrowMq.addListener(onMq);
+}
+
+// ---------------------------------------------------------------- engine bar
+
+const THEME_ICON = { system: "monitor", light: "sun", dark: "moon" };
 function buildHeader() {
-  const themeSeg = segmented(
-    [["system", icon("monitor"), false, "System theme"], ["light", icon("sun"), false, "Light theme"], ["dark", icon("moon"), false, "Dark theme"]],
-    (window.sxTheme && window.sxTheme.get()) || "system",
-    (v) => {
-      if (window.sxTheme) window.sxTheme.set(v);
-      if (ctx.settings && ctx.settings.ui && ctx.settings.ui.theme !== v) ctx.save((s) => { s.ui = { ...(s.ui || {}), theme: v }; });
-    },
-    { label: "Theme", cls: "seg-icons" });
-  themeSeg.id = "themeSwitch";
-  for (const b of themeSeg.querySelectorAll("button")) b.setAttribute("aria-label", b.title);
-  window.addEventListener("sx-theme", (e) => themeSeg.set(e.detail.pref));
-  fill(document.getElementById("themeSlot"), themeSeg);
+  const themeBtn = h("button", { type: "button", class: "btn btn-sm btn-ghost btn-icon", id: "themeBtn", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": "Theme", title: "Theme" });
+  const setIcon = (pref) => { fill(themeBtn, icon(THEME_ICON[pref] || "monitor")); themeBtn.title = `Theme: ${pref || "system"}`; };
+  setIcon((window.sxTheme && window.sxTheme.get()) || "system");
+  const setTheme = (v) => {
+    if (window.sxTheme) window.sxTheme.set(v);
+    if (ctx.settings && ctx.settings.ui && ctx.settings.ui.theme !== v) ctx.save((s) => { s.ui = { ...(s.ui || {}), theme: v }; });
+  };
+  themeBtn.addEventListener("click", () => {
+    const pref = (window.sxTheme && window.sxTheme.get()) || "system";
+    menu(themeBtn, [["system", "System", "monitor"], ["light", "Light", "sun"], ["dark", "Dark", "moon"]].map(([v, l]) => ({ label: l, value: v, radio: true, checked: pref === v, onSelect: () => setTheme(v) })),
+      { id: "themeSwitch", label: "Theme" });
+  });
+  window.addEventListener("sx-theme", (e) => setIcon(e.detail && e.detail.pref));
+  fill(document.getElementById("themeSlot"), themeBtn);
+  updateClock();
   updateHeader(true);
+}
+function updateClock() {
+  const el = document.getElementById("screenSub");
+  if (!el || !ctx.settings) return;
+  const now = Date.now();
+  el.textContent = `${fmtWeekday(now)} · ${fmtTime(now)} ${ctx.settings.timezone || ""}`.trim();
 }
 
 function engineAction(label, msg, iconName, kind, extra = {}) {
@@ -191,86 +347,172 @@ function engineAction(label, msg, iconName, kind, extra = {}) {
   }, { kind, iconName, size: "sm", id: "btn-" + msg, ...extra });
 }
 
+// Short "why" for the bar plus a longer sentence for the tooltip.
+function watchLine(w) {
+  const mins = w && w.intervalSec ? Math.round(w.intervalSec / 60) : null;
+  return `Watching slowly: nothing new in the last ${(w && w.emptyStreak) || "few"} checks${mins ? `, checking every ${mins} min now` : ""}.`;
+}
+const FOOTPRINT_WAIT = "X page-load budget reached - waiting"; // lib/safety.js GATE_LABEL.footprint
+function engineWhy(state, status) {
+  const now = Date.now();
+  const info = statusInfo(state);
+  if (state.status === STATUS.RUNNING) {
+    const ah = status && status.activeHours;
+    const w = status && status.watch;
+    const sub = (status && status.sub) || "";
+    const slow = w && w.slow ? (/^Watching slowly/.test(sub) ? sub : watchLine(w)) : "";
+    if (ah && ah.inside === false && ah.opensAt) return [`sleeping until ${fmtTime(ah.opensAt)}`, `Outside active hours: sleeping until ${fmtTime(ah.opensAt)}.`];
+    if (state.breakUntil && state.breakUntil > now) return [`break until ${fmtTime(state.breakUntil)}`, `On a break until ${fmtTime(state.breakUntil)}.`];
+    if (state.nextTickWhy === FOOTPRINT_WAIT && state.nextTickAt > now) return ["page-load budget", `${FOOTPRINT_WAIT} (next check ${fmtTime(state.nextTickAt)}). The engine waits, it never stops.`];
+    if (state.nextCommentAt && state.nextCommentAt > now) return [`next comment ${fmtTime(state.nextCommentAt)}`, `Next comment allowed at ${fmtTime(state.nextCommentAt)}.${slow ? " " + slow : ""}`];
+    if (slow) return ["watching slowly", slow];
+    if (state.nextTickAt && state.nextTickAt > now) return [`next check ${fmtTime(state.nextTickAt)}`, `Next check at ${fmtTime(state.nextTickAt)}.`];
+    return ["", "Running"];
+  }
+  if (info.kind === "danger") return [info.short, [info.reason, info.detail].filter(Boolean).join(": ")];
+  if (state.status === STATUS.PAUSED) return ["nothing posts", "Paused: nothing is generated or posted until you resume."];
+  return ["", state.lastTickAt ? `Stopped. Last check ${fmtAgo(state.lastTickAt)}.` : "Stopped. Press Start to begin."];
+}
+
 let headerSig = "";
 function updateHeader(force) {
   const state = ctx.state;
-  const sig = JSON.stringify([state.status, state.stopReason, state.stopDetail, !!state.alert]);
+  const st = ctx.status || {};
   updateNavBadges();
   renderAlert();
-  if (!force && sig === headerSig) return;
-  headerSig = sig;
+  if (!ctx.settings) return;
+  const [why, whyLong] = engineWhy(state, st);
+  const mode = st.effectiveMode || (ctx.settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW);
+  const risk = st.risk && st.risk.level ? st.risk : null;
+  const sig = JSON.stringify([state.status, state.stopReason, state.stopDetail, !!state.alert, why, whyLong.replace(/\d+ ?(min|s|h)\b/g, ""), mode, risk, ctx.settings.account && ctx.settings.account.handle, state.me]);
   const box = document.getElementById("engineBox");
   if (!box) return;
-  const info = statusInfo(state);
+  if (!force && sig === headerSig) { box.title = whyLong || statusInfo(state).label; return; } // only the minutes changed
+  headerSig = sig;
+  // Keep keyboard focus on the same control across re-renders.
+  const ae = document.activeElement;
+  const keepFocus = ae && ae.id && (box.contains(ae) || document.getElementById("barChips").contains(ae)) ? ae.id : null;
   const [label, msg, ic] = primaryAction(state);
   const canStop = state.status === STATUS.RUNNING || state.status === STATUS.PAUSED;
+  const primary = msg === "reviewStop"
+    ? btn(label, () => openReviewStop(), { kind: "primary", iconName: ic, size: "sm", id: "btn-reviewStop", title: "See why ScoreX stopped, check your account, then resume" })
+    : engineAction(label, msg, ic, "primary");
   fill(box,
-    statusPill(state),
-    engineAction(label, msg, ic, "primary"),
+    statusPill(state, { why }),
+    primary,
     engineAction("Stop", "stop", "stop", "quiet", { disabled: !canStop, title: canStop ? "Stop the engine" : "Already stopped" }));
-  box.title = [info.label, info.reason, info.detail].filter(Boolean).join(" - ");
+  box.title = whyLong || statusInfo(state).label;
+
+  const modeBtn = h("button", { type: "button", class: "mode-btn", id: "modeTag", "aria-haspopup": "menu", "aria-expanded": "false", title: (mode === MODE.AUTO ? "Full auto: posts on its own within your limits" : "Review: you approve every reply") + ". Click to change." },
+    modeTag(mode), h("span", { class: "sr-only" }, "Change mode"));
+  modeBtn.addEventListener("click", () => {
+    menu(modeBtn, [
+      { label: "Review", hint: "you approve every reply", radio: true, checked: ctx.settings.mode !== MODE.AUTO, value: MODE.REVIEW, onSelect: () => switchMode(ctx, MODE.REVIEW) },
+      { label: "Full auto", hint: "posts on its own", radio: true, checked: ctx.settings.mode === MODE.AUTO, value: MODE.AUTO, onSelect: () => switchMode(ctx, MODE.AUTO) },
+    ], { id: "modeMenu", label: "Mode" });
+  });
+  fill(document.getElementById("barChips"), accountChip(ctx.settings, state, { id: "acctChip" }), modeBtn, risk ? riskChip(risk, { id: "riskChip" }) : null);
+  if (keepFocus) { const el = document.getElementById(keepFocus); if (el && !el.disabled) el.focus({ preventScroll: true }); }
 }
 
+const alertTime = (al) => `${fmtDateTime(al.at)} (${fmtAgo(al.at)}). ScoreX stopped and waits for you.`;
 function renderAlert() {
-  const al = ctx.state.alert;
-  const sig = al ? JSON.stringify(al) : "";
-  if (alertSlot.dataset.sig === sig) return;
+  const state = ctx.state;
+  const al = state.alert;
+  const sig = al ? JSON.stringify([al, state.status]) : "";
+  if (alertSlot.dataset.sig === sig) {
+    const t = al && alertSlot.querySelector(".alert-time"); // only the age changed
+    if (t) t.textContent = alertTime(al);
+    return;
+  }
   alertSlot.dataset.sig = sig;
   clear(alertSlot);
   if (!al) return;
-  const reason = STOP_LABEL[al.reason] || al.reason || "Safety stop";
-  alertSlot.appendChild(h("div", { class: "alert-banner", role: "alert" },
-    icon("alert", "alert-icon"),
-    h("div", { class: "alert-text" },
-      h("strong", null, reason),
-      al.detail ? h("div", null, al.detail) : null,
-      h("div", { class: "alert-time" }, `${fmtDateTime(al.at)} (${fmtAgo(al.at)}). ScoreX stopped and waits until you resume.`)),
-    h("div", { class: "alert-actions" },
-      btn("I checked my account - resume", (e) => {
-        const b = e.currentTarget;
-        busy(b, async () => { const r = await send("resume", {}, { label: "Resume" }); if (r) { toast("Resumed", { type: "success" }); refreshStatus(); } });
-      }, { kind: "light", size: "sm" }),
+  alertSlot.appendChild(safetyBanner({
+    id: "safetyBanner",
+    title: STOP_LABEL[al.reason] || al.label || al.reason || "Safety stop",
+    detail: al.detail || "",
+    time: alertTime(al),
+    actions: [
+      btn("Review and resume…", () => openReviewStop(), { kind: "light", size: "sm", id: "alertReviewBtn" }),
       btn("Dismiss", (e) => {
         const b = e.currentTarget;
         busy(b, async () => { const r = await send("clearAlert", {}, { label: "Dismiss alert" }); if (r) refreshStatus(); });
-      }, { kind: "ghost-light", size: "sm" }))));
+      }, { kind: "ghost-light", size: "sm", id: "alertDismissBtn", title: "Hide this banner (ScoreX stays stopped)" }),
+    ],
+  }));
+}
+
+let reviewOpen = false;
+async function openReviewStop() {
+  if (reviewOpen) return;
+  if (!isSafetyStop(ctx.state)) { toast("ScoreX is not stopped for safety right now.", { type: "info" }); return; }
+  reviewOpen = true;
+  try { await reviewStopDialog(ctx); } finally { reviewOpen = false; }
 }
 
 // ---------------------------------------------------------------- router
 
+function parseHash() {
+  const raw = (location.hash || "").replace(/^#/, "");
+  const qi = raw.search(/[?&]/);
+  let id = "overview";
+  try { id = decodeURIComponent(qi >= 0 ? raw.slice(0, qi) : raw).trim().toLowerCase() || "overview"; } catch (_) { /* bad escape */ }
+  let params = {};
+  for (const [k, v] of new URLSearchParams(qi >= 0 ? raw.slice(qi + 1) : "")) params[k] = v;
+  let title = null;
+  if (ALIASES[id]) { const [to, def] = ALIASES[id]; params = { ...def, ...params }; if (id === "results") title = "Results"; id = to; }
+  return { id, params, title };
+}
+
+function handleResumeParam(params) {
+  if (params.resume !== "1") return;
+  ctx.setParams({ resume: null });
+  if (isSafetyStop(ctx.state)) setTimeout(() => openReviewStop(), 0);
+}
+
 let renderSeq = 0;
 async function route() {
-  const id = (location.hash || "#overview").slice(1).split(/[?&]/)[0];
-  const tab = TABS.find((t) => t.id === id) || TABS[0];
+  const { id, params, title } = parseHash();
+  const tab = MODULES[id] || overview;
+  // Same screen, only the params changed, and the screen handles "params" itself: no re-render.
+  if (current.id === tab.id && scope && scope.listeners.has("params") && scope.listeners.get("params").size) {
+    ctx.params = params; current.params = params;
+    emit("params", params);
+    handleResumeParam(params);
+    return;
+  }
   const seq = ++renderSeq;
+  if (current.id !== tab.id) resetTableStates();
   disposeScope();
   scope = newScope();
+  current = { id: tab.id, params };
+  ctx.route = tab.id;
+  ctx.params = params;
   view.removeAttribute("data-ready");
   clear(view);
   view.dataset.tab = tab.id;
-  document.title = `${tab.title} · ScoreX`;
+  ctx.setTitle(title || LABEL[tab.id] || tab.title);
   for (const a of nav.querySelectorAll(".tab")) {
     const on = a.dataset.tab === tab.id;
     a.classList.toggle("active", on);
     if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
-    // Keep the active tab visible in the (horizontally scrolling) strip without moving focus or the page.
-    if (on && nav.scrollWidth > nav.clientWidth) {
-      const d = a.getBoundingClientRect().left - nav.getBoundingClientRect().left;
-      if (d < 0 || d + a.offsetWidth > nav.clientWidth) nav.scrollLeft += d - 16;
-    }
   }
   // Each render gets its own host inside the view. Navigating clears the view, which detaches the old host,
   // so a slow tab that is still awaiting can only append into its own detached host, never the next tab.
   const host = h("div", { class: "tab-host" });
   view.appendChild(host);
-  if (tab.hint) host.appendChild(h("div", { class: "page-head" }, h("h1", { class: "page-title" }, tab.title), h("p", { class: "page-hint" }, tab.hint)));
+  if (tab.hint) host.appendChild(h("p", { class: "page-hint" }, tab.hint));
   try {
     await tab.render(host, ctx);
   } catch (e) {
     console.error("[ScoreX UI] tab render failed", tab.id, e);
     host.appendChild(h("div", { class: "banner banner-danger" }, h("strong", null, "This tab failed to render. "), String((e && e.message) || e)));
   }
-  if (seq === renderSeq) view.dataset.ready = tab.id;
+  if (seq === renderSeq) {
+    view.dataset.ready = tab.id;
+    handleResumeParam(params);
+  }
 }
 
 // ---------------------------------------------------------------- init
@@ -300,33 +542,37 @@ async function init() {
         runRefreshers(null);
         emit("settings", s, null);
         updateHeader(true);
+        refreshHealthSoon();
       } else if (WATCH.includes(key)) {
         ctx.data[key] = ch.newValue;
         emit(key, ch.newValue);
-        if (key === K.state) { updateHeader(); refreshStatusSoon(); }
-      } else if (key === K.secretsRev || key === K.secrets) emit("secrets");
-      else if (key === K.selectorOverrides) emit(key, ch.newValue);
+        if (key === K.state) { updateHeader(); refreshStatusSoon(); refreshHealthSoon(); }
+        if (key === K.secretsRev) { emit("secrets"); refreshHealthSoon(); }
+      } else if (key === K.secrets) emit("secrets");
+      else if (key === K.selectorOverrides || key === K.providerOverrides) emit(key, ch.newValue);
     }
   });
 
   buildNav();
+  initMenuSheet();
   buildHeader();
   window.addEventListener("hashchange", route);
   await route();
   refreshStatus();
   refreshCounts();
+  refreshHealth();
   setInterval(() => {
     if (document.visibilityState !== "visible") return;
     refreshStatus();
     refreshCounts();
   }, 5000);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { refreshStatus(); refreshCounts(); } });
-  // Relative times (next check, last check) refresh twice a minute.
-  setInterval(() => emit("tick"), 30000);
+  setInterval(() => { if (document.visibilityState === "visible") refreshHealth(); }, 60000);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { refreshStatus(); refreshCounts(); refreshHealthSoon(); } });
+  // Relative times (next check, last check, the bar clock, the banner age) refresh twice a minute.
+  setInterval(() => { updateClock(); updateHeader(); emit("tick"); }, 30000);
 }
 
 init().catch((e) => {
   console.error("[ScoreX UI] init failed", e);
   view.appendChild(h("div", { class: "banner banner-danger" }, "ScoreX could not start the dashboard: " + ((e && e.message) || e)));
 });
-

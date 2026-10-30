@@ -21,7 +21,8 @@ export function createMock(opts = {}) {
     me: opts.me || "0x_nation",
     loggedIn: true,
     pageMode: "ok", // ok | captcha | locked | error | logged_out | wrong_account
-    replyMode: "ok", // ok | warning | rate_limit | duplicate | silent | hang
+    replyMode: "ok", // ok | warning | rate_limit | duplicate | silent | hang | prompt (an unknown dialog after Reply, nothing posted)
+    promptText: "Before you reply: review how replies work on X before you continue.",
     hideReplyBox: false,
     users: {},
     posts: [], // { id, author, text, createdAt, lang, promoted, reply, repost, likes, replies, liked }
@@ -128,6 +129,13 @@ ${likeBtn}
       M.log.push({ kind: "search", q });
       return { html: shell(timeline(posts)) };
     }
+    // Your mentions (conversation alerts): posts that reply to you or mention you, newest first, like X's tweet cells.
+    if (p === "/notifications/mentions") {
+      const meRe = new RegExp("@" + M.me + "\\b", "i");
+      const mentions = M.posts.filter((x) => !x.repost && (x.reply === M.me || meRe.test(x.text || "")));
+      M.log.push({ kind: "mentions", count: mentions.length });
+      return { html: shell(mentions.length ? timeline(mentions) : `<div data-testid="emptyState"><span data-testid="empty_state_header_text">Nothing to see here — yet</span></div>`, { title: "Notifications" }) };
+    }
     m = p.match(/^\/([A-Za-z0-9_]{1,15})\/status\/(\d+)/);
     if (m) {
       let post = M.posts.find((x) => x.id === m[2]);
@@ -171,6 +179,11 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
   const APP_JS = `
 (function(){
   function toast(html){ var t=document.createElement('div'); t.setAttribute('data-testid','toast'); t.setAttribute('role','alert'); t.innerHTML=html; document.body.appendChild(t); setTimeout(function(){ t.remove(); }, 6000); }
+  // replyMode "prompt": a sheet ScoreX does not know; any click on it is recorded (ScoreX must never click it).
+  function prompt(text){ var d=document.createElement('div'); d.setAttribute('role','dialog'); d.setAttribute('aria-modal','true'); d.setAttribute('data-testid','sheetDialog'); d.style.cssText='position:fixed;top:20%;left:20%;width:60%;background:#fff;border:1px solid #333;padding:16px';
+    var s=document.createElement('span'); s.textContent=text; d.appendChild(s);
+    ['Continue','Cancel'].forEach(function(l){ var b=document.createElement('button'); b.textContent=l; b.setAttribute('data-testid','mockPrompt'+l); b.addEventListener('click', function(){ fetch('/__mock/promptClick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({button:l})}); }); d.appendChild(b); });
+    document.getElementById('layers').appendChild(d); }
   var box=document.querySelector('[data-testid="tweetTextarea_0"]'); var btn=document.querySelector('[data-testid="tweetButtonInline"]');
   function sync(){ if(!btn) return; var empty=!box.innerText.trim(); if(empty){btn.setAttribute('aria-disabled','true');btn.disabled=true;} else {btn.removeAttribute('aria-disabled');btn.disabled=false;} }
   if(box){ box.addEventListener('input', sync); }
@@ -178,6 +191,7 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
     var focal=document.querySelector('article[tabindex="-1"]'); var id=focal.getAttribute('data-mock-id'); var text=box.innerText.trim();
     fetch('/__mock/reply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({inReplyTo:id,text:text})}).then(function(r){return r.json();}).then(function(j){
       if(j.toast){ toast('<span>'+j.toast+'</span>'); return; }
+      if(j.prompt){ prompt(j.prompt); return; }
       if(j.silent){ box.innerHTML=''; sync(); return; }
       box.innerHTML=''; sync();
       toast('<span>Your post was sent.</span> <a href="/'+j.author+'/status/'+j.id+'">View</a>');
@@ -321,10 +335,15 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           if (M.replyMode === "rate_limit") return send(200, { toast: "You are over the daily limit for sending posts." });
           if (M.replyMode === "duplicate") return send(200, { toast: "Whoops! You already said that." });
           if (M.replyMode === "drop") return send(200, { silent: true });
+          if (M.replyMode === "prompt") return send(200, { prompt: M.promptText });
           const id = String(M.nextId++);
           M.replies.push({ id, inReplyTo: j.inReplyTo, text: j.text, at: Date.now() });
           if (M.replyMode === "silent") return send(200, { silent: true });
           return send(200, { id, author: M.me });
+        }
+        if (url.pathname === "/__mock/promptClick" && req.method === "POST") {
+          M.log.push({ kind: "promptClick", ...JSON.parse(body || "{}") });
+          return send(200, { ok: true });
         }
         if (url.pathname === "/__mock/like" && req.method === "POST") {
           const j = JSON.parse(body);

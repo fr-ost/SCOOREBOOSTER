@@ -53,6 +53,22 @@ try {
   assert(t.tier === 1, "responding target raised to tier 1");
   assert(t.priority >= 80, "priority raised for a responsive target (" + t.priority + ")");
 
+  // ---- conversation alerts: the author's answer is read from your mentions page (nothing is posted) ----
+  const repliesBefore = M.replies.length, likesBefore = M.likes.length;
+  await H.patchState({ lastMentionsAt: 0 });
+  await H.runNow();
+  const conv = await H.waitFor(async () => { const c = await H.store("sx.conversations"); return c && (c.items || []).find((x) => x.id === rec.id) ? c : null; }, "conversation alert", 150000);
+  const item = conv.items.find((x) => x.id === rec.id);
+  assert(item.target === "bigbob" && item.text === "Exactly this, and the data agrees." && item.done === false && /^https:\/\/x\.com\/bigbob\/status\/\d+$/.test(item.authorReplyUrl) && item.replyUrl === posted.replyUrl, "the author's answer is listed in sx.conversations (" + JSON.stringify(item) + ")");
+  assert(M.log.some((x) => x.kind === "mentions" && x.count >= 1), "the mentions page was read");
+  const rConv = (await H.history()).find((x) => x.id === rec.id);
+  assert(rConv.results.authorReplied === true && rConv.results.authorReplyUrl === item.authorReplyUrl, "the reply's history record is marked 'author replied' with the answer's link");
+  assert(M.replies.length === repliesBefore && M.likes.length === likesBefore, "nothing was posted or liked by the mentions check");
+  let cd = await H.msg("conversationDone", { id: rec.id });
+  assert(cd.ok && (await H.store("sx.conversations")).items.find((x) => x.id === rec.id).done === true, "Mark done");
+  cd = await H.msg("conversationDone", { id: rec.id, done: false });
+  assert(cd.ok && (await H.store("sx.conversations")).items.find((x) => x.id === rec.id).done === false, "Mark done can be undone");
+
   // ---- cooldown for a target that never responds ----
   M.addUser("quiet", { followers: 9000 });
   await H.msg("targetsUpsert", { rows: ["quiet"], defaults: { tier: 2 } });

@@ -7,7 +7,7 @@ import { CMD } from "./constants.js";
 import { getSettings, log } from "./store.js";
 import { workerTab, navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
-import { withLease } from "./engine.js";
+import { withLease, stop } from "./engine.js";
 import { now } from "./util.js";
 
 const PAGES = [
@@ -38,11 +38,17 @@ export async function runSelfTest() {
     const checks = [];
     const add = (id, label, ok, detail) => checks.push({ id, label, ok, detail });
     for (const p of PAGES) {
-      const nav = await navigate(tabId, p.url(me));
-      if (!nav.ok) { add(p.id, p.label, false, "The page did not load"); continue; }
+      const nav = await navigate(tabId, p.url(me), { purpose: "diagnostics" }); // counted in the X footprint as diagnostics
+      if (!nav.ok) { add(p.id, p.label, false, nav.budget ? "Not loaded: the X page-load budget (Safety) is used up - try again later" : "The page did not load"); continue; }
       const w = await waitForPage(tabId, p.wait, 20000);
       const v = pageVerdict(w.page, settings);
-      if (v && v.stop) { add(p.id, p.label, false, `X shows a problem: ${v.stop}${v.detail ? " (" + v.detail + ")" : ""}`); return { ok: true, checks, stop: v.stop, at: now() }; }
+      if (v && v.stop) {
+        add(p.id, p.label, false, `X shows a problem: ${v.stop}${v.detail ? " (" + v.detail + ")" : ""}`);
+        // Same rule as everywhere else: a captcha, warning, rate limit, logout or wrong account seen in the X tab is a
+        // safety stop (notification + red badge, manual resume), so the engine never runs into it on its next check.
+        await stop(v.stop, v.detail || "Seen during the self-test").catch(() => {});
+        return { ok: true, checks, stop: v.stop, at: now() };
+      }
       const r = await send(tabId, CMD.SELF_TEST, { keys: p.keys }, 15000);
       if (!r || !r.ok) { add(p.id, p.label, false, "The page could not be read (the content script did not answer)"); continue; }
       if (p.id === "home") {

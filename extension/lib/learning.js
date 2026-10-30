@@ -9,14 +9,20 @@
 
 import { K, HS, CMD, BUILTIN_TONES } from "./constants.js";
 import { MAIN_TONE, effectivePreset } from "./targets.js";
-import { load, save, getSettings, getState, patchState, getTargets, updateTargets, log } from "./store.js";
+import { load, save, getSettings, getState, patchState, getTargets, updateTargets, getBlacklist, log } from "./store.js";
 import { navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
 import { notify } from "./notify.js";
+import { valueDetails, learnedRates } from "./scores.js";
+import { checkReach } from "./reach.js";
 import * as H from "./history.js";
 import { now, DAY, HOUR, MIN, random, clamp, sleep, humanDelay, num } from "./util.js";
 
 const ATTRIBUTION_DAYS = 14; // a follow-back is credited to comments from the previous 14 days
+const TIER1_BONUS = 20; // heuristic: with score-aware targeting, tier 1 keeps the 20-point lead of the old 70/50 bases
+// navigate()'s 3rd argument: the page-load purpose for the X footprint ledger (lib/tabs.js). valueOf keeps it a valid
+// timeout (45 s) for the older navigate(tabId, url, timeoutMs) signature.
+const NAV = (purpose) => ({ purpose, timeoutMs: 45000, valueOf: () => 45000 });
 
 export function engaged(res) {
   return !!(res && (num(res.likes) > 0 || num(res.replies) > 0 || res.authorReplied || res.followedBack));
@@ -194,13 +200,19 @@ export async function processFollowBacks(settings) {
 
 const strongResponse = (res) => !!(res && (res.authorReplied || res.followedBack || num(res.replies) > 0 || num(res.likes) > 1));
 
-// Recompute priority / tier / cooldown for every target from history (no page visits).
+// Recompute priority / tier / cooldown for every target from history (no page visits). With score-aware targeting
+// (settings.targeting.useValue) the priority starts from the target's value (provider scores or ScoreX rank x chance
+// of a follow-back, lib/scores.js) instead of the flat 70 / 50 tier bases; the other adjustments stay the same.
+// target.score.value / propensity / why are stored either way (Targets tab).
 export async function updatePriorities(settings, ts = now()) {
   const L = settings.learning;
+  const useValue = !!(settings.targeting && settings.targeting.useValue);
   const history = await H.since(ts - 120 * DAY);
+  const blacklist = await getBlacklist();
   const byT = Object.create(null);
   for (const r of history) if (r.status === HS.POSTED) (byT[r.target] ||= []).push(r);
   await updateTargets((all) => {
+    const learned = learnedRates(all, blacklist, ts);
     for (const t of Object.values(all)) {
       const recs = (byT[t.handle] || []).sort((a, b) => b.postedAt - a.postedAt);
       const checked = recs.filter((r) => r.results && (r.results.checkedAt || r.results.followedBack));
@@ -215,12 +227,19 @@ export async function updatePriorities(settings, ts = now()) {
         streak++;
       }
       const followedBack = !!(t.rel && t.rel.followedBackAt);
-      const firstAt = recs.length ? recs[recs.length - 1].postedAt : null; // the 14-day window starts here
+      // The 14-day give-up window only starts from comments in the target's current life: comments from before it
+      // was removed and added again (e.g. taken off the blacklist), or from before it unfollowed you, never count.
+      const lifeStart = Math.max(t.addedAt || 0, (t.rel && t.rel.unfollowedYouAt) || 0);
+      const life = recs.filter((r) => r.postedAt >= lifeStart);
+      const firstAt = life.length ? life[life.length - 1].postedAt : null;
       t.stats = { ...(t.stats || {}), firstCommentAt: (t.stats && t.stats.firstCommentAt) || firstAt, comments: recs.length, engaged: eng.length, authorReplies, noResponseStreak: streak, lastEngagedAt: eng[0] ? eng[0].postedAt : (t.stats && t.stats.lastEngagedAt) || null };
-      const base = t.tier === 1 ? 70 : 50;
+      const vd = valueDetails(t, learned);
+      if (t.score || vd.value != null || vd.propensity != null) t.score = { ...(t.score || {}), value: vd.value, propensity: vd.propensity, why: vd.why };
+      const base = useValue && vd.value != null ? vd.value + (t.tier === 1 ? TIER1_BONUS : 0) : t.tier === 1 ? 70 : 50;
       const rate = checked.length ? eng.length / checked.length : 0;
       let p = base + Math.round(20 * rate) + (authorReplies ? 8 : 0) + (followedBack ? 10 : 0) - Math.min(30, streak * 4);
-      if (!t.priorityManual) t.priority = clamp(p, 0, 100);
+      // Never 0: the engine reads a missing priority as 50.
+      if (!t.priorityManual) t.priority = clamp(Math.round(p), 1, 100);
       const cold = t.coldUntil && t.coldUntil > ts;
       if (streak >= L.coldAfterComments && !cold) {
         t.coldUntil = ts + L.coldCooldownDays * DAY;
@@ -240,9 +259,53 @@ export async function updatePriorities(settings, ts = now()) {
 
 // ---------- background step (called by the engine when idle) ----------
 
+// Engagement checks on your posted replies (all timings are heuristics):
+//   * first look ~engagementCheckAfterHours (24 h) after posting: likes, replies, views, author reply;
+//   * second look ~72 h after posting, only while conversation alerts are off (with them on, author replies come from
+//     your mentions page, lib/conversations.js, and one page load of each run's budget goes there instead, so the
+//     number of X page loads does not grow);
+//   * with the reply reach monitor on, 1-2 replies per run also get an early look ~3 h after posting, so a drop in
+//     views shows up the same day (lib/reach.js compares early looks only with early looks).
+// The newest due replies come first (the freshest views for the reach monitor); a first look is skipped for replies
+// older than a week. Failed checks back off (6 h, 12 h, 24 h) and are given up after 3 failures.
+const EARLY_FROM_MS = 3 * HOUR;
+const EARLY_UNTIL_MS = 8 * HOUR;
+const FIRST_LOOK_MAX_AGE_MS = 7 * DAY;
+
+// Which replies to check in this run (pure). Returns { early: [records], regular: [records], max }.
+export function checkPlan(records, settings, ts = now()) {
+  const L = settings.learning;
+  const conv = !!(L.conversations && L.conversations.enabled);
+  const reachOn = !!(settings.safety && settings.safety.reach && settings.safety.reach.enabled);
+  const max = Math.max(0, num(L.maxChecksPerRun, 3) - (conv ? 1 : 0));
+  const usable = (r) => {
+    const res = r.results || {};
+    return r.status === HS.POSTED && r.postedAt && r.replyUrl && r.replyId && !res.gone && (res.failures || 0) < 3 && !(res.nextCheckAt && ts < res.nextCheckAt);
+  };
+  const pool = (records || []).filter(usable);
+  const earlySlots = reachOn ? (max >= 4 ? 2 : max >= 2 ? 1 : 0) : 0;
+  const early = pool
+    .filter((r) => { const res = r.results || {}; const age = ts - r.postedAt; return !res.checkedAt && !res.earlyAt && age >= EARLY_FROM_MS && age < EARLY_UNTIL_MS; })
+    .sort((a, b) => b.postedAt - a.postedAt)
+    .slice(0, earlySlots);
+  const earlyIds = new Set(early.map((r) => r.id)); // never two page loads for one reply in the same run
+  const regular = pool
+    .filter((r) => {
+      if (earlyIds.has(r.id)) return false;
+      const res = r.results || {};
+      const age = ts - r.postedAt;
+      if (!res.checkedAt) return age >= L.engagementCheckAfterHours * HOUR && age <= FIRST_LOOK_MAX_AGE_MS;
+      if (conv || L.enabled === false) return false; // the late look only served author replies / learning
+      return (res.checks || 1) < 2 && age >= 72 * HOUR && ts - res.checkedAt > 24 * HOUR;
+    })
+    .sort((a, b) => b.postedAt - a.postedAt)
+    .slice(0, Math.max(0, max - early.length));
+  return { early, regular, max };
+}
+
 async function checkReply(tabId, rec, settings) {
-  const nav = await navigate(tabId, rec.replyUrl);
-  if (!nav.ok) return { ok: false };
+  const nav = await navigate(tabId, rec.replyUrl, NAV("check"));
+  if (!nav.ok) return nav.budget ? { ok: false, budget: true } : { ok: false };
   const w = await waitForPage(tabId, ["tweet", "emptyState"], 20000);
   const v = pageVerdict(w.page, settings);
   if (v && v.stop) return { stop: v.stop, detail: v.detail };
@@ -254,9 +317,41 @@ async function checkReply(tabId, rec, settings) {
   return r.ok ? { ok: true, stats: r } : { ok: false };
 }
 
-// shouldStop(): true once the user pressed Pause/Stop - checked before every page visit.
+// Store one check. results.views always holds the latest reading (viewsAt = when it was read); an early look also
+// keeps earlyViews / earlyAt and never counts as the engagement check (no checkedAt), so the 24 h look still happens.
+async function recordCheck(rec, c, kind) {
+  const t = now();
+  if (c.ok && c.gone) return H.patch(rec.id, (cur) => ({ results: { ...(cur.results || {}), checkedAt: t, checks: 2, gone: true } }));
+  if (c.ok) {
+    const s = c.stats || {};
+    const views = s.views != null && s.views !== "" && Number.isFinite(Number(s.views)) ? Number(s.views) : null;
+    await H.patch(rec.id, (cur) => {
+      const res = cur.results || {};
+      const out = { ...res, likes: s.likes, replies: s.replies, authorReplied: !!s.authorReplied || !!res.authorReplied };
+      if (views != null) { out.views = views; out.viewsAt = t; }
+      if (kind === "early") { out.earlyAt = t; if (views != null) out.earlyViews = views; }
+      else Object.assign(out, { checkedAt: t, checks: (res.checks || 0) + 1, failures: 0, nextCheckAt: null });
+      return { results: out };
+    });
+    if (s.authorReplied && !(rec.results && rec.results.authorReplied)) log("info", `@${rec.target} replied to your comment`);
+    return null;
+  }
+  // An early look is only a sample: a failed one is not retried.
+  if (kind === "early") return H.patch(rec.id, (cur) => ({ results: { ...(cur.results || {}), earlyAt: t } }));
+  return H.patch(rec.id, (cur) => {
+    const f = ((cur.results && cur.results.failures) || 0) + 1;
+    return { results: { ...(cur.results || {}), failures: f, nextCheckAt: t + 6 * HOUR * Math.pow(2, f - 1) } };
+  });
+}
+
+// shouldStop(): true once the user pressed Pause/Stop - checked before every page visit. Returns null, { did },
+// or { stop, detail } (an X safety page, or the reply reach monitor with its action set to "stop").
+// With self-learning off it only does what the reply reach monitor needs (view checks + the reach check), and
+// nothing at all when the monitor is off too.
 export async function learningStep({ tabId, settings, me, shouldStop }) {
-  const L = settings.learning;
+  const learningOn = settings.learning.enabled !== false;
+  const reachOn = !!(settings.safety && settings.safety.reach && settings.safety.reach.enabled);
+  if (!learningOn && !reachOn) return null;
   const stopped = shouldStop || (async () => false);
   const st = await getState();
   const ts = now();
@@ -264,40 +359,23 @@ export async function learningStep({ tabId, settings, me, shouldStop }) {
   await patchState({ lastLearningAt: ts, learningForce: false });
   await processFollowBacks(settings);
   let visits = 0;
-  const max = L.maxChecksPerRun;
 
-  // 1) Engagement on our replies (first look after N hours, second look after 72h). Failed checks back
-  //    off (6h, 12h, 24h) and are given up after 3 failures, so they never block the others.
-  const posted = (await H.byStatus(HS.POSTED)).filter((r) => r.replyUrl && r.replyId);
-  const due = posted.filter((r) => {
-    const res = r.results || {};
-    if (res.gone || (res.failures || 0) >= 3) return false;
-    if (res.nextCheckAt && ts < res.nextCheckAt) return false;
-    const age = ts - r.postedAt;
-    if (!res.checkedAt) return age >= L.engagementCheckAfterHours * HOUR;
-    return (res.checks || 1) < 2 && age >= 72 * HOUR && ts - res.checkedAt > 24 * HOUR;
-  }).sort((a, b) => a.postedAt - b.postedAt);
-  for (const r of due) {
-    if (visits >= max) break;
+  const plan = checkPlan(await H.since(ts - FIRST_LOOK_MAX_AGE_MS - 2 * DAY), settings, ts);
+  const todo = [...plan.early.map((r) => ["early", r]), ...plan.regular.map((r) => ["regular", r])];
+  for (const [kind, r] of todo) {
     if (await stopped()) return { did: "aborted" };
     visits++;
     const c = await checkReply(tabId, r, settings);
     if (c.stop) return c;
-    if (c.ok && c.gone) await H.patch(r.id, (cur) => ({ results: { ...(cur.results || {}), checkedAt: now(), checks: 2, gone: true } }));
-    else if (c.ok) {
-      const s = c.stats;
-      await H.patch(r.id, (cur) => ({ results: { ...(cur.results || {}), likes: s.likes, replies: s.replies, authorReplied: s.authorReplied || !!(cur.results && cur.results.authorReplied), checkedAt: now(), checks: ((cur.results && cur.results.checks) || 0) + 1, failures: 0, nextCheckAt: null } }));
-      if (s.authorReplied && !(r.results && r.results.authorReplied)) log("info", `@${r.target} replied to your comment`);
-    } else {
-      await H.patch(r.id, (cur) => {
-        const f = ((cur.results && cur.results.failures) || 0) + 1;
-        return { results: { ...(cur.results || {}), failures: f, nextCheckAt: now() + 6 * HOUR * Math.pow(2, f - 1) } };
-      });
-    }
+    if (c.budget) { visits--; break; } // X page-load budget reached: not a failed check, it stays due
+    await recordCheck(r, c, kind);
     await sleep(humanDelay(3000, 8000));
   }
 
   await processFollowBacks(settings);
-  await updatePriorities(settings, now());
+  if (learningOn) await updatePriorities(settings, now());
+  // Reply reach monitor (settings.safety.reach): never resumes or switches anything back on its own.
+  const reach = await checkReach(settings, now());
+  if (reach && reach.stop) return { stop: reach.stop, detail: reach.detail };
   return visits ? { did: "learning", visits } : null;
 }

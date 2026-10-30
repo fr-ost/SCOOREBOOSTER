@@ -13,7 +13,7 @@
 (function () {
   "use strict";
   globalThis.SX_SELECTORS = {
-    version: "2026-10-29",
+    version: "2026-10-30",
 
     sel: {
       // ---- layout / session ----
@@ -21,6 +21,10 @@
       loggedInMarker: ['[data-testid="SideNav_AccountSwitcher_Button"]', '[data-testid="AppTabBar_Profile_Link"]', '[data-testid="AppTabBar_Home_Link"]', '[data-testid="SideNav_NewTweet_Button"]', '[data-testid="DashButton_ProfileIcon_Link"]'],
       profileNavLink: ['[data-testid="AppTabBar_Profile_Link"]'], // href="/<your handle>"
       accountSwitcher: ['[data-testid="SideNav_AccountSwitcher_Button"]'],
+      dashProfileLink: ['[data-testid="DashButton_ProfileIcon_Link"]'], // narrow (mobile) layout: your avatar, top left
+      // Avatars carry the handle in their testid ("UserAvatar-Container-<handle>"). Only read inside the account
+      // switcher / mobile avatar button above, never in the page content (that would be someone else's handle).
+      navAvatar: ['[data-testid^="UserAvatar-Container-"]'],
       loginButtons: ['[data-testid="loginButton"]', '[data-testid="signupButton"]', 'a[href="/login"]', 'a[href="/i/flow/login"]'],
       captchaFrames: ['iframe[src*="arkoselabs"]', 'iframe[src*="funcaptcha"]', "#arkose", 'div[id^="arkose"]', 'iframe[src*="recaptcha"]', 'iframe[src*="hcaptcha"]'],
       toast: ['[data-testid="toast"]', '[role="alert"]'],
@@ -28,6 +32,12 @@
       emptyState: ['[data-testid="empty_state_header_text"]', '[data-testid="emptyState"]'],
       spinner: ['[role="progressbar"]'],
       dialog: ['[role="dialog"]'],
+      // Anything X can put over the page while ScoreX posts (dialogs, sheets, interstitials). Every match except
+      // the reply composer, toasts and knownOverlay is an "unknown prompt": ScoreX stops and never clicks it.
+      prompt: ['[role="dialog"]', '[role="alertdialog"]', '[aria-modal="true"]', '[data-testid="sheetDialog"]', '[data-testid="confirmationSheetDialog"]'],
+      // Harmless overlays and docked panels (still checked for text.aiLabel). If ScoreX stops with "X showed a prompt
+      // ScoreX does not know" on something harmless, add its selector here (Settings > Selector overrides).
+      knownOverlay: ['[data-testid="HoverCard"]', '[data-testid="hoverCardParent"]', '[data-testid="DMDrawer"]', '[data-testid="GrokDrawer"]'],
 
       // ---- tweets ----
       tweet: ['article[data-testid="tweet"]', 'article[role="article"]'],
@@ -49,6 +59,9 @@
 
       // ---- composer (reply box) ----
       composerTextbox: ['div[data-testid="tweetTextarea_0"][role="textbox"]', 'div[data-testid^="tweetTextarea_"][role="textbox"]', 'div[role="textbox"][contenteditable="true"]'],
+      // What makes a dialog the reply composer: X's post textarea or its Reply button. A dialog that only has some
+      // other text field (a report form, a message box) is never typed into; it is an unknown prompt.
+      composerDialogMarker: ['[data-testid^="tweetTextarea_"]', '[data-testid="tweetButton"]'],
       replySubmitInline: ['[data-testid="tweetButtonInline"]'],
       replySubmitModal: ['[data-testid="tweetButton"]'],
       composerClose: ['[data-testid="app-bar-close"]', '[aria-label="Close"]'],
@@ -92,11 +105,15 @@
       replyingTo: "^replying to",
       followsYou: "follows you",
       duplicate: "already said that|whoops! you already said that|duplicate",
+      // X asking about AI content / warning that a reply may be hidden. Any match while posting (outside your typed
+      // reply and the post you reply to) stops ScoreX; it never clicks such a prompt.
+      aiLabel: "made with ai|ai[- ]generated|generated (?:by|with) ai|add (?:an )?ai label|may be hidden|probable spam",
     },
 
     // Things that are not selectors but change with X's UI.
     misc: {
       handleHref: "^/([A-Za-z0-9_]{1,15})/?$",
+      avatarTestId: "^UserAvatar-Container-([A-Za-z0-9_]{1,15})$",
       statusHref: "/([A-Za-z0-9_]{1,15})/status/(\\d{5,25})",
       followerCountWords: "followers?",
       followingCountWords: "following",

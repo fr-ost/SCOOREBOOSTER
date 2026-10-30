@@ -1,0 +1,324 @@
+// The real content scripts (extension/content/*.js) in headless Chromium against X-like markup: follow badges
+// (XP-1 / FOL-5, XP-2), page-state text heuristics (XP-7), the logged-in handle in other layouts (XP-6 / ENG-2),
+// the account check before clicks, and the fail-closed handling of unknown X prompts while posting.
+// Needs Playwright with Chromium (as the e2e tests do); skipped when it is not installed.
+import { test, describe, before, after } from "node:test";
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import fs from "node:fs";
+import path from "node:path";
+
+const HERE = path.dirname(new URL(import.meta.url).pathname);
+const CONTENT = path.resolve(HERE, "../../extension/content");
+const FILES = ["selectors.js", "dom.js", "detect.js", "scrape.js", "actions.js", "content.js"];
+const SOURCES = FILES.map((f) => fs.readFileSync(path.join(CONTENT, f), "utf8"));
+
+let chromium = null;
+try { chromium = createRequire(path.resolve(HERE, "../e2e/harness.mjs"))(process.env.PLAYWRIGHT || "playwright").chromium; } catch (_) { chromium = null; }
+
+const FAKE_CHROME = `
+window.chrome = window.chrome || {};
+window.chrome.storage = { local: { get: () => Promise.resolve({}) }, onChanged: { addListener() {} } };
+window.chrome.runtime = { id: "sx", onMessage: { addListener(fn) { window.__sxHandler = fn; } }, sendMessage: () => Promise.resolve() };
+window.__sxCall = (msg) => new Promise((res) => { const r = window.__sxHandler(msg, { id: "sx" }, res); if (r === false) res({ notHandled: true }); });
+window.__clicks = [];
+document.addEventListener("click", (e) => { const el = e.target.closest("[data-testid]") || e.target; window.__clicks.push(el.getAttribute("data-testid") || el.tagName); }, true);
+`;
+
+const NAV = `<nav><a data-testid="AppTabBar_Profile_Link" href="/0x_nation">Profile</a><a data-testid="AppTabBar_Home_Link" href="/home">Home</a></nav>`;
+// (a div, not X's button: nested buttons cannot be built with innerHTML)
+const cell = (h, { badge = false, badgeText = false, bio = "", name } = {}) => `<div data-testid="UserCell" role="button" style="display:block">
+  <div><a href="/${h}" role="link"><div dir="ltr"><span>${name || h.toUpperCase()}</span></div></a></div>
+  <div style="display:flex"><a href="/${h}" role="link"><div dir="ltr"><span>@${h}</span></div></a>${badge ? `<div data-testid="userFollowIndicator"><span>Follows you</span></div>` : ""}${badgeText ? `<div><span>Follows you</span></div>` : ""}</div>
+  <div><button data-testid="${1000 + h.length}-follow"><span>Follow</span></button></div>
+  <div dir="auto">${bio}</div>
+</div>`;
+const TID = "1900000000000000001";
+const tweet = (author, id, text, { focal = false } = {}) => `<article data-testid="tweet" role="article" tabindex="${focal ? -1 : 0}">
+<div data-testid="User-Name"><a href="/${author}" role="link"><span>${author}</span></a><div><a href="/${author}" role="link"><span>@${author}</span></a><a href="/${author}/status/${id}" role="link"><time datetime="${new Date(Date.now() - 5 * 60000).toISOString()}">5m</time></a></div></div>
+<div data-testid="tweetText" lang="en"><span>${text}</span></div>
+<div role="group" aria-label="1 reply, 2 reposts, 30 likes, 400 views"><button data-testid="reply">1</button><button data-testid="retweet">2</button><button data-testid="like">30</button></div></article>`;
+const INLINE = `<div id="composer"><div data-testid="tweetTextarea_0" role="textbox" contenteditable="true" style="min-height:40px"></div><button data-testid="tweetButtonInline">Reply</button></div>`;
+const statusPage = (extra = "", { composer = INLINE, nav = NAV } = {}) => `${nav}<main role="main"><div data-testid="primaryColumn">${tweet("bigbob", TID, "Most teams ship features. The best teams ship distribution.", { focal: true })}${composer}</div></main><div id="layers">${extra}</div>`;
+
+describe("content scripts on X-like pages", { skip: chromium ? false : "Playwright/Chromium not installed" }, () => {
+  let browser;
+  before(async () => { browser = await chromium.launch({ headless: true }); });
+  after(async () => { if (browser) await browser.close(); });
+
+  async function open(url, html, { width = 1280 } = {}) {
+    const ctx = await browser.newContext({ viewport: { width, height: 900 } });
+    const page = await ctx.newPage();
+    await page.route("https://x.com/**", (route) => route.fulfill({ status: 200, contentType: "text/html", body: "<!doctype html><html><head><meta charset=utf-8></head><body></body></html>" }));
+    await page.goto(url);
+    await page.evaluate((h) => { document.body.innerHTML = h; }, html);
+    await page.addScriptTag({ content: FAKE_CHROME });
+    for (const src of SOURCES) await page.addScriptTag({ content: src });
+    const call = (msg) => page.evaluate((m) => window.__sxCall(m), msg);
+    const clicks = () => page.evaluate(() => window.__clicks.slice());
+    return { page, call, clicks, close: () => ctx.close() };
+  }
+
+  // ---------- follow badges ----------
+
+  test("XP-1: a 'Who to follow' cell with the badge does not make the profile 'follows you'", async () => {
+    const p = await open("https://x.com/bigtarget", `${NAV}<main role="main"><div data-testid="primaryColumn">
+<div data-testid="UserName"><div><span>Big Target</span></div><div><div dir="ltr"><span>@bigtarget</span></div></div></div>
+<div data-testid="UserDescription"><span>Founder.</span></div><button data-testid="777-follow"><span>Follow</span></button>
+<section>${tweet("bigtarget", "1900000000000000101", "Distribution compounds.")}<div><h2 role="heading">Who to follow</h2>${cell("somefan", { badge: true, bio: "Builder" })}</div></section>
+</div></main>`);
+    try {
+      const r = await p.call({ sx: "scrapeProfile" });
+      assert.equal(r.profile.handle, "bigtarget");
+      assert.equal(r.profile.followsYou, false);
+      assert.equal((await p.call({ sx: "followState" })).followsYou, false, "cleanup's re-check uses the same reading");
+    } finally { await p.close(); }
+  });
+
+  test("XP-1: the header badge (testid, or the exact text right after @handle) still counts", async () => {
+    let p = await open("https://x.com/gina", `${NAV}<main role="main"><div data-testid="primaryColumn">
+<div data-testid="UserName"><div><span>Gina</span></div><div><span>@gina</span><span data-testid="userFollowIndicator">Follows you</span></div></div>
+<div><h2>Who to follow</h2>${cell("other", {})}</div></div></main>`);
+    try { assert.equal((await p.call({ sx: "scrapeProfile" })).profile.followsYou, true); } finally { await p.close(); }
+    p = await open("https://x.com/gina", `${NAV}<main role="main"><div data-testid="primaryColumn">
+<div data-testid="UserName"><div><span>Gina</span></div><div style="display:flex"><div><span>@gina</span></div><div><span>Follows you</span></div></div></div></div></main>`);
+    try { assert.equal((await p.call({ sx: "scrapeProfile" })).profile.followsYou, true, "text fallback if X renames the testid"); } finally { await p.close(); }
+  });
+
+  test("XP-1: a display name that contains 'follows you' is not the badge", async () => {
+    const p = await open("https://x.com/bigtarget", `${NAV}<main role="main"><div data-testid="primaryColumn">
+<div data-testid="UserName"><div><span>I follow back if he follows you</span></div><div><div dir="ltr"><span>@bigtarget</span></div></div></div></div></main>`);
+    try { assert.equal((await p.call({ sx: "scrapeProfile" })).profile.followsYou, false); } finally { await p.close(); }
+  });
+
+  test("XP-2: bio text never counts as the badge on the followers list", async () => {
+    const p = await open("https://x.com/0x_nation/followers", `${NAV}<main role="main"><div data-testid="primaryColumn">
+${cell("alpha", { bio: "PM at a fintech." })}${cell("beta", { bio: "Crypto degen. This account follows you back, always." })}${cell("gamma", { bio: "Follows you" })}${cell("delta", { bio: "Writer" })}
+</div></main>`);
+    try {
+      const r = await p.call({ sx: "scrapeUsers", limit: 400 });
+      assert.deepEqual(r.users.map((u) => u.followsYou), [false, false, false, false]);
+      assert.equal(r.badgeCells, 0);
+      assert.match(r.users[1].bio, /follows you back/, "the bio itself is kept");
+    } finally { await p.close(); }
+  });
+
+  test("XP-2: badge elements count (and are flagged); a renamed badge with its exact text still counts", async () => {
+    const p = await open("https://x.com/0x_nation/followers", `${NAV}<main role="main"><div data-testid="primaryColumn">
+${cell("fan1", { badge: true, bio: "a" })}${cell("fan2", { badge: true })}${cell("fan3", { badgeText: true, bio: "b" })}${cell("nofan", { bio: "c" })}
+</div></main>`);
+    try {
+      const r = await p.call({ sx: "scrapeUsers", limit: 400 });
+      const by = Object.fromEntries(r.users.map((u) => [u.handle, u]));
+      assert.equal(by.fan1.followsYou && by.fan1.badge, true);
+      assert.equal(by.fan3.followsYou, true);
+      assert.equal(by.fan3.badge, false);
+      assert.equal(by.nofan.followsYou, false);
+      assert.equal(r.badgeCells, 2);
+    } finally { await p.close(); }
+  });
+
+  // ---------- page state ----------
+
+  test("XP-7: a follower's bio saying 'this page doesn't exist' does not make the page 'not found'", async () => {
+    const p = await open("https://x.com/0x_nation/followers", `${NAV}<main role="main"><div data-testid="primaryColumn"><h2>0x_nation</h2>
+${cell("newfan", { badge: true, bio: "404 vibes only. This page doesn’t exist, neither do I." })}${cell("fan2", { badge: true })}${cell("fan3", { badge: true })}
+</div></main>`);
+    try {
+      const r = await p.call({ sx: "waitFor", keys: ["userCell", "emptyState"], timeoutMs: 3000 });
+      assert.equal(r.ok, true);
+      assert.equal(r.key, "userCell");
+    } finally { await p.close(); }
+  });
+
+  test("XP-7: profile bio / name / location phrases are ignored, X's own notice still means not found", async () => {
+    let p = await open("https://x.com/bigtarget", `${NAV}<main role="main"><div data-testid="primaryColumn">
+<div data-testid="UserName"><div><span>Post unavailable guy</span></div><div><span>@bigtarget</span></div></div>
+<div data-testid="UserDescription"><span>My best post unavailable anywhere else.</span></div>
+<div data-testid="UserProfileHeader_Items"><span data-testid="UserLocation">This page doesn't exist</span></div></div></main>`);
+    try { assert.equal((await p.call({ sx: "pageState" })).page.state, "ok"); } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, `${NAV}<main role="main"><div data-testid="primaryColumn"><div><span>This post is unavailable.</span></div></div></main>`);
+    try { assert.equal((await p.call({ sx: "pageState" })).page.state, "not_found"); } finally { await p.close(); }
+  });
+
+  // ---------- who is logged in ----------
+
+  test("XP-6: the logged-in handle in the narrow (mobile) layout and the collapsed nav", async () => {
+    const body = (nav) => `${nav}<main role="main"><div data-testid="primaryColumn">${tweet("someone", TID, "hello world post")}<div data-testid="UserAvatar-Container-someone"></div></div></main>`;
+    const cases = [
+      [`<header><a data-testid="DashButton_ProfileIcon_Link" href="#" aria-label="Profile"><div data-testid="UserAvatar-Container-other_acct"><img src="x.jpg"></div></a></header><nav><a data-testid="AppTabBar_Home_Link" href="/home">Home</a></nav>`, "other_acct", 480],
+      [`<header><a data-testid="DashButton_ProfileIcon_Link" href="/0x_nation" aria-label="Profile"><img src="x.jpg"></a></header>`, "0x_nation", 480],
+      [`<nav><div data-testid="SideNav_AccountSwitcher_Button"><div data-testid="UserAvatar-Container-0x_nation"><img src="x.jpg"></div></div><a data-testid="AppTabBar_Home_Link" href="/home">Home</a></nav>`, "0x_nation", 1000],
+      [`<nav><div data-testid="SideNav_AccountSwitcher_Button"><img src="x.jpg"><div><span>Me</span></div><div><span>@Mixed_Case</span></div></div></nav>`, "mixed_case", 1280],
+    ];
+    for (const [nav, want, width] of cases) {
+      const p = await open(`https://x.com/someone/status/${TID}`, body(nav), { width });
+      try {
+        const r = await p.call({ sx: "pageState" });
+        assert.equal(r.page.me, want, nav.slice(0, 60));
+        assert.equal(r.page.state, "ok");
+      } finally { await p.close(); }
+    }
+  });
+
+  test("XP-6: never the viewed profile, a post author or the URL; X's session data as a last resort", async () => {
+    let p = await open("https://x.com/someone", `<nav><a data-testid="AppTabBar_Home_Link" href="/home">Home</a></nav><main role="main"><div data-testid="primaryColumn">
+<div data-testid="UserName"><div><span>Someone</span></div><div><span>@someone</span></div></div><div data-testid="UserAvatar-Container-someone"></div>${tweet("someone", TID, "x")}</div></main>`);
+    try { assert.equal((await p.call({ sx: "pageState" })).page.me, null); } finally { await p.close(); }
+    const state = { entities: { users: { entities: { 42: { id_str: "42", screen_name: "someone", entities: { url: { urls: [] } } }, 7: { id_str: "7", screen_name: "Real_Me" } } } }, session: { user_id: "7", country: "BD" } };
+    p = await open("https://x.com/someone", `<script>window.__INITIAL_STATE__=${JSON.stringify(state).replace(/</g, "\\u003c")};window.__META_DATA__={"x":"}{"};</script>
+<nav><a data-testid="AppTabBar_Home_Link" href="/home">Home</a></nav><main role="main"><div data-testid="primaryColumn"><div data-testid="UserName"><div><span>@someone</span></div></div></div></main>`);
+    try { assert.equal((await p.call({ sx: "pageState" })).page.me, "real_me"); } finally { await p.close(); }
+  });
+
+  test("account check right before clicking: mismatch / unknown refuse, the right account proceeds", async () => {
+    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage("", { nav: `<nav><a data-testid="AppTabBar_Profile_Link" href="/other">P</a></nav>` }));
+    try {
+      const r = await p.call({ sx: "openComposer", tweetId: TID, expectMe: "0x_nation" });
+      assert.equal(r.error, "wrong_account");
+      assert.equal(r.me, "other");
+      assert.deepEqual(await p.clicks(), []);
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage("", { nav: `<nav><a data-testid="AppTabBar_Home_Link" href="/home">H</a></nav>` }));
+    try {
+      assert.equal((await p.call({ sx: "submitReply", expectText: "", expectMe: "0x_nation" })).error, "account_unknown");
+      assert.deepEqual(await p.clicks(), []);
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      const r = await p.call({ sx: "openComposer", tweetId: TID, expectMe: "0x_Nation" });
+      assert.equal(r.ok, true, JSON.stringify(r));
+    } finally { await p.close(); }
+  });
+
+  // ---------- unknown prompts (fail closed) ----------
+
+  const PROMPT = `<div role="dialog" aria-modal="true" style="position:fixed;top:0;left:0;width:300px;height:200px;background:#fff"><div><span>Before you reply</span><span>Review how replies work on X before you continue.</span><button data-testid="promptContinue">Continue</button></div></div>`;
+
+  test("a dialog that is not the composer: openComposer refuses and clicks nothing", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(PROMPT));
+    try {
+      const r = await p.call({ sx: "openComposer", tweetId: TID });
+      assert.equal(r.state, "unknown_prompt");
+      assert.match(r.detail, /Before you reply/);
+      assert.ok(r.detail.length <= 200);
+      assert.deepEqual(await p.clicks(), []);
+    } finally { await p.close(); }
+  });
+
+  test("an interstitial instead of the reply box after the Reply click is reported, never clicked", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage("", { composer: "" }));
+    try {
+      await p.page.evaluate((html) => {
+        document.querySelector('[data-testid="reply"]').addEventListener("click", () => { document.getElementById("layers").innerHTML = html; });
+      }, PROMPT);
+      const r = await p.call({ sx: "openComposer", tweetId: TID });
+      assert.equal(r.state, "unknown_prompt");
+      assert.deepEqual(await p.clicks(), ["reply"], "only the reply icon was clicked, not the prompt");
+    } finally { await p.close(); }
+  });
+
+  test("AI-label wording around the composer stops; the same words in your reply or the quoted post do not", async () => {
+    const modal = (notice) => `<div role="dialog" aria-modal="true" style="position:fixed;top:0;left:0;width:500px;height:400px;background:#fff">
+${tweet("bigbob", TID, "This image was made with AI, thoughts?")}
+<div data-testid="tweetTextarea_0" role="textbox" contenteditable="true" style="min-height:40px">Love the AI-generated look, which model?</div>
+${notice}<button data-testid="tweetButton">Reply</button></div>`;
+    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(modal(""), { composer: "" }));
+    try {
+      const r = await p.call({ sx: "submitReply", expectText: "Love the AI-generated look, which model?" });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.deepEqual(await p.clicks(), ["tweetButton"]);
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(modal(`<div><span>Add an AI label so people know this reply was generated with AI.</span><button data-testid="aiLabelToggle">Add label</button></div>`), { composer: "" }));
+    try {
+      const r = await p.call({ sx: "submitReply", expectText: "Love the AI-generated look, which model?" });
+      assert.equal(r.state, "unknown_prompt");
+      assert.match(r.detail, /Add an AI label/);
+      assert.ok(!/which model/.test(r.detail), "the typed reply is not part of the sample");
+      assert.deepEqual(await p.clicks(), [], "Reply was not clicked");
+    } finally { await p.close(); }
+  });
+
+  test("replyResult: a prompt after the click; a 'may be hidden' sheet right after the sent toast", async () => {
+    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      await p.page.evaluate((html) => {
+        document.querySelector('[data-testid="tweetTextarea_0"]').textContent = "My reply text";
+        setTimeout(() => { document.getElementById("layers").innerHTML = html; }, 300);
+      }, PROMPT);
+      const r = await p.call({ sx: "replyResult", tweetId: TID, expectText: "My reply text", me: "0x_nation", timeoutMs: 5000 });
+      assert.equal(r.state, "unknown_prompt");
+      assert.equal(r.cleared, false, "text still in the box: not sent");
+      assert.equal(r.sent, false);
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      await p.page.evaluate(() => {
+        document.body.insertAdjacentHTML("beforeend", `<div data-testid="toast" role="alert"><span>Your post was sent.</span> <a href="/0x_nation/status/1900000000000000999">View</a></div>`);
+        setTimeout(() => { document.getElementById("layers").innerHTML = `<div data-testid="sheetDialog" role="dialog"><span>Your reply may be hidden from some people.</span><button>Got it</button></div>`; }, 400);
+      });
+      const r = await p.call({ sx: "replyResult", tweetId: TID, expectText: "x", me: "0x_nation", timeoutMs: 5000 });
+      assert.equal(r.state, "unknown_prompt");
+      assert.equal(r.sent, true);
+      assert.match(r.replyUrl, /1900000000000000999/);
+      assert.deepEqual(await p.clicks(), []);
+    } finally { await p.close(); }
+  });
+
+  test("toasts: success is success, an AI-label toast stops; hover cards and hidden dialogs are ignored", async () => {
+    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(`<div data-testid="HoverCard"><div role="dialog"><span>Big Bob</span><span>@bigbob</span></div></div><div role="dialog" style="display:none"><span>Hidden</span></div>`));
+    try {
+      await p.page.evaluate(() => document.body.insertAdjacentHTML("beforeend", `<div data-testid="toast" role="alert"><span>Your post was sent.</span></div>`));
+      const r = await p.call({ sx: "replyResult", tweetId: TID, expectText: "x", me: "0x_nation", timeoutMs: 3000 });
+      assert.equal(r.ok, true, JSON.stringify(r));
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      await p.page.evaluate(() => document.body.insertAdjacentHTML("beforeend", `<div data-testid="toast" role="alert"><span>Your post was sent. It may be hidden as probable spam.</span></div>`));
+      const r = await p.call({ sx: "replyResult", tweetId: TID, expectText: "x", me: "0x_nation", timeoutMs: 3000 });
+      assert.equal(r.state, "unknown_prompt");
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(`<div role="dialog"><span>Made with</span><span>AI</span><button>Label</button></div>`));
+    try {
+      const r = await p.call({ sx: "openComposer", tweetId: TID });
+      assert.equal(r.state, "unknown_prompt");
+      assert.equal(r.why, "ai_label", "words split over inline elements still match text.aiLabel");
+      assert.match(r.detail, /Made with AI/);
+    } finally { await p.close(); }
+  });
+
+  test("unfollow: refuses on another account or an unknown prompt, clicks nothing", async () => {
+    const profile = (nav, layers = "") => `${nav}<main role="main"><div data-testid="primaryColumn">
+<div data-testid="UserName"><div><span>Dave</span></div><div><span>@dave</span></div></div><button data-testid="55-unfollow">Following</button></div></main><div id="layers">${layers}</div>`;
+    let p = await open("https://x.com/dave", profile(`<nav><a data-testid="AppTabBar_Profile_Link" href="/other">P</a></nav>`));
+    try {
+      assert.equal((await p.call({ sx: "unfollow", handle: "dave", expectMe: "0x_nation" })).error, "wrong_account");
+      assert.deepEqual(await p.clicks(), []);
+    } finally { await p.close(); }
+    p = await open("https://x.com/dave", profile(NAV, PROMPT));
+    try {
+      assert.equal((await p.call({ sx: "unfollow", handle: "dave" })).state, "unknown_prompt");
+      assert.deepEqual(await p.clicks(), []);
+    } finally { await p.close(); }
+  });
+
+  test("a dialog with some other text field (a report form) is a prompt, never the composer", async () => {
+    const form = `<div role="dialog" aria-modal="true" style="position:fixed;top:0;left:0;width:400px;height:300px;background:#fff"><span>Tell us more</span><div role="textbox" contenteditable="true" style="min-height:30px"></div><button>Send</button></div>`;
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(form));
+    try {
+      const r = await p.call({ sx: "type", text: "Hello" });
+      assert.equal(r.state, "unknown_prompt");
+      assert.equal(await p.page.evaluate(() => document.querySelector('[role="dialog"] [contenteditable]').textContent), "");
+      assert.equal((await p.call({ sx: "composerText" })).where, "inline", "the composer is still the page's reply box");
+    } finally { await p.close(); }
+  });
+
+  test("typing stops when a prompt is up (nothing is inserted)", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(PROMPT));
+    try {
+      const r = await p.call({ sx: "type", text: "Hello" });
+      assert.equal(r.state, "unknown_prompt");
+      assert.equal(await p.page.evaluate(() => document.querySelector('[data-testid="tweetTextarea_0"]').textContent), "");
+    } finally { await p.close(); }
+  });
+});

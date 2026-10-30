@@ -7,17 +7,81 @@
   if (globalThis.SXDetect) return;
   const D = globalThis.SXDom;
 
-  function myHandle() {
-    const a = D.q("profileNavLink");
-    const href = a && a.getAttribute("href");
+  // Paths that look like a handle but are X pages, never an account.
+  const RESERVED = /^(home|explore|notifications|messages|search|settings|i|compose|login|logout|signup|tos|privacy|hashtag|lists|bookmarks|communities|premium|jobs|grok|account)$/i;
+
+  function handleFromHref(el) {
+    const href = el && el.getAttribute && el.getAttribute("href");
     const m = href && href.match(D.re("handleHref", ""));
-    if (m) return m[1].toLowerCase();
+    return m && !RESERVED.test(m[1]) ? m[1].toLowerCase() : null;
+  }
+  // "UserAvatar-Container-<handle>" on the element itself or inside it.
+  function handleFromAvatar(el) {
+    if (!el) return null;
+    const re = D.re("avatarTestId", "");
+    for (const a of [el, ...D.qa("navAvatar", el)]) {
+      const m = String((a.getAttribute && a.getAttribute("data-testid")) || "").match(re);
+      if (m && !RESERVED.test(m[1])) return m[1].toLowerCase();
+    }
+    return null;
+  }
+
+  // X's server-rendered session (window.__INITIAL_STATE__ as JSON in an inline script): the screen name of
+  // session.user_id. Read once per page load (an account switch reloads the page), only as a last resort.
+  let sessionCache;
+  function jsonAt(t, start) {
+    if (t[start] !== "{") return null;
+    let depth = 0, inStr = false, esc = false;
+    for (let i = start; i < t.length; i++) {
+      const c = t[i];
+      if (inStr) { if (esc) esc = false; else if (c === "\\") esc = true; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) return t.slice(start, i + 1);
+    }
+    return null;
+  }
+  function sessionHandle() {
+    if (sessionCache !== undefined) return sessionCache;
+    let found = null;
+    const MARK = "window.__INITIAL_STATE__=";
+    for (const s of document.scripts) {
+      if (s.src || found) continue;
+      const t = s.textContent || "";
+      for (let i = t.indexOf(MARK); i >= 0 && !found; i = t.indexOf(MARK, i + 1)) {
+        try {
+          const json = jsonAt(t, i + MARK.length); // only a literal object assignment
+          const st = json ? JSON.parse(json) : null;
+          const uid = st && st.session && st.session.user_id;
+          const users = st && st.entities && st.entities.users && st.entities.users.entities;
+          const h = uid && users && Object.hasOwn(users, uid) && users[uid] && users[uid].screen_name;
+          if (typeof h === "string" && /^[A-Za-z0-9_]{1,15}$/.test(h)) found = h.toLowerCase();
+        } catch (_) { /* not JSON */ }
+      }
+    }
+    if (found || document.readyState === "complete") sessionCache = found;
+    return found;
+  }
+
+  // The logged-in account, from the navigation only (desktop nav, collapsed nav, account switcher, the
+  // narrow/mobile layout's avatar button) or X's session data - never from the page content or the URL,
+  // which show other people's handles.
+  function myHandle() {
+    const fromNav = handleFromHref(D.q("profileNavLink"));
+    if (fromNav) return fromNav;
     const sw = D.q("accountSwitcher");
     if (sw) {
       const line = D.text(sw).split("\n").map((s) => s.trim()).find((s) => /^@[A-Za-z0-9_]{1,15}$/.test(s));
       if (line) return line.slice(1).toLowerCase();
+      const av = handleFromAvatar(sw);
+      if (av) return av;
     }
-    return null;
+    const dash = D.q("dashProfileLink");
+    if (dash) {
+      const h = handleFromAvatar(dash) || handleFromHref(dash);
+      if (h) return h;
+    }
+    return sessionHandle();
   }
 
   // Short system messages only: toasts/alerts, and dialogs that are not the reply composer and contain no
@@ -75,9 +139,11 @@
       const t = D.text(empty);
       if (D.re("accountGone").test(t) || D.re("postGone").test(t)) return { ...base, state: "not_found", detail: t.slice(0, 200) };
     }
-    if (primary) {
-      const head = D.text(primary).slice(0, 600);
-      if (D.re("postGone").test(head) && !D.q("tweet", primary)) return { ...base, state: "not_found", detail: head.slice(0, 200) };
+    if (primary && !D.q("tweet", primary)) {
+      // X's own notices only: user cells, bios, names and post texts are left out, so a follower's bio that
+      // says "this page doesn't exist" never turns your followers page or a profile into "not found".
+      const head = D.textExcluding(primary, ["userCell", "profileBio", "profileUserName", "profileHeaderItems", "tweetText", "tweetUserName"], 600);
+      if (D.re("postGone").test(head)) return { ...base, state: "not_found", detail: head.slice(0, 200) };
     }
     if (!primary) return { ...base, state: loggedIn ? "loading" : "loading", detail: "Page still loading" };
     if (!loggedIn) return { ...base, state: "loading", detail: "Session markers not rendered yet" };
