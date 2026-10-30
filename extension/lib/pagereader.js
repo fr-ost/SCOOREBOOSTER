@@ -198,20 +198,26 @@ export function pageExtract(spec) {
           const t = txt(el);
           return t.length > 0 && t.length < 140 && re.test(t) && el.querySelectorAll(L.selector).length === 0;
         }) : [];
+        // Rows must come AFTER the heading and sit within 3 levels above it, so a list that has not rendered
+        // yet never makes the reader grab unrelated links elsewhere on the page.
+        let head = null;
+        const following = function (h, n) { return !!(h.compareDocumentPosition(n) & 4); };
         for (let k = 0; k < heads.length && !root; k++) {
           let el = heads[k];
-          for (let i = 0; i < 6 && el && el !== document.body; i++) {
+          for (let i = 0; i < 3 && el && el.parentElement && el.parentElement !== document.body; i++) {
             el = el.parentElement;
-            let n = 0;
-            try { n = el ? el.querySelectorAll(L.selector).length : 0; } catch (e) { n = 0; }
-            if (n > 0) { root = el; break; }
+            let rows = [];
+            try { rows = Array.prototype.filter.call(el.querySelectorAll(L.selector), function (n) { return following(heads[k], n); }); } catch (e) { rows = []; }
+            if (rows.length) { root = el; head = heads[k]; break; }
           }
         }
         if (!root) out.noContainer = true;
+        else items.push.apply(items, Array.prototype.filter.call(root.querySelectorAll(L.selector), function (n) { return following(head, n); }).map(function (n) { return { el: n }; }));
+      } else {
+        let nodes = [];
+        try { nodes = Array.prototype.slice.call(document.querySelectorAll(L.selector)); } catch (e) { nodes = []; }
+        for (const n of nodes) items.push({ el: n });
       }
-      let nodes = [];
-      if (root) { try { nodes = Array.prototype.slice.call(root.querySelectorAll(L.selector)); } catch (e) { nodes = []; } }
-      for (const n of nodes) items.push({ el: n });
     }
     out.list = items.slice(0, (L.limit || 50) * 2).map(function (it) {
       const f = L.fields || {};

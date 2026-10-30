@@ -20,19 +20,27 @@ let passed = 0;
 export function assert(cond, msg) { if (!cond) throw new Error("ASSERT FAILED: " + msg); passed++; log("  ok -", msg); }
 export const passCount = () => passed;
 
-// Copy the extension so a blank test page can be added without touching the real folder.
-function stageExtension() {
+// Copy the extension so a blank test page can be added without touching the real folder. grantOptional
+// turns the optional permissions (score sites, scripting) into granted ones, since a test cannot click
+// Chrome's permission prompt.
+function stageExtension({ grantOptional = false } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sx-ext-"));
   fs.cpSync(SRC, dir, { recursive: true });
   fs.writeFileSync(path.join(dir, "__test.html"), "<!doctype html><title>test</title><body>test page</body>");
+  if (grantOptional) {
+    const mf = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
+    mf.host_permissions = [...new Set([...(mf.host_permissions || []), ...(mf.optional_host_permissions || [])])];
+    mf.permissions = [...new Set([...(mf.permissions || []), ...(mf.optional_permissions || [])])];
+    fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(mf, null, 2));
+  }
   return dir;
 }
 
 // SX_PORT lets several e2e runs work in parallel (each mock X gets its own port).
-export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewport = { width: 1280, height: 900 } } = {}) {
+export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewport = { width: 1280, height: 900 }, grantOptional = false } = {}) {
   const M = createMock();
   await M.start(port);
-  const ext = stageExtension();
+  const ext = stageExtension({ grantOptional });
   const udd = fs.mkdtempSync(path.join(os.tmpdir(), "sx-udd-"));
   const ctx = await chromium.launchPersistentContext(udd, {
     channel: "chromium",
@@ -42,7 +50,7 @@ export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewpor
     args: [
       `--disable-extensions-except=${ext}`,
       `--load-extension=${ext}`,
-      `--host-resolver-rules=MAP x.com:443 127.0.0.1:${port}, MAP api.openai.com:443 127.0.0.1:${port}, MAP api.sorsa.io:443 127.0.0.1:${port}`,
+      `--host-resolver-rules=MAP x.com:443 127.0.0.1:${port}, MAP api.openai.com:443 127.0.0.1:${port}, MAP api.sorsa.io:443 127.0.0.1:${port}, MAP twitterscore.io:443 127.0.0.1:${port}`,
       "--ignore-certificate-errors",
       "--no-proxy-server",
     ],

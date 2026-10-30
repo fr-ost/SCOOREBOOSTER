@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/unit/",
-    "test:e2e": "node tests/e2e/p1_core.mjs && node tests/e2e/p2_auto.mjs && node tests/e2e/p3_learning.mjs && node tests/e2e/ui_smoke.mjs"
+    "test:e2e": "node tests/e2e/p1_core.mjs && node tests/e2e/p2_auto.mjs && node tests/e2e/p3_learning.mjs && node tests/e2e/scores.mjs && node tests/e2e/ui_smoke.mjs",
+    "test:soak": "node tests/e2e/soak.mjs"
   }
 }

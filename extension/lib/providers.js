@@ -99,6 +99,7 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
   for (const [k, v] of Object.entries(spec.headers || {})) headers[k] = String(v).replace(/\{key\}/g, key);
   const as = spec.kind === "html" ? "text" : "json";
   const r = await fetchData(url, { headers, as, fetchImpl, timeoutMs: spec.timeoutMs || 20000 });
+  if (!r.ok && r.error === "not_found") return { ...r, message: `${def.name} has no data for @${vars.handle}`, url: pageUrl };
   if (!r.ok) return { ...r, url: pageUrl };
   const json = as === "json" ? r.json : (spec.json ? jsonFromHtml(r.text, spec.json) : undefined);
   const text = as === "text" ? textFromHtml(r.text) : undefined;

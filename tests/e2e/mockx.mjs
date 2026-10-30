@@ -1,4 +1,4 @@
-// Mock x.com + api.openai.com + api.sorsa.io for ScoreX end-to-end tests.
+// Mock x.com + api.openai.com + api.sorsa.io + twitterscore.io for ScoreX end-to-end tests.
 // Serves pages whose DOM mimics X's data-testid structure closely enough for the content scripts,
 // records every reply/like/unfollow, and answers OpenAI Responses API calls with configurable behaviour.
 import https from "https";
@@ -32,7 +32,9 @@ export function createMock(opts = {}) {
     following: {},
     lists: { "1234567890": [] }, // list id -> member handles (empty = all authors)
     openai: { mode: "ok", calls: [], comments: null, checkPass: true, failFirst: 0 },
-    sorsa: { calls: [], scores: {} },
+    sorsa: { calls: [], scores: {}, top: {} }, // top: handle -> [{ username, display_name, score, followers_count }]
+    // twitterscore: scores handle -> 0..1000; smart: handle -> [{ handle, score }]; mode: ok | blocked (bot check) | js (panel filled by JS)
+    twitterscore: { calls: [], scores: {}, smart: {}, mode: "ok", apiKey: "ts-test" },
     log: [],
     nextId: 1900000000000000000n,
   };
@@ -258,9 +260,34 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           M.sorsa.calls.push(req.url);
           if (req.headers.apikey !== "sorsa-test") return send(401, { message: "bad key" });
           const u = new URL(req.url, "https://api.sorsa.io");
-          if (u.pathname === "/v3/key-usage-info") return send(200, { remaining_requests: 95, total_requests: 100 });
+          if (u.pathname === "/v3/key-usage-info") return send(200, { key_requests: 100, remaining_requests: 95, total_requests: 5 });
           const h = (u.searchParams.get("username") || "").toLowerCase();
+          if (u.pathname === "/v3/top-followers") return send(200, { users: M.sorsa.top[h] || [] });
           return send(200, { score: M.sorsa.scores[h] ?? null });
+        }
+        if (host === "twitterscore.io") {
+          const u = new URL(req.url, "https://twitterscore.io");
+          M.twitterscore.calls.push(u.pathname + u.search);
+          const TS = M.twitterscore;
+          if (u.pathname.startsWith("/api/v1/")) {
+            if ((u.searchParams.get("api_key") || req.headers["x-api-key"]) !== TS.apiKey) return send(401, { success: false, message: "bad key" });
+            const h = (u.searchParams.get("username") || "").toLowerCase();
+            if (u.pathname === "/api/v1/get_twitter_score") return TS.scores[h] == null ? send(404, { success: false }) : send(200, { success: true, username: h, twitter_id: "1", twitter_score: TS.scores[h] });
+            if (u.pathname === "/api/v1/top_followers_paginate") return send(200, { success: true, top_followers: (TS.smart[h] || []).map((x) => ({ username: x.handle, name: x.handle.toUpperCase(), twitter_score: x.score, followers_count: 10000 })) });
+            return send(404, { success: false });
+          }
+          const m2 = u.pathname.match(/^\/twitter\/([A-Za-z0-9_]{1,15})\/?$/);
+          if (m2) {
+            if (TS.mode === "blocked") return send(403, "<!doctype html><title>Just a moment...</title><div>challenge-platform</div>", "text/html");
+            const h = m2[1].toLowerCase();
+            if (TS.scores[h] == null) return send(404, "<!doctype html><title>Not found</title><h1>Account not found</h1>", "text/html");
+            const rows = (TS.smart[h] || []).slice(0, 3).map((x) => `<a class="row" href="/twitter/${x.handle}/"><span>@${x.handle}</span> <b>${x.score}</b></a>`).join("");
+            const panel = `<section><h3>Smart Followers</h3><div id="sf">${TS.mode === "js" ? "" : rows}</div><p>Smart followers list is a PRO feature. Free tier shows the first 3 followers only.</p></section>`;
+            const js = TS.mode === "js" ? `<script>setTimeout(function(){document.getElementById('sf').innerHTML=${JSON.stringify(rows)};},400)</script>` : "";
+            const nav = `<nav><a href="/twitter/trendingguy/">Trending: @trendingguy</a></nav>`;
+            return send(200, `<!doctype html><html><head><title>${h.toUpperCase()} (@${h}) — Twitter Score ${TS.scores[h]}/1000</title></head><body>${nav}<h1>${h.toUpperCase()}</h1><p>${h.toUpperCase()} (@${h}) has a Twitter Score of ${TS.scores[h]}.</p>${panel}${js}</body></html>`, "text/html; charset=utf-8");
+          }
+          return send(404, "not found", "text/plain");
         }
         const url = new URL(req.url, "https://x.com");
         if (url.pathname === "/__mock/app.js") return send(200, APP_JS, "application/javascript");
