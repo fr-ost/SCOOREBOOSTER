@@ -28,7 +28,8 @@ function stageExtension() {
   return dir;
 }
 
-export async function boot({ port = 8443, viewport = { width: 1280, height: 900 } } = {}) {
+// SX_PORT lets several e2e runs work in parallel (each mock X gets its own port).
+export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewport = { width: 1280, height: 900 } } = {}) {
   const M = createMock();
   await M.start(port);
   const ext = stageExtension();
