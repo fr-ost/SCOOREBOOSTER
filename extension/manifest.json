@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ScoreX",
   "short_name": "ScoreX",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Writes and posts thoughtful AI comments on X from your own logged-in browser, with review mode, cost tracking and strict safety limits.",
   "minimum_chrome_version": "116",
   "permissions": ["storage", "alarms", "notifications"],

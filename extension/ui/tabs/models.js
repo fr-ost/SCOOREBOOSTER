@@ -1,4 +1,4 @@
-// Models & Costs tab. Essentials: OpenAI key + test, the three presets, the group x tier matrix, the cost
+// Models & Costs tab. Essentials: OpenAI key + test, the three presets, the preset per tier, the cost
 // estimator and the monthly budget. Advanced: editable model/price table, fallback models, quality checker.
 // Reports: totals and performance (computed from IndexedDB history).
 
@@ -160,12 +160,13 @@ export default {
           ctx.field({ path: "fallback.secondModelId", type: "select", label: "Second fallback (optional)", options: modelOpts(s, true) })));
     }
     const presetOpts = PRESET_KEYS.map((k) => [k, PRESET_LABEL[k]]);
-    const matrix = h("table", { class: "matrix" },
-      h("thead", null, h("tr", null, h("th", null, ""), h("th", { scope: "col" }, "Tier 1 · big influencer"), h("th", { scope: "col" }, "Tier 2 · smart account"))),
+    // Only accounts that don't follow you are commented on, so only the B row of the stored matrix is used.
+    const matrix = h("table", { class: "matrix", id: "presetMatrix" },
+      h("thead", null, h("tr", null, h("th", { scope: "col" }, "Target"), h("th", { scope: "col" }, "Preset"))),
       h("tbody", null,
-        ["A", "B"].map((g) => h("tr", null,
-          h("th", { scope: "row" }, g === "A" ? "Group A · follows you" : "Group B · to win over"),
-          [1, 2].map((t) => h("td", null, ctx.field({ path: `presetMatrix.${g}${t}`, type: "select", options: presetOpts, ariaLabel: `Preset for group ${g} tier ${t}`, cls: "field-tight" })))))));
+        [[1, "Tier 1 · big influencer"], [2, "Tier 2 · smart account"]].map(([t, label]) => h("tr", null,
+          h("th", { scope: "row" }, label),
+          h("td", null, ctx.field({ path: `presetMatrix.B${t}`, type: "select", options: presetOpts, ariaLabel: `Preset for tier ${t}`, cls: "field-tight" }))))));
     const qualityBox = h("div", { class: "stack" },
       ctx.field({ path: "quality.modelCheck", type: "toggle", label: "A second model call checks every comment", hint: "Catches generic, off-topic or wrong-language replies before you see them." }),
       h("div", { class: "form-row" },
@@ -174,7 +175,7 @@ export default {
         ctx.field({ path: "quality.maxChars", type: "number", label: "Max length", min: 20, max: 280, hint: "X allows 280" })));
 
     const presetsSec = section({ title: "Presets", hint: "Three model + effort combinations to choose from." }, presetsHost);
-    const matrixSec = section({ title: "Preset per group and tier", hint: "Which preset each kind of target gets. A per-target override wins (Targets tab)." }, matrix);
+    const matrixSec = section({ title: "Preset per tier", hint: "Which preset each kind of target gets. A per-target override wins (Targets tab)." }, matrix);
 
     // ------------------------------------------------ estimator + budget
     const estPerDay = h("input", { type: "number", class: "input", min: "0", max: "500", step: "1", id: "estPerDay", value: String(dailyLimit(ctx.settings, ctx.state) || 10) });

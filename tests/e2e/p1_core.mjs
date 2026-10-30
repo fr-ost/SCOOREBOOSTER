@@ -1,37 +1,68 @@
-// Phase 1 end-to-end: targets -> new post detection (X List) -> generation with real usage/cost ->
-// review queue -> approve -> human-like posting through the page -> history. Plus core auto-stops.
+// Phase 1 end-to-end: targets -> follow check (followers list + profiles) -> new post detection (X List) ->
+// generation with real usage/cost -> review queue -> approve -> human-like posting through the page ->
+// history -> follow-back stops comments. Plus core auto-stops.
 import { boot, setup, assert, log, sleep, passCount } from "./harness.mjs";
 
 const H = await boot();
 const { M } = H;
 let failed = false;
+// Run checks until the follow status of these targets is known (new targets are checked before any comment).
+async function untilChecked(handles) {
+  return H.waitFor(async () => {
+    const t = await H.store("sx.targets");
+    if (handles.every((h) => t[h] && t[h].rel.followsYou != null)) return t;
+    await H.runNow();
+    await sleep(2500);
+    return null;
+  }, "follow check of " + handles.join(", "), 150000, 1000);
+}
 try {
   // ---- seed X ----
   M.addUser("bigbob", { name: "Big Bob", verified: true, followers: 250000, bio: "Founder. Writing about distribution and growth." });
-  M.addUser("alice", { name: "Alice", followsMe: true, followers: 8200, bio: "PM at a fintech. Onboarding nerd." });
+  M.addUser("alice", { name: "Alice", followers: 8200, bio: "PM at a fintech. Onboarding nerd." });
   M.addUser("carol", { name: "Carol", followers: 300 });
+  // Already follow me: frank shows up in my followers list, gina only on her profile ("Follows you").
+  M.addUser("frank", { name: "Frank", followsMe: true, followers: 50000 });
+  M.addUser("gina", { name: "Gina", followsMe: true, followers: 70000 });
+  M.addUser("fan1", { followsMe: true });
+  M.followers["0x_nation"] = ["fan1", "frank"];
   const pBob = M.addPost("bigbob", "Most teams ship features. The best teams ship distribution. Building is no longer the hard part.", 5);
   const pAlice = M.addPost("alice", "Spent the weekend rewriting our onboarding flow and activation went from 31% to 44%. Small copy changes did most of it.", 4);
   M.addPost("bigbob", "Old thought from this morning about pricing pages and trust.", 90);
   const pGive = M.addPost("alice", "Giveaway! RT & follow to win 100 USDC, winners announced Friday", 3);
   M.addPost("carol", "Random post from someone who is not a target at all today", 2);
+  const pFrank = M.addPost("frank", "Shipping a new rollup explorer today, feedback welcome from anyone who builds on L2s.", 3);
+  const pGina = M.addPost("gina", "Thread on why most token unlock schedules are designed backwards and what to do instead.", 3);
 
   await setup(H, { learning: { abTesting: false } }); // tone defaults are checked below
   let r = await H.msg("start");
   assert(r && r.ok === false && /target/i.test(r.error), "start refuses without targets: " + (r && r.error));
   r = await H.msg("targetsUpsert", { rows: ["@bigbob"], defaults: { group: "B", tier: 1 } });
   assert(r.ok && r.added === 1, "added bigbob as B/T1");
-  r = await H.msg("targetsImport", { text: "handle,group,tier\nalice,A,2\n0x_nation,B,1\n", defaults: { group: "B", tier: 2 } });
-  assert(r.ok && r.added === 1, "imported alice from CSV and skipped own handle (added " + r.added + ")");
-  const targets = await H.store("sx.targets");
-  assert(targets.alice.group === "A" && targets.alice.tier === 2 && targets.bigbob.tier === 1, "groups/tiers stored");
+  r = await H.msg("targetsImport", { text: "handle,group,tier\nalice,A,2\n0x_nation,B,1\nfrank,B,1\ngina,B,1\n", defaults: { tier: 2 } });
+  assert(r.ok && r.added === 3, "imported alice, frank, gina from CSV and skipped own handle (added " + r.added + ")");
+  let targets = await H.store("sx.targets");
+  assert(targets.alice.tier === 2 && targets.bigbob.tier === 1, "tiers stored");
+  assert(["alice", "bigbob", "frank", "gina"].every((h) => targets[h].rel.followsYou === null), "follow status unknown until checked (a group column is ignored)");
 
   r = await H.msg("start");
-  assert(r.ok, "engine started");
+  assert(r.ok, "engine started with targets that are not checked yet");
   let st = await H.store("sx.state");
   assert(st.status === "running" && st.firstStartedAt, "state running with firstStartedAt");
   const status = await H.msg("getStatus");
   assert(status.ok && status.status.effectiveMode === "review", "Review mode is the default");
+  assert(status.status.follow && status.status.follow.checking === 4, "status shows 4 targets waiting for the follow check");
+
+  // ---- follow check: followers list scan + profile badges ----
+  targets = await untilChecked(["bigbob", "alice", "frank", "gina"]);
+  assert(targets.frank.rel.followsYou === true && !targets.frank.rel.followedBackAt && targets.frank.group === "A", "frank found in my followers list -> follows me (never commented on)");
+  assert(targets.gina.rel.followsYou === true && targets.gina.group === "A", "gina's profile shows 'Follows you' -> follows me");
+  assert(targets.bigbob.rel.followsYou === false && targets.alice.rel.followsYou === false && targets.alice.group === "B", "bigbob and alice don't follow me -> comments allowed");
+  st = await H.store("sx.state");
+  assert(st.followersScanAt && st.followBadgeOkAt, "followers list was scanned and the 'Follows you' badge verified");
+  const fst = (await H.msg("getStatus")).status.follow;
+  assert(fst.active === 2 && fst.follows === 2 && fst.checking === 0, "status: 2 not following, 2 follow you (" + JSON.stringify(fst) + ")");
+  await H.runNow();
 
   // ---- detection + generation ----
   const hist = await H.waitFor(async () => {
@@ -46,12 +77,14 @@ try {
   assert(recAlice && recAlice.status === "pending_review", "alice post generated into review queue");
   assert(recGive && recGive.status === "skipped" && /giveaway/i.test(recGive.reason), "giveaway skipped by filter: " + (recGive && recGive.reason));
   assert(!hist.find((x) => x.target === "carol"), "non-target ignored");
+  assert(!hist.find((x) => x.postId === pFrank.id || x.postId === pGina.id), "accounts that follow me are never commented on");
   assert(!hist.find((x) => /Old thought/.test(x.postText || "")), "old post ignored");
   assert(recBob.modelName === "gpt-6.1-sol" && recBob.effort === "high", "B/T1 used High preset (" + recBob.modelName + " " + recBob.effort + ")");
-  assert(recAlice.modelName === "gpt-6-luna" && recAlice.effort === "low", "A/T2 used Cheap preset (" + recAlice.modelName + " " + recAlice.effort + ")");
+  assert(recAlice.modelName === "gpt-6.1-terra" && recAlice.effort === "medium", "tier 2 used the Balanced preset (" + recAlice.modelName + " " + recAlice.effort + ")");
   assert(recBob.calls.length >= 2 && recBob.calls.some((c) => c.kind === "check"), "generation + quality check calls recorded");
   assert(recBob.tokens.input === 1200 * recBob.calls.length && recBob.tokens.reasoning > 0 && recBob.cost > 0, `real usage summed (in ${recBob.tokens.input}, reasoning ${recBob.tokens.reasoning}, $${recBob.cost})`);
-  assert(recBob.tone === "insightful" && recAlice.tone === "friendly", "group default tones applied");
+  assert(recBob.tone === "main" && recAlice.tone === "main" && /Insightful and sharp/.test(recBob.toneText), "the Tone prompt is used");
+  assert(!JSON.stringify(M.openai.calls.find((c) => !c.isCheck).body.input).includes("owner_style_examples"), "no pasted comment samples in the prompt");
   const gen = M.openai.calls.find((c) => !c.isCheck);
   assert(gen.body.store === false && gen.body.text && gen.body.text.format && gen.body.text.format.type === "json_schema", "Responses API body: store:false + json_schema");
   assert(/untrusted/i.test(gen.body.instructions) && /<<<DATA/.test(gen.body.input[0].content[0].text), "prompt treats post as untrusted data");
@@ -72,6 +105,7 @@ try {
   assert(st.nextCommentAt > Date.now() + 60000, "random gap scheduled before the next comment");
   const t2 = await H.store("sx.targets");
   assert(t2.bigbob.stats.comments === 1 && t2.bigbob.stats.lastCommentAt, "target stats updated");
+  assert(t2.bigbob.stats.firstCommentAt === t2.bigbob.stats.lastCommentAt, "first comment starts the follow-back window");
   assert(t2.bigbob.recentPosts && t2.bigbob.recentPosts.length >= 1, "target recent posts cached for prompts");
 
   // ---- gap respected, then posts ----
@@ -95,7 +129,8 @@ try {
   // ---- regenerate + skip on a new target ----
   M.addUser("dave", { name: "Dave", followers: 40000 });
   const pDave = M.addPost("dave", "Hot take: most dashboards are vanity. The metric that matters is weekly active teams.", 3);
-  await H.msg("targetsUpsert", { rows: ["dave"], defaults: { group: "B", tier: 2 } });
+  await H.msg("targetsUpsert", { rows: ["dave"], defaults: { tier: 2 } });
+  await untilChecked(["dave"]);
   await H.runNow();
   const recDave = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pDave.id && x.status === "pending_review"), "dave pending", 90000);
   const before = recDave.comment;
@@ -103,6 +138,25 @@ try {
   assert(r.ok && r.record.comment && r.record.comment !== before && r.record.calls.length > recDave.calls.length, "regenerate replaced the comment and appended calls/cost");
   r = await H.msg("reviewAction", { id: recDave.id, action: "skip" });
   assert(r.ok && r.record.status === "skipped", "skip works");
+
+  // ---- follow-back: dave follows me -> his waiting comment is dropped and he gets no more comments ----
+  const pDave2 = M.addPost("dave", "Second take: retention curves tell you more than any dashboard ever will.", 2);
+  await H.runNow();
+  const recDave2 = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pDave2.id && x.status === "pending_review"), "dave second comment pending", 90000);
+  M.users.dave.followsMe = true;
+  M.followers["0x_nation"] = ["dave", ...M.followers["0x_nation"]]; // newest follower first
+  await H.patchState({ followersScanAt: 1 }); // routine followers scan is due
+  await H.runNow();
+  const tDave = await H.waitFor(async () => { const t = (await H.store("sx.targets")).dave; return t.rel.followsYou === true ? t : null; }, "dave follow-back detected", 90000);
+  assert(tDave.rel.followedBackAt && tDave.group === "A", "follow-back detected from the newest followers");
+  await H.runNow();
+  const dropped = await H.waitFor(async () => { const x = (await H.history()).find((r) => r.id === recDave2.id); return x.status === "skipped" ? x : null; }, "dave's waiting comment dropped", 60000);
+  assert(/follows you/i.test(dropped.reason), "waiting comment dropped: " + dropped.reason);
+  const pDave3 = M.addPost("dave", "Third post today about onboarding emails that actually get read.", 2);
+  await H.runNow();
+  await sleep(8000);
+  assert(!(await H.history()).find((x) => x.postId === pDave3.id), "no comments after the follow-back");
+  assert(/followed you back/.test(JSON.stringify(await H.store("sx.logs"))), "follow-back logged");
 
   // ---- auto-stop: captcha ----
   M.pageMode = "captcha";
@@ -133,8 +187,10 @@ try {
   M.openai.mode = "401";
   M.addUser("erin", { followers: 9000 });
   M.addPost("erin", "Shipping a new pricing page tomorrow with usage based tiers for small teams.", 2);
-  await H.msg("targetsUpsert", { rows: ["erin"], defaults: { group: "B", tier: 2 } });
-  await H.msg("resume"); await H.runNow();
+  await H.msg("targetsUpsert", { rows: ["erin"], defaults: { tier: 2 } });
+  await H.msg("resume");
+  await untilChecked(["erin"]);
+  await H.runNow();
   st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" && s.stopReason === "openai_auth" ? s : null; }, "stop on 401", 60000);
   assert(st.stopReason === "openai_auth", "AUTO-STOP when the OpenAI key is rejected");
   const logs = JSON.stringify(await H.store("sx.logs"));

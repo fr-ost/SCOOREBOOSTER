@@ -87,6 +87,35 @@ export async function boot({ port = 8443, viewport = { width: 1280, height: 900 
     await H.patchState({ lastWatchAt: 0 });
     return H.msg("runNow");
   };
+  // patches: { handle: { field: value, rel: {...partial}, stats: {...partial} } } written straight to storage
+  // while the engine is idle (no eval: extension pages forbid it).
+  H.patchTargets = async (patches) => {
+    await H.waitFor(async () => { const s = await H.store("sx.state"); return !s.job || s.job.leaseUntil < Date.now(); }, "idle engine", 180000, 400).catch(() => {});
+    return (await H.page()).evaluate(async (ps) => {
+      const r = await chrome.storage.local.get("sx.targets");
+      const all = r["sx.targets"] || {};
+      for (const [h, p] of Object.entries(ps)) {
+        if (!all[h]) continue;
+        for (const [k, v] of Object.entries(p)) all[h][k] = k === "rel" || k === "stats" ? { ...(all[h][k] || {}), ...v } : v;
+      }
+      await chrome.storage.local.set({ "sx.targets": all });
+    }, patches);
+  };
+  // Shortcut for tests that are not about follow tracking: mark targets as checked ("does not follow you")
+  // and the "Follows you" badge as verified, so they can be commented on right away.
+  H.markNotFollowing = async (handles) => {
+    const now = Date.now();
+    await H.patchTargets(Object.fromEntries(handles.map((h) => [h, { group: "B", rel: { followsYou: false, checkedAt: now } }])));
+    await H.patchState({ followBadgeOkAt: now, followersScanAt: now });
+  };
+  // Run checks until the follow status of these targets is known (the real follow check).
+  H.untilChecked = async (handles, timeoutMs = 150000) => H.waitFor(async () => {
+    const t = await H.store("sx.targets");
+    if (handles.every((h) => t[h] && t[h].rel.followsYou != null)) return t;
+    await H.runNow();
+    await sleep(2500);
+    return null;
+  }, "follow check of " + handles.join(", "), timeoutMs, 1000);
   H.badge = async () => H.sw.evaluate(() => chrome.action.getBadgeText({}));
   H.waitFor = async (fn, what, timeoutMs = 60000, every = 500) => {
     const until = Date.now() + timeoutMs;

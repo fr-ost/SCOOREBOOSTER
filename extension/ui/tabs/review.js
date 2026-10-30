@@ -5,7 +5,7 @@ import { K, HS, HARD, MODE } from "../../lib/constants.js";
 import { weightedLength } from "../../lib/quality.js";
 import * as history from "../../lib/history.js";
 import { num } from "../../lib/util.js";
-import { h, clear, section, btn, busy, toast, icon, groupBadge, tierBadge, statusBadge, badge, xLink, link, confirmDialog, emptyState, fmtUsd, fmtCount, fmtAgo, fmtTime, fmtIn, fmtDateTime, truncate, debounce, uidShort, add } from "../components.js";
+import { h, clear, section, btn, busy, toast, icon, tierBadge, followBadge, statusBadge, badge, xLink, link, confirmDialog, emptyState, fmtUsd, fmtCount, fmtAgo, fmtTime, fmtIn, fmtDateTime, truncate, debounce, uidShort, add } from "../components.js";
 import { toneLabel } from "./targets.js";
 
 export default {
@@ -154,7 +154,7 @@ export default {
           h("header", { class: "review-card-head" },
             h("div", { class: "avatar", "aria-hidden": "true" }, (rec.target || "?").charAt(0).toUpperCase()),
             h("div", { class: "review-who" },
-              h("div", { class: "review-who-line" }, xLink(rec.target), groupBadge(rec.group || t.group), tierBadge(rec.tier || t.tier), kind === "waiting" ? statusBadge(rec.status) : null),
+              h("div", { class: "review-who-line" }, xLink(rec.target), tierBadge(rec.tier || t.tier), t.handle ? followBadge(t, s, { compact: true }) : null, kind === "waiting" ? statusBadge(rec.status) : null),
               rec.targetName || t.name || bio ? h("div", { class: "review-bio", title: bio || "" }, [rec.targetName || t.name, bio ? truncate(bio, 120) : null].filter(Boolean).join(" · ")) : null)),
           h("div", { class: "post-meta" },
             rec.postUrl ? link(rec.postUrl, h("span", null, "Open post ", icon("external")), { cls: "post-link" }) : h("span", null, "Post"),

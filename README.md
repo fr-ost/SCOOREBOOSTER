@@ -30,22 +30,23 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
 
 ## 2. First-time setup (5 minutes)
 
-1. **Models & Costs > OpenAI API key**: paste your key and press **Save**, then **Test**. The key is stored only in
-   `chrome.storage.local`, is shown masked, and is never logged or exported.
+1. **Models & Costs > OpenAI API key**: paste your key and press **Save**, then **Test**. The key is stored only
+   inside the extension (its own IndexedDB, which pages on x.com cannot read), is shown masked, and is never
+   logged or exported.
 2. **Settings > Account**: your handle is preset to `0x_nation`. ScoreX stops if a different account is logged in.
 3. **Settings > Watching for new posts**: choose how new posts are found:
    * **X List (recommended)**: create a *private* X List with all your targets and paste its URL. One page view
      then shows every target's newest posts, which is the lightest and fastest way to watch many accounts.
    * **Batched Latest search** (default, no setup): `(from:a OR from:b ...) -filter:replies`, 12 accounts per search.
    * **Profile rotation**: visits a few profiles per check. Fine for a handful of targets only.
-4. **Targets**: paste handles (or import CSV / JSON / TXT) and choose **Group** and **Tier**:
-   * **Group A**: accounts that already follow you (keep the relationship warm, friendly tone).
-   * **Group B**: big or smart accounts that don't follow you yet (get noticed, sharp/insightful tone).
-   * **Tier 1**: big influencers. **Tier 2**: smart accounts.
-   * Or use **Find new targets** (your followers, followers/following of a big account, people search, or
-     accounts that several smart accounts follow). Candidates are ranked and bot-filtered; you pick which to add.
-5. **Tone & Prompts > Style examples**: paste 5-10 of your best past replies. This matters more than anything
-   else for sounding like you.
+4. **Targets**: paste handles or profile links (or import CSV / JSON / TXT) and choose the **Tier**
+   (**Tier 1**: big influencers, **Tier 2**: smart accounts). You don't have to sort out who follows you:
+   ScoreX checks every account first and **only comments on accounts that don't follow you** (see
+   [Follow tracking](#follow-tracking)). Or use **Find new targets** (followers/following of a big account,
+   people search, or accounts that several smart accounts follow). Candidates are ranked and bot-filtered;
+   you pick which to add.
+5. **Tone & Prompts > Tone prompt**: describe in your own words how your replies should sound (voice,
+   attitude, wording, length, casing). It is sent with every comment. A sensible default is filled in.
 6. **Models & Costs > Monthly budget**: set a limit (for example $10). ScoreX stops when it is reached.
 7. Press **Start** (header or popup). It starts in **Review mode**; switch to **Full auto** on the Dashboard
    whenever you want.
@@ -57,14 +58,16 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
    watch page (X List / Latest search / profiles) in the pinned X tab
      -> new original post by a target, 2-20 min old?
      -> skip rules (ads, link-only, political/controversial, giveaways, "gm", language...)
-     -> limits (daily ramp, group limit, 1 per target per day, 3 per week, budget)
-     -> OpenAI: post + bio + 2-3 recent posts + your style examples + tone -> reply (JSON)
+     -> only targets that don't follow you (new targets are checked first)
+     -> limits (daily ramp, 1 per target per day, 3 per week, budget)
+     -> OpenAI: post + bio + 2-3 recent posts + your Tone prompt -> reply (JSON)
      -> rule check + quality model check (generic? off-topic? repeated vs your last 50?) -> regenerate once or skip
    Review mode: reply waits in the Review Queue (edit / approve / regenerate / skip)
    Full auto:   reply is queued with a human delay
      -> open the post, "read" it, scroll, optional like, type at a human speed, verify, submit, confirm
      -> random 3-12 min gap (and longer breaks) before the next comment
- background when idle: profile refreshes, engagement + follow-back checks, optional cleanup
+ background when idle: follow checks (your followers list + profiles), follow-backs, removal after
+ 14 days without a follow-back, engagement checks, optional cleanup
 ```
 
 ## 4. Dashboard guide
@@ -75,19 +78,19 @@ everything else is in collapsed **Advanced** sections (their open/closed state i
 | Tab | What you do there |
 |---|---|
 | **Dashboard** | Status (Running / Paused / Stopped with the reason), today's counters vs limits, cost today / this month, Review / Full auto switch, recent activity, "Run a check now". A red banner appears after an auto-stop. |
-| **Targets** | Add / import / export targets, edit group, tier, tone and preset per target, enable/disable, refresh profiles. Discovery and candidates. Rank columns: **ScoreX rank** (own formula) and **Sorsa Score** (if enabled). |
+| **Targets** | Add / import / export targets, follow status of every account (checking / not following - day N of 14 / follows you / followed back), follow-back rules, blacklist, tier, tone and preset per target, enable/disable, re-check. Discovery and candidates. Rank columns: **ScoreX rank** (own formula) and **Sorsa Score** (if enabled). |
 | **Review Queue** | Every generated reply with the post, the author, the model, the cost and quality notes. Edit, Approve, Regenerate (costs another call), Skip. Approved replies post one by one in their own time slots. |
-| **Models & Costs** | API key, model list with **editable model names** and **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort Low / Medium / High, fallback models, preset per group x tier, quality checker, cost estimator, budget, totals per model / day / week / month, performance per model and tone. |
-| **Tone & Prompts** | Default tone per group (witty, insightful, bold, friendly, expert or your own text), editable tone descriptions, custom tones, style examples, extra rules, prompt preview, A/B testing settings, results and suggestions. |
+| **Models & Costs** | API key, model list with **editable model names** and **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort Low / Medium / High, fallback models, preset per tier, quality checker, cost estimator, budget, totals per model / day / week / month, performance per model and tone. |
+| **Tone & Prompts** | Your **Tone prompt** (the one input that sets how replies sound) and a prompt preview. Advanced: extra rules, learning from your best-performing replies, built-in and custom tones (per-target overrides), A/B testing settings, results and suggestions. |
 | **Safety** | Ramp limits, gaps and breaks, active hours and time zone (default 10:00-00:00 Asia/Dhaka), per-target caps, like + comment combo, typing speed, skip rules, failure limit, the list of auto-stop triggers. |
-| **History** | Every reply attempt: date, target, group, tier, post link, model, reasoning level, tokens, cost, comment, status (posted / skipped / failed + reason) and results (liked, reply likes, replies, author replied, followed back). Filters, totals, CSV export. |
+| **History** | Every reply attempt: date, target, tier, post link, model, reasoning level, tokens, cost, comment, status (posted / skipped / failed + reason) and results (liked, reply likes, replies, author replied, followed back). Filters, totals, CSV export. |
 | **Settings** | Account, watch strategy, comment window (default 2-20 min after a post), review expiry, learning, cleanup, Sorsa, worker tab mode, selector overrides, theme, export / import JSON, history CSV, reset. |
 
 ### Models and prices
 Model names are free text: when OpenAI releases a new model, type its name into a model row (or add a row) and
 update its prices. Defaults (late October 2026): `gpt-6-luna` (fast/cheap), `gpt-6.1-terra` (balanced),
 `gpt-6.1-sol` (high quality). **Check the prices on openai.com/api/pricing and update them**; the cost numbers
-are only as good as this table. Defaults per group x tier: A1 Balanced, A2 Cheap, B1 High quality, B2 Balanced.
+are only as good as this table. Defaults per tier: tier 1 High quality, tier 2 Balanced.
 If a model errors, times out or hits a rate limit, the fallback model is used once.
 
 ### Cost
@@ -110,7 +113,6 @@ The estimator in Models & Costs uses your own average token usage once you have 
 | Rule | Default | Hard cap |
 |---|---|---|
 | Comments per 24 hours (rolling): week 1 / week 2 / week 3+ | 10 / 20 / 30 | 30 |
-| Group limits per 24 hours | A 10, B 20 (inside the total) | 30 |
 | Gap between comments | random 3-12 min | never below 2 min |
 | Long breaks | after every 3-6 comments, 20-60 min | - |
 | Active hours | 10:00-00:00 Asia/Dhaka | - |
@@ -147,6 +149,32 @@ no X API, no other accounts.
 killed at any time. After a Chrome restart a running engine resumes by itself (a safety stop stays stopped).
 A closed X tab is reopened (pinned, in the background).
 
+<a id="follow-tracking"></a>
+### Follow tracking (who gets comments)
+
+ScoreX only comments on accounts that **don't follow you**. Import a list of 100 smart accounts and the 10 or
+20 that already follow you are found and left alone:
+
+1. Every new target starts as **Checking** and gets no comments until it is checked.
+2. ScoreX reads your own followers list (`x.com/0x_nation/followers`, newest first): every account there with
+   X's "Follows you" badge follows you. After new targets were added it reads deeper; later it reads your
+   newest followers every 2 hours, which is where follow-backs show up.
+3. Targets that were not in that list get a profile visit (the "Follows you" badge next to their name), a
+   few per check, so 100 new targets take about an hour to check.
+4. **Follows you** -> never commented on. **Not following** -> comments start.
+5. **Followed back** (seen in your followers list, or on a profile re-check every 3 days) -> no more comments.
+   Replies still waiting in the queue for that account are dropped. You get a notification.
+6. **14 days** after the first comment to an account, if it still doesn't follow you, ScoreX checks the
+   profile one last time and then **removes it from your targets and adds it to the blacklist**. Blacklisted
+   accounts are never added again by import, paste or discovery until you remove them from the blacklist
+   (Targets > Blacklist). The number of days, automatic removal and the blacklist are switches on the
+   Targets tab.
+
+Safety check: if X shows your followers list without any "Follows you" badge, the badge markup has changed
+and every account would look like a non-follower, so ScoreX stops ("X page changed") instead of commenting.
+"Doesn't follow you" is only trusted while the badge was seen working in the last 3 days. If an account
+that followed you unfollows later, it is treated as not following again (after two checks in a row).
+
 ## 6. Scores: what ScoreX uses (Kaito / Sorsa)
 
 * **Kaito**: not available. Kaito shut down Yaps and its leaderboards on 2026-01-15 after X changed its API
@@ -166,25 +194,29 @@ A closed X tab is reopened (pinned, in the background).
 
 * About 24 hours after each reply (and again after about 72 hours) ScoreX opens it and records likes, replies,
   and whether the author answered.
-* Commented targets that don't follow you are re-checked daily. A follow-back is credited to your comments
-  from the previous 14 days. With the default settings the account then moves to group A, and if it keeps
-  responding it is raised to tier 1 with a higher priority.
+* Follow-backs found by [follow tracking](#follow-tracking) are credited to your comments from the previous
+  14 days (the account gets no more comments from then on), and a responsive account is raised to tier 1
+  with a higher priority.
 * Targets that never respond after N comments (default 6) cool down for 10 days.
-* **A/B testing**: tones are tested per group, by default friendly / witty / insightful for group A and
-  insightful / bold / expert for group B (editable; presets can be tested too). Variants are chosen with
-  Thompson sampling, starting with a lean towards your default tone, plus an exploration share (20%).
-  Tone & Prompts shows results and suggests the best tone and model per group once each combination has
+* **A/B testing**: your Tone prompt is always the default. Pick extra tones (and/or presets) to test against
+  it in Tone & Prompts (none by default, so every reply uses your Tone prompt until you do). Variants are
+  chosen with Thompson sampling, starting with a lean towards your Tone prompt, plus an exploration share
+  (20%). Tone & Prompts shows results and suggests the best tone and model once each combination has
   enough checked replies. A tone or preset set on a single target is never overridden by A/B tests.
 * **Cleanup** (default **OFF**): unfollows targets you follow that did not follow back within 7+ days. It has its
   own daily limit, a whitelist and tier-1 protection, and it re-checks each profile right before unfollowing.
-  Only accounts in your target list are ever considered.
+  Only accounts in your target list are ever considered (an account removed after 14 days without a
+  follow-back is no longer in the list, so with cleanup on keep its days below the give-up days; the
+  defaults are 7 and 14).
 
 ## 8. Testing each phase in Chrome
 
 Load the extension (section 1), add your API key, then:
 
 **Phase 1: core**
-1. Add 2-3 targets that post often (Group B / Tier 2), set the watch strategy, press **Start**.
+1. Add 2-3 targets that post often and don't follow you (Tier 2), plus one account that does follow you, set
+   the watch strategy, press **Start**. Within a minute or two the Targets tab shows **Not following** for the
+   first ones and **Follows you** for the other; only the first ones ever get replies.
 2. Within a few minutes of one of them posting, a reply should appear in **Review Queue**. Check the post link,
    the model and the cost.
 3. Edit it and **Approve**. Watch the pinned X tab: it opens the post, types the reply and posts it.
@@ -200,6 +232,8 @@ Load the extension (section 1), add your API key, then:
 
 **Phase 3: learning and cleanup**
 1. A day after posting, **History** fills in the result columns (reply likes, replies, author replied).
+   When an account you commented on follows you, the Targets tab shows **Followed back** and it gets no more
+   replies; an account with no follow-back 14 days after the first reply moves to **Targets > Blacklist**.
 2. **Tone & Prompts > A/B testing** shows arms and, once there is enough data, suggestions.
 3. **Settings > Cleanup**: leave it off unless you want it. Use **Preview** first to see who would be unfollowed.
 

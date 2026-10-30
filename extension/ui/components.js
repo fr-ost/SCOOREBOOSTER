@@ -4,6 +4,7 @@
 
 import { STATUS, STOP_LABEL, HS } from "../lib/constants.js";
 import { fmtUsd, fmtCount, fmtDuration, truncate, num } from "../lib/util.js";
+import { FS, FS_LABEL, followStatus, followDays } from "../lib/targets.js";
 
 export { fmtUsd, fmtCount, fmtDuration, truncate };
 
@@ -111,6 +112,7 @@ function fmt(ts, opts) {
 }
 export const fmtTime = (ts) => fmt(ts, { hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 export const fmtDate = (ts) => fmt(ts, { year: "numeric", month: "short", day: "numeric" });
+export const fmtDay = (ts) => fmt(ts, { month: "short", day: "numeric" });
 export const fmtDateTime = (ts) => fmt(ts, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
 export function fmtAgo(ts, nowTs = Date.now()) {
   if (!ts) return "-";
@@ -242,18 +244,35 @@ export function confirmDialog(message, { title = "Please confirm", okLabel = "OK
 
 // ---------------------------------------------------------------- badges & pills
 
-export const GROUP_INFO = {
-  A: { label: "Group A", short: "A", desc: "Follows you - keep warm" },
-  B: { label: "Group B", short: "B", desc: "Does not follow you - get noticed" },
-};
 export const TIER_INFO = {
   1: { label: "Tier 1", short: "T1", desc: "Big influencer" },
   2: { label: "Tier 2", short: "T2", desc: "Smart account" },
 };
-export function groupBadge(g) {
-  const k = g === "A" ? "A" : g === "B" ? "B" : null;
-  if (!k) return h("span", { class: "badge" }, "-");
-  return h("span", { class: ["badge", "badge-group-" + k.toLowerCase()], title: `${GROUP_INFO[k].label}: ${GROUP_INFO[k].desc}` }, k);
+// Follow status of a target (lib/targets.js followStatus): a small coloured square + the word, like the
+// history status. Not following shows "day N/14" once ScoreX has commented (the give-up countdown).
+export const FS_COLOR = { [FS.CHECKING]: "grey", [FS.ACTIVE]: "ink", [FS.FOLLOWS]: "green-o", [FS.FOLLOWED_BACK]: "green" };
+export function followBadge(t, settings, { compact = false } = {}) {
+  if (!t) return h("span", { class: "muted" }, "-");
+  const rel = t.rel || {};
+  if (rel.gone) return h("span", { class: ["hs", "hs-red", "fs"], title: "Profile not found on X (renamed, suspended or deleted). The target was turned off." }, "Not found");
+  const st = followStatus(t);
+  const f = (settings && settings.follow) || {};
+  const giveUp = f.giveUpDays || 14;
+  const kids = [FS_LABEL[st] || st];
+  let title = "";
+  if (st === FS.CHECKING) title = "Checked before any comment: ScoreX looks for the \"Follows you\" badge first.";
+  else if (st === FS.FOLLOWS) title = "Already follows you - never commented on.";
+  else if (st === FS.FOLLOWED_BACK) {
+    title = `Followed you back${rel.followedBackAt ? " on " + fmtDate(rel.followedBackAt) : ""}. Comments stopped.`;
+    if (rel.followedBackAt && !compact) kids.push(h("span", { class: "fs-extra" }, fmtDay(rel.followedBackAt)));
+  } else if (st === FS.ACTIVE) {
+    const days = followDays(t);
+    title = "Does not follow you - ScoreX comments on this account." + (f.autoRemove === false
+      ? " Automatic removal is off."
+      : ` Removed after ${giveUp} days of comments without a follow-back${f.blacklist === false ? "" : " (and blacklisted)"}.`);
+    if (days != null) kids.push(h("span", { class: ["fs-extra", "fs-days", f.autoRemove !== false && giveUp - days <= 2 && "is-near"] }, `day ${Math.min(days, giveUp)}/${giveUp}`));
+  }
+  return h("span", { class: ["hs", "hs-" + FS_COLOR[st], "fs"], title, dataset: { fs: st } }, kids);
 }
 export function tierBadge(t) {
   const k = Number(t) === 1 ? 1 : Number(t) === 2 ? 2 : null;

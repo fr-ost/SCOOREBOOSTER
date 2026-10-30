@@ -1,14 +1,15 @@
 // Dashboard tab ("control room"): status strip (status, mode switch, 24h quota), setup checklist,
-// key numbers, a preview of the review queue with quick Approve/Skip, and the recent activity timeline.
+// key numbers (follow tracking: commenting on / checking / followed back / follow you, then generation,
+// likes and costs), a preview of the review queue with quick Approve/Skip, and the recent activity timeline.
 
 import { K, MODE, STATUS, HS, HARD } from "../../lib/constants.js";
-import { getSecrets, setSecrets } from "../../lib/store.js";
+import { getSecrets, setSecrets, DEFAULT_TONE_PROMPT } from "../../lib/store.js";
 import { budgetStatus } from "../../lib/costs.js";
-import { dailyLimit, generationLimit, groupLimit, likeLimit, rampStage, activeHours } from "../../lib/safety.js";
+import { dailyLimit, generationLimit, likeLimit, rampStage, activeHours } from "../../lib/safety.js";
 import { weightedLength } from "../../lib/quality.js";
 import * as history from "../../lib/history.js";
 import { dayKey, num } from "../../lib/util.js";
-import { h, clear, btn, busy, toast, icon, statusInfo, segmented, quotaBar, panel, fig, section, maskKey, groupBadge, tierBadge, xLink, fmtUsd, fmtTime, fmtDateTime, fmtAgo, fmtIn, truncate, add, fill } from "../components.js";
+import { h, clear, btn, busy, toast, icon, statusInfo, segmented, quotaBar, panel, fig, section, maskKey, tierBadge, xLink, fmtUsd, fmtTime, fmtDateTime, fmtAgo, fmtIn, truncate, add, fill } from "../components.js";
 
 const LS_DISMISSED = "sx.setup.dismissed";
 const LS_HANDLE = "sx.setup.handle"; // the handle the user confirmed in the checklist
@@ -135,9 +136,13 @@ export default {
       if (b.reached) items.push([`Monthly budget reached (${fmtUsd(b.spent)} of ${fmtUsd(b.limit)}). Generation waits for next month or a higher budget.`, "#models", "Budget"]);
       else if (b.warn) items.push([`Monthly spend is at ${Math.round(b.pct)}% of your budget.`, "#models", "Budget"]);
       const st = ctx.status;
-      if (st && st.activeTargetCount === 0 && list.some((x) => x.enabled !== false)) items.push(["No active targets: check that groups A and B are on (Safety, Advanced).", "#safety", "Open Safety"]);
-      fill(notices, items.map(([text, href, label]) =>
-        h("div", { class: "banner banner-warn" }, icon("alert"), h("span", { class: "banner-text" }, text), h("a", { href, class: "btn btn-sm" }, label))));
+      const fo = st && st.follow;
+      if (fo && st.activeTargetCount === 0 && list.some((x) => x.enabled !== false)) {
+        if (fo.checking > 0) items.push(["Checking who follows you - comments start once accounts that don't follow you are found.", "#targets", "Open Targets", "info"]);
+        else if (fo.follows + fo.followedBack > 0) items.push(["Every target already follows you. ScoreX only comments on accounts that don't - add new targets.", "#targets", "Add targets"]);
+      }
+      fill(notices, items.map(([text, href, label, kind]) =>
+        h("div", { class: ["banner", kind === "info" ? "banner-info" : "banner-warn"], dataset: { notice: kind || "warn" } }, icon(kind === "info" ? "info" : "alert"), h("span", { class: "banner-text" }, text), h("a", { href, class: "btn btn-sm" }, label))));
       notices.hidden = !items.length;
     }
 
@@ -146,12 +151,12 @@ export default {
       const s = ctx.settings, state = ctx.state;
       const handle = String(s.account.handle || "").trim();
       const list = ctx.targetList();
-      const ex = (s.prompt.styleExamples || []).filter((x) => String(x || "").trim()).length;
+      const customTone = String(s.prompt.tone || "").trim() !== DEFAULT_TONE_PROMPT;
       return [
         { key: "key", title: "Add your OpenAI API key", hint: "Stored only in this browser. Never exported or logged.", done: hasKey, info: maskedKey },
         { key: "handle", title: "Confirm your X handle", hint: "ScoreX stops if a different account is logged in.", done: !!handle && lsGet(LS_HANDLE) === handle, info: handle },
         { key: "targets", title: "Add target accounts", hint: "The accounts ScoreX writes replies for.", done: list.length > 0, info: `${list.length} targets · ${list.filter((x) => x.enabled !== false).length} on` },
-        { key: "examples", title: "Paste 5 or more of your best comments", hint: "The model copies their length, casing and punctuation.", done: ex >= 5, info: `${ex} of 5` },
+        { key: "tone", title: "Write your Tone prompt", hint: "Describe how your replies should sound. The default works; your own voice works better.", done: customTone, info: customTone ? "Custom" : "Default" },
         { key: "start", title: "Press Start", hint: s.mode === MODE.AUTO ? "Full auto posts on its own within your limits." : "In Review mode nothing posts until you approve it.", done: !!state.firstStartedAt || state.status !== STATUS.STOPPED, info: state.firstStartedAt ? `first start ${fmtDateTime(state.firstStartedAt)}` : "running" },
       ];
     }
@@ -189,7 +194,7 @@ export default {
         return [h("span", { class: "muted small", "aria-hidden": "true" }, "@"), f, confirm];
       }
       if (step.key === "targets") return step.done ? [h("span", { class: "step-done" }, step.info)] : [h("a", { href: "#targets", class: "btn btn-sm" }, "Add targets")];
-      if (step.key === "examples") return [h("span", { class: "step-done" }, step.info), step.done ? null : h("a", { href: "#tones", class: "btn btn-sm" }, "Paste examples")];
+      if (step.key === "tone") return [h("span", { class: "step-done" }, step.info), step.done ? null : h("a", { href: "#tones", class: "btn btn-sm" }, "Edit tone")];
       if (step.key === "start") {
         if (step.done) return [h("span", { class: "step-done" }, step.info)];
         return [btn("Start", (e) => {
@@ -235,9 +240,8 @@ export default {
 
     // ------------------------------------------------ key numbers
     function drawFigs() {
-      const { s, state, t, limit } = today();
-      const gl = t.groupLimits || { A: groupLimit(s, "A", limit), B: groupLimit(s, "B", limit) };
-      const pg = t.postedGroup || {};
+      const { s, state, st, t } = today();
+      const fo = st.follow || {};
       const genLimit = t.generationLimit != null ? t.generationLimit : generationLimit(s, state);
       const likeLim = t.likeLimit != null ? t.likeLimit : likeLimit(s);
       const spend = ctx.data[K.spend];
@@ -246,8 +250,10 @@ export default {
       const monthCost = Math.max(num(b.spent), num(ctx.status && ctx.status.month && ctx.status.month.cost));
       const v = (x) => (x == null ? "-" : String(x));
       fill(figsHost, panel("figs-row",
-        fig({ label: "Group A", value: v(pg.A), of: v(gl.A), sub: "follow you" }),
-        fig({ label: "Group B", value: v(pg.B), of: v(gl.B), sub: "to win over" }),
+        fig({ label: "Commenting on", value: v(fo.active), sub: "don't follow you", href: "#targets", id: "figActive", title: "Targets that don't follow you: ScoreX comments on their posts" }),
+        fig({ label: "Checking", value: v(fo.checking), sub: "no comments yet", id: "figChecking", title: "Follow status not known yet: checked before any comment" }),
+        fig({ label: "Followed back", value: v(fo.followedBack), sub: "comments stopped", id: "figFollowedBack", cls: num(fo.followedBack) ? "is-green" : null, title: "Followed you back after ScoreX's comments" }),
+        fig({ label: "Follow you", value: v(fo.follows), sub: "never commented on", id: "figFollows", title: "Already followed you when checked" }),
         fig({ label: "Generated", value: v(t.generated), of: genLimit, sub: "24h, spend guard" }),
         fig({ label: "Likes", value: likeLim ? v(t.liked) : "Off", of: likeLim ? likeLim : null, sub: likeLim ? "like before reply" : "like combo off" }),
         fig({ label: "Skipped · failed", value: [v(t.skipped), h("span", { class: "fig-of" }, " · "), h("span", { class: num(t.failed) ? "text-red" : null }, v(t.failed))], sub: "since midnight" }),
@@ -282,7 +288,7 @@ export default {
       for (const rec of pending.slice(0, 3)) {
         const t = ctx.targets[rec.target] || {};
         pvHost.appendChild(h("article", { class: "pv", dataset: { id: rec.id } },
-          h("div", { class: "pv-head" }, xLink(rec.target), groupBadge(rec.group || t.group), tierBadge(rec.tier || t.tier), h("span", { title: fmtDateTime(rec.createdAt) }, "· " + fmtAgo(rec.createdAt))),
+          h("div", { class: "pv-head" }, xLink(rec.target), tierBadge(rec.tier || t.tier), h("span", { title: fmtDateTime(rec.createdAt) }, "· " + fmtAgo(rec.createdAt))),
           rec.postText ? h("div", { class: "pv-post", title: rec.postText }, truncate(rec.postText, 140)) : null,
           h("div", { class: "pv-comment" }, rec.comment || h("span", { class: "muted" }, "(empty)")),
           h("div", { class: "pv-actions" },

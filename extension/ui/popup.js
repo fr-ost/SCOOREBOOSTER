@@ -82,7 +82,7 @@ function render() {
       h("span", { class: "cell-label" }, "Posted · 24h"),
       h("span", { class: "p-quota-num" }, h("span", { id: "pPosted" }, posted == null ? "-" : String(posted)), h("span", { class: "fig-of" }, ` / ${limit}`))),
     quotaBar(posted || 0, limit, { label: "Comments posted in the last 24 hours" }),
-    h("span", { class: "p-quota-sub" }, `A ${num(td.postedGroup && td.postedGroup.A)} · B ${num(td.postedGroup && td.postedGroup.B)} · ${num(td.generated)} generated`));
+    h("span", { class: "p-quota-sub", id: "pQuotaSub" }, quotaSub(td, status && status.follow)));
 
   // pending review
   fill($("pPendingSlot"),
@@ -97,6 +97,17 @@ function render() {
   fill($("pCosts"),
     fig({ label: "Cost today", value: fmtUsd(todayCost) }),
     fig({ label: "This month", value: fmtUsd(b.spent), of: b.limit ? fmtUsd(b.limit, 0) : null, cls: b.reached ? "is-red" : b.warn ? "is-amber" : null, title: b.limit ? `${Math.round(b.pct)}% of budget` : "No monthly budget set" }));
+}
+
+// "12 generated · 30 commenting · 2 checking · 4 followed back" (follow counts from getStatus).
+function quotaSub(td, fo) {
+  const parts = [`${num(td.generated)} generated`];
+  if (fo) {
+    parts.push(`${num(fo.active)} commenting`);
+    if (num(fo.checking)) parts.push(`${num(fo.checking)} checking`);
+    if (num(fo.followedBack)) parts.push(`${num(fo.followedBack)} followed back`);
+  }
+  return parts.map((x) => x.replace(/ /g, "\u00a0")).join(" · "); // wrap only between items
 }
 
 async function refresh() {

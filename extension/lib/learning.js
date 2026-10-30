@@ -1,17 +1,17 @@
 // ScoreX - self-learning (Phase 3).
 //   * Engagement checks: ~24h after a reply is posted, visit it and read likes / replies / whether the
 //     target answered it. A second look happens after ~72h.
-//   * Follow-back checks: revisit commented targets that do not follow you and record follow-backs.
-//   * Priorities: targets that respond get a higher priority (and optionally tier 1 / group A); targets that
-//     never respond after N comments cool down (fewer comments for a while).
-//   * A/B testing: tones x presets per group, chosen with Thompson sampling on "got any response"
-//     plus a user-set exploration share. Results and suggestions are shown in the dashboard.
+//   * Follow-backs (found by follow tracking, lib/follow.js) are credited to the comments before them.
+//   * Priorities: targets that respond get a higher priority (and optionally tier 1); targets that never
+//     respond after N comments cool down (fewer comments for a while).
+//   * A/B testing: your Tone prompt and the tones / presets you add, chosen with Thompson sampling on "got
+//     any response" plus a user-set exploration share. Results and suggestions are shown in the dashboard.
 
 import { K, HS, CMD, BUILTIN_TONES } from "./constants.js";
+import { MAIN_TONE, effectivePreset } from "./targets.js";
 import { load, save, getSettings, getState, patchState, getTargets, updateTargets, log } from "./store.js";
 import { navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
-import { refreshProfile } from "./watcher.js";
 import { notify } from "./notify.js";
 import * as H from "./history.js";
 import { now, DAY, HOUR, MIN, random, clamp, sleep, humanDelay, num } from "./util.js";
@@ -47,18 +47,21 @@ function gamma(k) {
 export function betaSample(a, b) { const x = gamma(a), y = gamma(b); return x / (x + y); }
 
 function toneKeys(settings) {
-  return new Set([...BUILTIN_TONES, ...(settings.customTones || []).map((c) => "custom:" + c.id), "custom"]);
+  return new Set([...BUILTIN_TONES, ...(settings.customTones || []).map((c) => "custom:" + c.id), "custom", MAIN_TONE]);
+}
+// Only accounts that don't follow you are commented on, so the "B" tone list is the one being tested.
+function testedTones(settings) {
+  const L = settings.learning;
+  return (L.abTones && !Array.isArray(L.abTones) ? L.abTones.B : L.abTones) || [];
 }
 
-// The arms available for a target in its group (respecting per-target overrides).
+// The arms available for a target (respecting per-target overrides). The Tone prompt is the default tone.
 export function armsFor(target, settings) {
   const L = settings.learning;
-  const g = settings.groups[target.group] || {};
   const valid = toneKeys(settings);
-  const defaultTone = target.tone || g.tone || "insightful";
-  const groupTones = (L.abTones && !Array.isArray(L.abTones) ? L.abTones[target.group] : L.abTones) || [];
-  const tones = target.tone ? [target.tone] : [...new Set([defaultTone, ...groupTones.filter((t) => valid.has(t))])];
-  const matrixPreset = settings.presetMatrix[`${target.group}${target.tier}`] || "balanced";
+  const defaultTone = target.tone || MAIN_TONE;
+  const tones = target.tone ? [target.tone] : [...new Set([defaultTone, ...testedTones(settings).filter((t) => valid.has(t))])];
+  const matrixPreset = effectivePreset({ ...target, preset: "" }, settings);
   const presets = target.preset ? [target.preset] : [...new Set([matrixPreset, ...(L.abPresets || []).filter((p) => settings.presets[p])])];
   const arms = [];
   for (const tone of tones) for (const preset of presets) arms.push({ key: `${tone}|${preset}`, tone, preset, isDefault: tone === defaultTone && preset === (target.preset || matrixPreset) });
@@ -111,12 +114,10 @@ export function chooseArm(target, settings, history, sinceTs) {
   return { key: best.key, tone: best.tone, preset: best.preset, explore: false };
 }
 
-// The tones a group currently tests (default tone + its A/B tones).
-function groupTones(settings, g) {
+// The tones currently tested (the Tone prompt + the A/B tones).
+function groupTones(settings) {
   const valid = toneKeys(settings);
-  const L = settings.learning;
-  const list = (L.abTones && !Array.isArray(L.abTones) ? L.abTones[g] : L.abTones) || [];
-  return new Set([(settings.groups[g] || {}).tone || "insightful", ...list.filter((t) => valid.has(t))]);
+  return new Set([MAIN_TONE, ...testedTones(settings).filter((t) => valid.has(t))]);
 }
 
 // Dashboard summary: arm table + suggested tone (and preset, only when presets are being tested) per group.
@@ -136,8 +137,8 @@ export async function summary() {
   })).sort((x, y) => (x.group < y.group ? -1 : x.group > y.group ? 1 : (y.rate || 0) - (x.rate || 0)));
   const suggestions = {};
   const min = settings.learning.minSamples;
-  for (const g of ["A", "B"]) {
-    const tested = groupTones(settings, g);
+  for (const g of ["B"]) {
+    const tested = groupTones(settings);
     const ga = arms.filter((a) => a.group === g && tested.has(a.tone) && a.checked >= min);
     if (ga.length < 2) {
       const have = arms.filter((a) => a.group === g).reduce((s, a) => s + a.checked, 0);
@@ -172,23 +173,20 @@ export async function recordOutcomeForTarget(handle, followBackAt = now()) {
   }
 }
 
-// One place for follow-backs, whoever noticed them (learning check, rotation watch, refresh, cleanup):
-// applyProfile sets rel.followedBackAt only on a real false -> true change; here it is credited once.
+// One place for follow-backs, whoever noticed them (follow tracking, rotation watch, refresh, cleanup):
+// applyFollow sets rel.followedBackAt only on a real false -> true change; here it is credited once.
+// The target is no longer commented on from then on (isActive), and its open queue items are dropped.
 export async function processFollowBacks(settings) {
   const targets = await getTargets();
   const fresh = Object.values(targets).filter((t) => t.rel && t.rel.followedBackAt && !t.rel.followBackCredited);
   for (const t of fresh) {
     await recordOutcomeForTarget(t.handle, t.rel.followedBackAt);
-    let moved = false;
     await updateTargets((all) => {
       const x = Object.hasOwn(all, t.handle) ? all[t.handle] : null;
-      if (x) {
-        x.rel = { ...(x.rel || {}), followBackCredited: true };
-        if (settings.learning.autoMoveToA && x.group === "B" && !x.groupManual) { x.group = "A"; moved = true; }
-      }
+      if (x) x.rel = { ...(x.rel || {}), followBackCredited: true };
       return all;
     });
-    log("info", `@${t.handle} followed you back${moved ? " - moved to group A" : ""}`);
+    log("info", `@${t.handle} followed you back - no more comments to this account`);
     await notify("sx-fb-" + t.handle, "New follow-back", `@${t.handle} followed you back after your comments.`);
   }
   return fresh.length;
@@ -217,7 +215,8 @@ export async function updatePriorities(settings, ts = now()) {
         streak++;
       }
       const followedBack = !!(t.rel && t.rel.followedBackAt);
-      t.stats = { ...(t.stats || {}), comments: recs.length, engaged: eng.length, authorReplies, noResponseStreak: streak, lastEngagedAt: eng[0] ? eng[0].postedAt : (t.stats && t.stats.lastEngagedAt) || null };
+      const firstAt = recs.length ? recs[recs.length - 1].postedAt : null; // the 14-day window starts here
+      t.stats = { ...(t.stats || {}), firstCommentAt: (t.stats && t.stats.firstCommentAt) || firstAt, comments: recs.length, engaged: eng.length, authorReplies, noResponseStreak: streak, lastEngagedAt: eng[0] ? eng[0].postedAt : (t.stats && t.stats.lastEngagedAt) || null };
       const base = t.tier === 1 ? 70 : 50;
       const rate = checked.length ? eng.length / checked.length : 0;
       let p = base + Math.round(20 * rate) + (authorReplies ? 8 : 0) + (followedBack ? 10 : 0) - Math.min(30, streak * 4);
@@ -298,29 +297,7 @@ export async function learningStep({ tabId, settings, me, shouldStop }) {
     await sleep(humanDelay(3000, 8000));
   }
 
-  // 2) Follow-back checks on commented targets that don't follow you. A target whose profile is gone is
-  //    marked and skipped; any check (also an inconclusive one) moves it to the back of the line.
-  const targets = await getTargets();
-  const candidates = Object.values(targets).filter((t) => t.enabled && (t.stats && t.stats.comments > 0) && !(t.rel && (t.rel.followsYou || t.rel.gone)) &&
-    (!t.rel || !t.rel.checkedAt || ts - t.rel.checkedAt > L.followCheckEveryHours * HOUR))
-    .sort((a, b) => ((a.rel && a.rel.checkedAt) || 0) - ((b.rel && b.rel.checkedAt) || 0));
-  for (const t of candidates) {
-    if (visits >= max) break;
-    if (await stopped()) return { did: "aborted" };
-    visits++;
-    const r = await refreshProfile(tabId, t.handle, settings);
-    if (r && r.stop) return r;
-    if (!r || !r.ok || r.notFound) {
-      await updateTargets((all) => {
-        const x = Object.hasOwn(all, t.handle) ? all[t.handle] : null;
-        if (x) x.rel = { ...(x.rel || {}), checkedAt: now(), ...(r && r.notFound ? { gone: true } : {}) };
-        return all;
-      });
-    }
-    await sleep(humanDelay(3000, 8000));
-  }
-
-  await processFollowBacks(settings); // follow-backs seen by the checks above (applyProfile marked them)
+  await processFollowBacks(settings);
   await updatePriorities(settings, now());
   return visits ? { did: "learning", visits } : null;
 }

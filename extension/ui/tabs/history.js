@@ -6,7 +6,7 @@ import { HS } from "../../lib/constants.js";
 import * as history from "../../lib/history.js";
 import { aggregate } from "../../lib/costs.js";
 import { num, zonedTime } from "../../lib/util.js";
-import { h, clear, section, advanced, btn, toast, icon, renderTable, selectEl, labeled, confirmDialog, download, stamp, groupBadge, tierBadge, statusBadge, badge, xLink, link, fmtUsd, fmtDateTime, fmtTokens, truncate, debounce, segmented, add, fill } from "../components.js";
+import { h, clear, section, advanced, btn, toast, icon, renderTable, selectEl, labeled, confirmDialog, download, stamp, tierBadge, statusBadge, badge, xLink, link, fmtUsd, fmtDateTime, fmtTokens, truncate, debounce, segmented, add, fill } from "../components.js";
 
 const STATUS_OPTS = [["", "All statuses"], [HS.POSTED, "Posted"], [HS.PENDING_REVIEW, "Pending review"], [HS.APPROVED, "Approved"], [HS.QUEUED, "Queued"], [HS.POSTING, "Posting"], [HS.SKIPPED, "Skipped"], [HS.FAILED, "Failed"]];
 
@@ -15,7 +15,7 @@ export default {
   title: "History",
   hint: "Every generated comment with its model, cost, status and results.",
   async render(root, ctx) {
-    const f = { from: "", to: "", status: "", group: "", model: "", text: "" };
+    const f = { from: "", to: "", status: "", model: "", text: "" };
     const sortState = { key: "createdAt", dir: "desc" };
     let rows = [];
     let all = [];
@@ -23,7 +23,6 @@ export default {
     const fFrom = h("input", { type: "date", class: "input", id: "hFrom" });
     const fTo = h("input", { type: "date", class: "input", id: "hTo" });
     const fStatus = selectEl(STATUS_OPTS, "", { id: "hStatus" });
-    const fGroup = selectEl([["", "All groups"], ["A", "Group A"], ["B", "Group B"]], "", { id: "hGroup" });
     const fModel = selectEl([["", "All models"]], "", { id: "hModel" });
     const fText = h("input", { type: "search", class: "input", id: "hText", placeholder: "Search comment or post text" });
 
@@ -42,7 +41,7 @@ export default {
       if (from && to && from > to) [from, to] = [to - 864e5 + 1, from + 864e5 - 1];
       try {
         [rows, all] = await Promise.all([
-          history.query({ from, to, status: f.status || undefined, group: f.group || undefined, model: f.model || undefined, text: f.text || undefined, limit: 5000 }),
+          history.query({ from, to, status: f.status || undefined, model: f.model || undefined, text: f.text || undefined, limit: 5000 }),
           history.all(),
         ]);
       } catch (e) {
@@ -89,7 +88,6 @@ export default {
         columns: [
           { key: "createdAt", label: "Date / time", render: (r) => h("span", { class: "nowrap", title: r.postedAt ? "Posted " + fmtDateTime(r.postedAt) : "" }, fmtDateTime(r.createdAt)) },
           { key: "target", label: "Target", render: (r) => xLink(r.target) },
-          { key: "group", label: "Group", render: (r) => groupBadge(r.group) },
           { key: "tier", label: "Tier", render: (r) => tierBadge(r.tier) },
           { key: "postUrl", label: "Post", sort: false, render: (r) => (r.postUrl ? link(r.postUrl, h("span", { class: "nowrap" }, "open ", icon("external")), { cls: "small" }) : "-") },
           { key: "modelName", label: "Model", render: (r) => h("span", { class: "mono small nowrap" }, r.modelName || r.modelId || "-") },
@@ -130,7 +128,6 @@ export default {
     fFrom.addEventListener("change", () => { f.from = fFrom.value; reload(); });
     fTo.addEventListener("change", () => { f.to = fTo.value; reload(); });
     fStatus.addEventListener("change", () => { f.status = fStatus.value; reload(); });
-    fGroup.addEventListener("change", () => { f.group = fGroup.value; reload(); });
     fModel.addEventListener("change", () => { f.model = fModel.value; reload(); });
     fText.addEventListener("input", () => { f.text = fText.value.trim(); reload(); });
 
@@ -140,8 +137,8 @@ export default {
       toast(`Exported ${rows.length} rows`, { type: "success" });
     }, { iconName: "download", size: "sm", id: "historyExportBtn" });
     const resetBtn = btn("Reset filters", () => {
-      Object.assign(f, { from: "", to: "", status: "", group: "", model: "", text: "" });
-      fFrom.value = fTo.value = fText.value = ""; fStatus.value = fGroup.value = fModel.value = "";
+      Object.assign(f, { from: "", to: "", status: "", model: "", text: "" });
+      fFrom.value = fTo.value = fText.value = ""; fStatus.value = fModel.value = "";
       load();
     }, { kind: "ghost", size: "sm" });
     const clearBtn = btn("Clear history", async () => {
@@ -155,7 +152,7 @@ export default {
     add(root,
       h("div", { class: "stack-sm", style: "padding-bottom:18px" },
         h("div", { class: "filters-grid" },
-          labeled("From", fFrom), labeled("To", fTo), labeled("Status", fStatus), labeled("Group", fGroup), labeled("Model", fModel), labeled("Search", fText)),
+          labeled("From", fFrom), labeled("To", fTo), labeled("Status", fStatus), labeled("Model", fModel), labeled("Search", fText)),
         h("div", { class: "toolbar" }, summary, h("span", { class: "spacer" }), resetBtn, exportBtn)),
       section({ wide: true, title: "Comments", hint: "Newest first. Hover a status for its reason." }, tableHost),
       advanced({ key: "history.totals", title: "Totals by period", desc: "Generated, posted, skipped, failed and cost per day, week or month" },

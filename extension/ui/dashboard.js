@@ -20,7 +20,7 @@ import settingsTab from "./tabs/settings.js";
 
 // Tab strip order.
 const TABS = [overview, review, targets, models, tones, safety, historyTab, settingsTab];
-const WATCH = [K.state, K.targets, K.candidates, K.discovery, K.logs, K.spend, K.learning];
+const WATCH = [K.state, K.targets, K.candidates, K.blacklist, K.discovery, K.logs, K.spend, K.learning];
 
 // ---------------------------------------------------------------- event bus + scopes
 

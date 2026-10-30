@@ -52,16 +52,6 @@ describe("safety.js", () => {
       assert.equal(safety.dailyLimit(raw, { firstStartedAt: T0 }, T0), HARD.dailyComments);
       assert.equal(safety.dailyLimit({ safety: { ramp: [] } }, { firstStartedAt: T0 }, T0), 0);
     });
-    test("groupLimit with disabled group and totals", () => {
-      assert.equal(safety.groupLimit(settings, "A", 20), 10);
-      assert.equal(safety.groupLimit(settings, "A", 5), 5);
-      assert.equal(safety.groupLimit(settings, "B", 30), 20);
-      const off = sanitizeSettings({ groups: { A: { enabled: false } } });
-      assert.equal(safety.groupLimit(off, "A", 30), 0);
-      assert.equal(safety.groupLimit(off, "B", 30), 20);
-      assert.equal(safety.groupLimit(settings, "C", 30), 0);
-      assert.equal(safety.groupLimit({ groups: { A: { enabled: true, dailyLimit: 500 } } }, "A", 100), HARD.dailyComments);
-    });
     test("generationLimit / likeLimit", () => {
       assert.equal(safety.generationLimit(settings, { firstStartedAt: T0 }, T0), 20);
       const s = sanitizeSettings({ safety: { ramp: [15, 20, 30], generationFactor: 1.5 } });
@@ -198,12 +188,10 @@ describe("safety.js", () => {
       assert.equal(safety.postGate(settings, state(), counts({ postedToday: 19 }), B, ts).ok, true);
       assert.equal(safety.postGate(settings, state({ firstStartedAt: ts - DAY }), counts({ postedToday: 10 }), B, ts).reason, "daily_limit");
     });
-    test("group_limit (and disabled group)", () => {
-      assert.deepEqual(safety.postGate(settings, state(), counts({ postedToday: 10, postedGroup: { A: 10, B: 0 } }), A, ts), { ok: false, reason: "group_limit", limit: 10 });
-      assert.equal(safety.postGate(settings, state(), counts({ postedToday: 10, postedGroup: { A: 10, B: 0 } }), B, ts).ok, true);
-      const off = sanitizeSettings({ groups: { B: { enabled: false } } });
-      assert.equal(safety.postGate(off, state(), counts(), B, ts).reason, "group_limit");
-      assert.equal(safety.postGate(settings, state(), counts({ postedGroup: undefined }), B, ts).ok, true);
+    test("no per-group limit any more: the whole daily limit is available (legacy group caps are ignored)", () => {
+      assert.equal(safety.postGate(settings, state(), counts({ postedToday: 19, postedGroup: { A: 0, B: 19 } }), B, ts).ok, true);
+      const off = sanitizeSettings({ groups: { B: { enabled: false, dailyLimit: 0 } } });
+      assert.equal(safety.postGate(off, state(), counts(), B, ts).ok, true);
     });
     test("target_day / target_week", () => {
       assert.deepEqual(safety.postGate(settings, state(), counts({ target: { day: 1, week: 1 } }), B, ts), { ok: false, reason: "target_day" });
@@ -243,8 +231,8 @@ describe("safety.js", () => {
       assert.deepEqual(safety.generateGate(settings, st, counts({ generatedToday: 40 }), B, ts), { ok: false, reason: "generation_limit" });
       assert.equal(safety.generateGate(settings, st, counts({ generatedToday: 39 }), B, ts).ok, true);
     });
-    test("group_limit counts open items of the group", () => {
-      assert.equal(safety.generateGate(settings, st, counts({ postedGroup: { A: 0, B: 15 }, openGroup: { A: 0, B: 5 }, postedToday: 0 }), B, ts).reason, "group_limit");
+    test("legacy group caps never block generation", () => {
+      assert.equal(safety.generateGate(settings, st, counts({ postedGroup: { A: 0, B: 15 }, openGroup: { A: 0, B: 5 }, postedToday: 15, openQueue: 4 }), B, ts).ok, true);
     });
     test("target_has_open_item", () => {
       assert.deepEqual(safety.generateGate(settings, st, counts({ target: { day: 0, week: 0, open: 1 } }), B, ts), { ok: false, reason: "target_has_open_item" });
@@ -258,7 +246,7 @@ describe("safety.js", () => {
       assert.equal(safety.generateGate(settings, st, counts(), { ...B, coldUntil: ts - 1 }, ts).ok, true);
     });
     test("every gate reason has a label", () => {
-      for (const r of ["outside_active_hours", "break", "gap", "daily_limit", "group_limit", "target_day", "target_week", "target_has_open_item", "target_cold", "generation_limit"]) {
+      for (const r of ["outside_active_hours", "break", "gap", "daily_limit", "target_day", "target_week", "target_has_open_item", "target_cold", "generation_limit"]) {
         assert.equal(typeof safety.GATE_LABEL[r], "string", r);
       }
     });

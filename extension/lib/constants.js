@@ -1,7 +1,7 @@
 // ScoreX - shared constants. Keep string values stable: they are persisted in storage and history.
 
 export const APP = "ScoreX";
-export const VERSION = "1.0.0";
+export const VERSION = "1.1.0";
 
 // chrome.storage.local keys
 export const K = Object.freeze({
@@ -17,6 +17,7 @@ export const K = Object.freeze({
   selectorOverrides: "sx.selectorOverrides", // partial selector config JSON, merged over content/selectors.js
   learning: "sx.learning", // A/B arms + suggestions cache
   spend: "sx.spend", // { days: {YYYY-MM-DD: usd}, months: {YYYY-MM: usd} } authoritative ledger for budgets
+  blacklist: "sx.blacklist", // { [handle]: { handle, name, reason, at, days, comments, tier } } never re-added as targets
   schema: "sx.schemaVersion",
 });
 
@@ -27,7 +28,8 @@ export const STATUS = Object.freeze({ RUNNING: "running", PAUSED: "paused", STOP
 
 export const MODE = Object.freeze({ REVIEW: "review", AUTO: "auto" });
 
-export const GROUP = Object.freeze({ A: "A", B: "B" }); // A = follows me (keep warm), B = does not follow me (get noticed)
+// Kept in sync with the follow status by follow tracking: A = follows me (never commented on), B = does not.
+export const GROUP = Object.freeze({ A: "A", B: "B" });
 export const TIER = Object.freeze({ T1: 1, T2: 2 }); // 1 = big influencer, 2 = smart account
 
 // History record statuses (one record per generated comment / attempt).

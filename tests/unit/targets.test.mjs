@@ -2,7 +2,7 @@ import { resetStorage, rawGet } from "./_chrome.mjs";
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import * as tg from "../../extension/lib/targets.js";
-import { sanitizeSettings } from "../../extension/lib/store.js";
+import { sanitizeSettings, DEFAULT_TONE_PROMPT } from "../../extension/lib/store.js";
 import { K } from "../../extension/lib/constants.js";
 import { DAY, HOUR, _setClock } from "../../extension/lib/util.js";
 
@@ -77,8 +77,8 @@ describe("targets.js", () => {
         group: "A", tier: "1", enabled: 0, priority: 150, tone: null, preset: "ultra",
         notes: "n".repeat(600), name: "x".repeat(100), handle: "evil", stats: { comments: 999 }, score: {},
       });
-      assert.deepEqual(Object.keys(p).sort(), ["enabled", "group", "groupManual", "name", "notes", "preset", "priority", "priorityManual", "tier", "tierManual", "tone"]);
-      assert.equal(p.group, "A");
+      // The group is never editable: it mirrors the detected follow status.
+      assert.deepEqual(Object.keys(p).sort(), ["enabled", "name", "notes", "preset", "priority", "priorityManual", "tier", "tierManual", "tone"]);
       assert.equal(p.tier, 1);
       assert.equal(p.enabled, false);
       assert.equal(p.priority, 100);
@@ -88,18 +88,20 @@ describe("targets.js", () => {
       assert.equal(p.name.length, 80);
     });
     test("defaults for odd values", () => {
-      assert.deepEqual(tg.sanitizePatch({ group: "x", tier: 7, priority: "abc", preset: "cheap" }), { group: "B", groupManual: true, tier: 2, tierManual: true, priority: 50, priorityManual: true, preset: "cheap" });
+      assert.deepEqual(tg.sanitizePatch({ group: "x", tier: 7, priority: "abc", preset: "cheap" }), { tier: 2, tierManual: true, priority: 50, priorityManual: true, preset: "cheap" });
       assert.deepEqual(tg.sanitizePatch({ priority: -3 }), { priority: 0, priorityManual: true });
       assert.deepEqual(tg.sanitizePatch({}), {});
     });
   });
 
   describe("newTarget / applyProfile / mergePosts", () => {
-    test("newTarget defaults", () => {
+    test("newTarget defaults: follow status unknown until checked, whatever group was given", () => {
       const a = tg.newTarget("foo", { group: "A", tier: 1 });
-      assert.equal(a.group, "A");
+      assert.equal(a.group, "B");
       assert.equal(a.tier, 1);
-      assert.equal(a.rel.followsYou, true);
+      assert.equal(a.rel.followsYou, null);
+      assert.equal(tg.followStatus(a), tg.FS.CHECKING);
+      assert.equal(a.stats.firstCommentAt, null);
       assert.equal(a.priority, 70);
       assert.equal(a.addedAt, NOW);
       const b = tg.newTarget("bar");
@@ -127,13 +129,35 @@ describe("targets.js", () => {
       assert.equal(t.rel.followedBackAt, NOW + DAY);
     });
 
-    test("unknown -> true is not a follow-back; group A starts as following", () => {
-      const b = tg.newTarget("foo", { group: "B" });
+    test("unknown -> true is not a follow-back; the group mirrors the follow status", () => {
+      const b = tg.newTarget("foo");
       tg.applyProfile(b, { followsYou: true });
       assert.equal(b.rel.followedBackAt, null);
-      const a = tg.newTarget("bar", { group: "A" });
-      tg.applyProfile(a, { followsYou: true });
-      assert.equal(a.rel.followedBackAt, null);
+      assert.equal(b.group, "A");
+      assert.equal(tg.followStatus(b), tg.FS.FOLLOWS);
+      const c = tg.newTarget("bar");
+      tg.applyFollow(c, false);
+      assert.equal(c.group, "B");
+      assert.equal(tg.followStatus(c), tg.FS.ACTIVE);
+      tg.applyFollow(c, true);
+      assert.equal(c.group, "A");
+      assert.equal(tg.followStatus(c), tg.FS.FOLLOWED_BACK);
+    });
+
+    test("followStatus / followDays / isActive", () => {
+      const t = tg.newTarget("foo");
+      assert.equal(tg.isActive(t, settings), false, "never commented on before the follow check");
+      assert.equal(tg.followDays(t, NOW), null);
+      tg.applyFollow(t, false);
+      assert.equal(tg.isActive(t, settings), true);
+      t.stats.firstCommentAt = NOW - 3 * DAY - HOUR;
+      assert.equal(tg.followDays(t, NOW), 3);
+      t.enabled = false;
+      assert.equal(tg.isActive(t, settings), false);
+      t.enabled = true;
+      tg.applyFollow(t, true);
+      assert.equal(tg.isActive(t, settings), false, "a follow-back stops comments");
+      assert.equal(tg.isActive({ enabled: true, rel: { followsYou: true } }, settings), false, "followers are never commented on");
     });
 
     test("youFollowSince tracks when we started following", () => {
@@ -208,36 +232,35 @@ describe("targets.js", () => {
   describe("tone / preset resolution", () => {
     const s = sanitizeSettings({
       customTones: [{ id: "dry", name: "Dry", text: "Deadpan and dry." }],
-      groups: { A: { tone: "custom", customTone: "Group A custom voice." }, B: { tone: "insightful" } },
+      prompt: { tone: "lowercase, blunt, crypto-native. one sharp point." },
     });
 
-    test("effectiveTone: override > target tone > group default", () => {
-      assert.deepEqual(tg.effectiveTone({ group: "B", tone: "" }, s), { key: "insightful", text: s.tones.insightful });
+    test("effectiveTone: override > target tone > your Tone prompt", () => {
+      assert.deepEqual(tg.effectiveTone({ group: "B", tone: "" }, s), { key: "main", text: "lowercase, blunt, crypto-native. one sharp point." });
       assert.deepEqual(tg.effectiveTone({ group: "B", tone: "bold" }, s), { key: "bold", text: s.tones.bold });
       assert.deepEqual(tg.effectiveTone({ group: "B", tone: "bold" }, s, "witty"), { key: "witty", text: s.tones.witty });
-      assert.deepEqual(tg.effectiveTone({ group: "A", tone: "" }, settings), { key: "friendly", text: settings.tones.friendly });
+      assert.deepEqual(tg.effectiveTone({ group: "A", tone: "" }, settings), { key: "main", text: DEFAULT_TONE_PROMPT });
     });
-    test('custom:<id> tones and the group "custom" tone', () => {
+    test("custom:<id> tones; missing ones fall back to the Tone prompt", () => {
       assert.deepEqual(tg.effectiveTone({ group: "B", tone: "custom:dry" }, s), { key: "custom:dry", text: "Deadpan and dry." });
-      assert.deepEqual(tg.effectiveTone({ group: "B", tone: "custom:gone" }, s), { key: "custom:gone", text: s.tones.insightful });
-      assert.deepEqual(tg.effectiveTone({ group: "A", tone: "" }, s), { key: "custom", text: "Group A custom voice." });
-      const empty = sanitizeSettings({ groups: { A: { tone: "custom", customTone: "  " } } });
-      assert.equal(tg.effectiveTone({ group: "A", tone: "" }, empty).text, empty.tones.insightful);
+      assert.deepEqual(tg.effectiveTone({ group: "B", tone: "custom:gone" }, s), { key: "custom:gone", text: s.prompt.tone });
     });
-    test("unknown tone keys fall back to insightful", () => {
-      assert.equal(tg.toneText("nonexistent", s), s.tones.insightful);
-      assert.equal(tg.toneText("", s), s.tones.insightful);
-      assert.equal(tg.effectiveTone({ group: "Z", tone: "" }, s).key, "insightful");
+    test("unknown tone keys fall back to the Tone prompt", () => {
+      assert.equal(tg.toneText("nonexistent", s), s.prompt.tone);
+      assert.equal(tg.toneText("", s), s.prompt.tone);
+      assert.equal(tg.toneText("main", s), s.prompt.tone);
+      assert.equal(tg.effectiveTone({ group: "Z", tone: "" }, s).key, "main");
       assert.deepEqual(tg.allToneKeys(s), ["witty", "insightful", "bold", "friendly", "expert", "custom:dry"]);
     });
-    test("effectivePreset: target override > group/tier matrix", () => {
-      assert.equal(tg.effectivePreset({ group: "A", tier: 1, preset: "" }, settings), "balanced");
-      assert.equal(tg.effectivePreset({ group: "A", tier: 2, preset: "" }, settings), "cheap");
+    test("effectivePreset: target override > tier preset (accounts you comment on never follow you)", () => {
+      assert.equal(tg.effectivePreset({ group: "A", tier: 1, preset: "" }, settings), "high");
+      assert.equal(tg.effectivePreset({ group: "A", tier: 2, preset: "" }, settings), "balanced");
       assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "" }, settings), "high");
       assert.equal(tg.effectivePreset({ group: "B", tier: 2, preset: "" }, settings), "balanced");
       assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "cheap" }, settings), "cheap");
       assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "bogus" }, settings), "high");
       assert.equal(tg.effectivePreset({ group: "C", tier: 9, preset: "" }, settings), "balanced");
+      assert.equal(tg.effectivePreset({ tier: 1 }, sanitizeSettings({ presetMatrix: { B1: "cheap" } })), "cheap");
     });
   });
 
@@ -245,10 +268,11 @@ describe("targets.js", () => {
     test("upsert adds new targets, skips invalid and own handle", async () => {
       const r = await tg.upsert(["@Alice", "bob", "home", "0x_nation", { handle: "https://x.com/Carol", group: "A", tier: "1", tone: "witty", notes: "n" }],
         { group: "A", tier: 1, source: "import", myHandle: "0x_nation" });
-      assert.deepEqual(r, { added: 3, updated: 0 });
+      assert.deepEqual(r, { added: 3, updated: 0, blacklisted: 0 });
       const all = rawGet(K.targets);
       assert.deepEqual(Object.keys(all).sort(), ["alice", "bob", "carol"]);
-      assert.equal(all.alice.group, "A");
+      assert.equal(all.alice.group, "B", "a group column is ignored: follow status is always checked on X");
+      assert.equal(all.carol.rel.followsYou, null);
       assert.equal(all.alice.tier, 1);
       assert.equal(all.alice.source, "import");
       assert.equal(all.carol.tone, "witty");
@@ -262,18 +286,23 @@ describe("targets.js", () => {
       all0.alice.stats.comments = 7;
       resetStorage({ [K.targets]: all0 });
       const r = await tg.upsert([{ handle: "alice", group: "b" }, { handle: "dave" }], { group: "B", tier: 2 });
-      assert.deepEqual(r, { added: 1, updated: 1 });
+      assert.deepEqual(r, { added: 1, updated: 1, blacklisted: 0 });
       const all = rawGet(K.targets);
-      assert.equal(all.alice.group, "B");
       assert.equal(all.alice.tier, 1); // not given -> unchanged
       assert.equal(all.alice.stats.comments, 7);
       // overwrite applies defaults to existing rows
-      await tg.upsert(["alice"], { group: "A", tier: 2 }, true);
-      assert.equal(rawGet(K.targets).alice.group, "A");
+      await tg.upsert(["alice"], { tier: 2 }, true);
       assert.equal(rawGet(K.targets).alice.tier, 2);
       // without overwrite and without explicit values nothing changes
-      await tg.upsert(["alice"], { group: "B", tier: 1 });
-      assert.equal(rawGet(K.targets).alice.group, "A");
+      await tg.upsert(["alice"], { tier: 1 });
+      assert.equal(rawGet(K.targets).alice.tier, 2);
+    });
+
+    test("blacklisted handles are never added", async () => {
+      resetStorage({ [K.blacklist]: { bob: { handle: "bob", reason: "no_followback", at: NOW } } });
+      const r = await tg.upsert(["alice", "@Bob", "https://x.com/bob"]);
+      assert.deepEqual(r, { added: 1, updated: 0, blacklisted: 2 });
+      assert.deepEqual(Object.keys(rawGet(K.targets)), ["alice"]);
     });
 
     test("concurrent upserts are not lost", async () => {
@@ -291,7 +320,8 @@ describe("targets.js", () => {
       assert.equal(await tg.patch("ghost", { tier: 1 }), null);
       await tg.bulk(["bob", "@CAROL", "ghost"], { group: "A", priority: 90 });
       const all = rawGet(K.targets);
-      assert.equal(all.bob.group, "A");
+      assert.equal(all.bob.group, "B", "group is not editable");
+      assert.equal(all.bob.priority, 90);
       assert.equal(all.carol.priority, 90);
       assert.ok(!all.ghost);
       assert.equal(await tg.removeMany(["alice", "@BOB", "ghost", "alice"]), 2);
@@ -299,12 +329,14 @@ describe("targets.js", () => {
     });
 
     test("activeTargets / isActive / isCold", async () => {
-      await tg.upsert(["alice", "bob"], { group: "A" });
-      await tg.upsert(["carol"], { group: "B" });
+      await tg.upsert(["alice", "bob", "carol", "dave"]);
+      const all = rawGet(K.targets);
+      tg.applyFollow(all.alice, false);
+      tg.applyFollow(all.bob, false);
+      tg.applyFollow(all.carol, true); // follows you: never commented on
+      resetStorage({ [K.targets]: all }); // dave: not checked yet
       await tg.patch("bob", { enabled: false });
-      const offB = sanitizeSettings({ groups: { B: { enabled: false } } });
-      assert.deepEqual((await tg.activeTargets(settings)).map((t) => t.handle).sort(), ["alice", "carol"]);
-      assert.deepEqual((await tg.activeTargets(offB)).map((t) => t.handle), ["alice"]);
+      assert.deepEqual((await tg.activeTargets(settings)).map((t) => t.handle).sort(), ["alice"]);
       assert.equal(tg.isActive(null, settings), false);
       assert.equal(tg.isCold({ coldUntil: NOW + 1 }, NOW), true);
       assert.equal(tg.isCold({ coldUntil: NOW - 1 }, NOW), false);

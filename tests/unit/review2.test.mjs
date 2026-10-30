@@ -148,10 +148,10 @@ describe("learning/cleanup review fixes", () => {
     applyProfile(t, { followsYou: true }, null);
     assert.ok(t.rel.followedBackAt, "false -> true is a follow-back");
   });
-  test("manual tier/group are marked", async () => {
+  test("a manual tier is marked; the group is not editable", async () => {
     const { sanitizePatch } = await import("../../extension/lib/targets.js");
     const p = sanitizePatch({ tier: 2, group: "a" });
     assert.equal(p.tierManual, true);
-    assert.equal(p.groupManual, true);
+    assert.equal("group" in p, false);
   });
 });

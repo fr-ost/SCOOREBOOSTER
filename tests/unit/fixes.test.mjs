@@ -44,9 +44,8 @@ describe("follow-up fixes", () => {
     assert.equal(skipReason(post("RIP to a legend of the open source world, his work shaped all of us."), settings).code, "sensitive");
   });
 
-  test("sanitizePatch accepts lowercase group", () => {
-    assert.equal(sanitizePatch({ group: "a" }).group, "A");
-    assert.equal(sanitizePatch({ group: "b" }).group, "B");
+  test("sanitizePatch ignores the group (it follows the detected follow status)", () => {
+    assert.equal("group" in sanitizePatch({ group: "a" }), false);
     assert.equal(sanitizePatch({ priority: 70 }).priorityManual, true);
   });
 

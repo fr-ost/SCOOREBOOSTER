@@ -1,5 +1,5 @@
 // ScoreX - find candidate targets through the x.com page:
-//   myFollowers   your followers (group A candidates: they already follow you)
+//   myFollowers   your followers (not offered in the UI any more: accounts that follow you are never commented on)
 //   followersOf   followers of a big account
 //   followingOf   who a smart account follows
 //   search        people search for a keyword
@@ -7,8 +7,8 @@
 // Optionally visits the best candidates' profiles to score them (ScoreX rank + bot filter).
 
 import { K, CMD } from "./constants.js";
-import { load, save, getSettings, getTargets, updateTargets, updateCandidates, getCandidates, log } from "./store.js";
-import { applyProfile } from "./targets.js";
+import { load, save, getSettings, getTargets, updateTargets, updateCandidates, getCandidates, getBlacklist, log } from "./store.js";
+import { applyProfile, applyFollow } from "./targets.js";
 import { navigate, send, waitForPage, workerTab } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
 import { ownScore, suggestTier, passesDiscoveryFilters, combinedScore } from "./scores.js";
@@ -117,6 +117,7 @@ async function runDiscoveryInner(opts, stopFn) {
   if (tabId == null) { await setJob({ status: "error", message: "Could not open the X tab" }); return { ok: false, error: "Could not open the X tab" }; }
 
   const targets = await getTargets();
+  const black = await getBlacklist();
   const found = new Map();
   let i = 0;
   for (const s of sources) {
@@ -127,7 +128,7 @@ async function runDiscoveryInner(opts, stopFn) {
     if (r.stop) { await setJob({ status: "error", message: "Stopped: " + r.detail, finishedAt: now() }); await stopFn(r.stop, r.detail); return { ok: false, error: r.detail }; }
     if (!r.ok) { log("warn", `Discovery: could not read ${s.tag}`); continue; }
     for (const u of r.users) {
-      if (u.handle === me) continue;
+      if (u.handle === me || Object.hasOwn(black, u.handle)) continue;
       const c = found.get(u.handle) || { ...u, sources: [], overlap: 0 };
       if (!c.sources.includes(s.tag)) { c.sources.push(s.tag); c.overlap++; }
       if (u.followsYou && opts.source !== "myFollowers") c.followsYou = true;
@@ -181,8 +182,8 @@ async function runDiscoveryInner(opts, stopFn) {
       merged.suggestedGroup = merged.followsYou ? "A" : "B";
       if (!merged.suggestedTier) merged.suggestedTier = merged.verified ? 1 : 2;
       const verdict = passesDiscoveryFilters(merged, f, ts);
-      merged.pass = verdict.pass;
-      merged.why = verdict.why;
+      merged.pass = verdict.pass && !merged.followsYou; // accounts that follow you are never commented on
+      merged.why = merged.followsYou ? ["already follows you", ...verdict.why] : verdict.why;
       all[c.handle] = merged;
     }
     return all;
@@ -201,16 +202,19 @@ export async function cancelDiscovery() {
 }
 
 // Move candidates into targets.
-export async function candidatesToTargets(handles, group, tier, upsert) {
+export async function candidatesToTargets(handles, tier, upsert) {
   const cands = await getCandidates();
-  const rows = handles.map(normalizeHandle).filter((h) => cands[h]).map((h) => ({ handle: h, group, tier, name: cands[h].name || "" }));
-  const res = await upsert(rows, { group, tier, source: "discovery" });
-  // carry over the profile/score we already collected
+  const rows = handles.map(normalizeHandle).filter((h) => cands[h]).map((h) => ({ handle: h, tier, name: cands[h].name || "" }));
+  const res = await upsert(rows, { tier, source: "discovery" });
+  // Carry over the profile/score we already collected. A seen "Follows you" badge is taken over; "does
+  // not follow you" is left to follow tracking, which checks it with its own safety checks.
   await updateTargets((all) => {
     for (const r of rows) {
       const c = cands[r.handle];
-      if (all[r.handle] && c && c.profile) applyProfile(all[r.handle], c.profile, c.recentPosts || []);
-      if (all[r.handle] && c && c.followsYou) all[r.handle].rel.followsYou = true;
+      const t = Object.hasOwn(all, r.handle) ? all[r.handle] : null;
+      if (!t || !c) continue;
+      if (c.profile) { const { followsYou, youFollow, ...profile } = c.profile; applyProfile(t, profile, c.recentPosts || []); }
+      if (c.followsYou) applyFollow(t, true);
     }
     return all;
   });

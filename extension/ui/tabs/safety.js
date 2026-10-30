@@ -1,12 +1,12 @@
 // Safety tab. Essentials: daily ramp, gap between comments, active hours + time zone, like-before-reply,
-// skip-rule toggles. Advanced: breaks, per-group / per-target caps, typing and reading speed, failure limit,
+// skip-rule toggles. Advanced: breaks, per-account caps, typing and reading speed, failure limit,
 // keyword lists, bringing the X tab to the front. Plus the read-only list of auto-stop triggers.
 // Every value is clamped by sanitizeSettings.
 
 import { K, HARD, STOP_LABEL } from "../../lib/constants.js";
 import { DEFAULT_POLITICAL_KEYWORDS } from "../../lib/store.js";
 import { dailyLimit, generationLimit, rampStage, activeHours } from "../../lib/safety.js";
-import { h, section, sub, advanced, fmtTime, fmtIn, fill } from "../components.js";
+import { h, section, advanced, fmtTime, fmtIn, fill } from "../components.js";
 
 export function timeZones(current) {
   let list = [];
@@ -97,24 +97,17 @@ export default {
           f({ path: "safety.skip.giveaways", type: "toggle", label: "Giveaways / engagement bait" }),
           f({ path: "safety.skip.gm", type: "toggle", label: "\"gm\" / \"gn\" posts" }))),
 
-      advanced({ key: "safety.advanced", desc: "Breaks, group and per-account caps, typing and reading speed, failure limit, keyword lists, tab focus" },
+      advanced({ key: "safety.advanced", desc: "Breaks, per-account caps, typing and reading speed, failure limit, keyword lists, tab focus" },
         section({ title: "Long breaks", hint: "Pauses after a few comments, like a person stepping away." },
           f({ path: "safety.breaks.enabled", type: "toggle", label: "Take long breaks" }),
           h("div", { class: "form-row" },
             pair("After every", "safety.breaks.afterMin", "safety.breaks.afterMax", "comments", { min: 1, max: 50 }),
             pair("Break length", "safety.breaks.minutesMin", "safety.breaks.minutesMax", "minutes", { min: 5, max: 480 }))),
-        section({ title: "Caps per group and account", hint: "Spread replies so no one sees too many." },
-          sub("Per group",
-            h("div", { class: "form-row" },
-              f({ path: "groups.A.enabled", type: "toggle", label: "Group A on" }),
-              f({ path: "groups.A.dailyLimit", type: "number", label: "Group A max/day", min: 0, max: HARD.dailyComments }),
-              f({ path: "groups.B.enabled", type: "toggle", label: "Group B on" }),
-              f({ path: "groups.B.dailyLimit", type: "number", label: "Group B max/day", min: 0, max: HARD.dailyComments }))),
-          sub("Per account",
-            h("div", { class: "form-row" },
-              f({ path: "safety.perTargetDay", type: "number", label: "Per account / day", min: 0, max: HARD.perTargetDay, hint: `Cap ${HARD.perTargetDay}` }),
-              f({ path: "safety.perTargetWeek", type: "number", label: "Per account / week", min: 0, max: HARD.perTargetWeek, hint: `Cap ${HARD.perTargetWeek}` }),
-              f({ path: "safety.generationFactor", type: "number", label: "Generation factor", min: 1, max: 5, step: 0.5, hint: "Generations/day = limit x this" })))),
+        section({ title: "Caps per account", hint: "Spread replies so no one sees too many." },
+          h("div", { class: "form-row" },
+            f({ path: "safety.perTargetDay", type: "number", label: "Per account / day", min: 0, max: HARD.perTargetDay, hint: `Cap ${HARD.perTargetDay}` }),
+            f({ path: "safety.perTargetWeek", type: "number", label: "Per account / week", min: 0, max: HARD.perTargetWeek, hint: `Cap ${HARD.perTargetWeek}` }),
+            f({ path: "safety.generationFactor", type: "number", label: "Generation factor", min: 1, max: 5, step: 0.5, hint: "Generations/day = limit x this" }))),
         section({ title: "Human-like timing", hint: "How the X tab reads and types." },
           h("div", { class: "form-row" },
             range("Typing speed", "safety.typingCpm", { min: 60, max: 600, step: 10, unit: "chars/min" }),

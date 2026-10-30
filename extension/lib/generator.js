@@ -29,18 +29,13 @@ export const CHECK_SCHEMA = {
   },
 };
 
-export const GROUP_GOALS = {
-  A: "This account already follows the owner. Goal: keep the relationship warm. Sound like a familiar mutual who genuinely follows their work: specific, natural and warm, never sycophantic.",
-  B: "The owner wants to get noticed by this account and earn a follow-back. Goal: stand out in a crowded reply section. Be sharp and insightful: add a new angle, a concrete detail, an implication or one short smart question. Confident, never needy, never asking for a follow.",
-};
+// Only accounts that don't follow the owner are commented on (follow tracking), so there is one goal.
+export const GOAL = "The owner wants to get noticed by this account and earn a follow-back. Goal: stand out in a crowded reply section. Be sharp and insightful: add a new angle, a concrete detail, an implication or one short smart question. Confident, never needy, never asking for a follow.";
 const TIER_NOTES = {
   1: "Tier 1 (big influencer): their replies are crowded, so the first few words must earn attention.",
   2: "Tier 2 (smart account): show real understanding of the topic.",
 };
-const ANGLES = {
-  A: ["add a specific detail from your own experience", "ask one short, genuine question about their point", "build on their point with a practical next step", "agree with a twist that adds something new", "point out a small implication they hinted at"],
-  B: ["add one concrete insight or data point they did not mention", "ask one short, sharp question that shows you understood the post", "offer a respectful counterpoint or edge case", "point out a non-obvious implication", "connect it to a related trend in one line", "add a practical example"],
-};
+const ANGLES = ["add one concrete insight or data point they did not mention", "ask one short, sharp question that shows you understood the post", "offer a respectful counterpoint or edge case", "point out a non-obvious implication", "connect it to a related trend in one line", "add a practical example"];
 
 // Which model + effort a preset maps to, and the fallback chain after it.
 export function modelChain(settings, presetKey) {
@@ -59,14 +54,14 @@ export function modelChain(settings, presetKey) {
   return chain;
 }
 
-export function buildInstructions({ settings, target, toneText, angle, myHandle }) {
+export function buildInstructions({ settings, target, toneText, angle, myHandle, hasExamples = false }) {
   const q = settings.quality;
   const extra = String(settings.prompt.extraRules || "").trim();
   return [
     `You write one reply to an X (Twitter) post. You write as the account owner${myHandle ? " @" + myHandle : ""}, in their voice.`,
-    GROUP_GOALS[target.group] || GROUP_GOALS.B,
+    GOAL,
     TIER_NOTES[target.tier] || "",
-    `Tone: ${toneText}`,
+    `Tone (the owner's own description of their voice - follow it closely): ${toneText}`,
     angle ? `Suggested angle (use it only if it fits this post): ${angle}.` : "",
     "",
     "Rules for the reply:",
@@ -79,7 +74,7 @@ export function buildInstructions({ settings, target, toneText, angle, myHandle 
     "- Do not summarise or repeat the post, do not start with the author's name, no quotation marks around the reply.",
     "- Do not promote anything, do not ask for follows or likes, do not talk about the owner's own projects.",
     "- Do not reuse the openings, structure or phrases of the owner's recent replies listed in the data.",
-    "- Match the style of the owner's example replies (length, casing, punctuation), not their content.",
+    hasExamples ? "- Some of the owner's past replies that did well are in the data: match their style (length, casing, punctuation), never copy their content." : "",
     "- Set \"skip\" to true (with a short skip_reason and an empty comment) if the post is political, controversial, tragic, NSFW, an ad, a giveaway or engagement bait, or if you cannot add real value.",
     extra ? `- Owner's extra rules: ${extra}` : "",
     "",
@@ -105,9 +100,9 @@ export function buildInput({ post, target, styleExamples, avoid, feedback, ts = 
     author_bio: truncate(profile.bio || "", 300),
     author_followers: profile.followers || null,
     author_recent_posts: recent,
-    owner_style_examples: styleExamples,
     owner_recent_replies_to_avoid: avoid,
   };
+  if (styleExamples && styleExamples.length) data.owner_best_past_replies = styleExamples;
   if (feedback) data.previous_attempt_was_rejected_because = feedback;
   return "<<<DATA\n" + JSON.stringify(data, null, 1) + "\nDATA>>>\n\nWrite the reply now.";
 }
@@ -122,15 +117,12 @@ export function buildCheck({ post, comment, avoid }) {
   return { instructions, input };
 }
 
-// Pool of style examples: your pasted examples + (optionally) your best-performing posted comments.
+// Style references: a few of your best-performing posted comments (no pasted samples; your Tone prompt
+// describes the voice).
 export function pickStyleExamples(settings, bestFromHistory = []) {
   const n = settings.prompt.styleExampleCount;
-  if (!n) return [];
-  const own = settings.prompt.styleExamples || [];
-  const auto = settings.prompt.autoStyleFromHistory ? bestFromHistory.filter((c) => !own.includes(c)) : [];
-  const fromOwn = sample(own, Math.min(own.length, Math.max(n - Math.min(auto.length, Math.floor(n / 2)), 0)));
-  const fromAuto = sample(auto, Math.max(0, n - fromOwn.length));
-  return [...fromOwn, ...fromAuto].map((s) => truncate(s, 280));
+  if (!n || !settings.prompt.autoStyleFromHistory) return [];
+  return sample([...new Set(bestFromHistory.filter(Boolean))], n).map((s) => truncate(s, 280));
 }
 
 const STOP_KINDS = { auth: STOP.OPENAI_AUTH, quota: STOP.OPENAI_QUOTA, no_key: STOP.NO_API_KEY, forbidden: STOP.OPENAI_AUTH };
@@ -182,7 +174,7 @@ export async function generate(opts) {
 
   for (let attempt = 1; attempt <= 2; attempt++) {
     out.attempts = attempt;
-    const instructions = buildInstructions({ settings, target, toneText: tone.text, angle: pick(ANGLES[target.group] || ANGLES.B), myHandle });
+    const instructions = buildInstructions({ settings, target, toneText: tone.text, angle: pick(ANGLES), myHandle, hasExamples: styleExamples.length > 0 });
     const input = buildInput({ post, target, styleExamples, avoid, feedback });
     const g = await runChain({ chain, apiKey, instructions, input, jsonSchema: COMMENT_SCHEMA, kind: attempt === 1 ? "generate" : "regenerate", compatFor, onCall, fetchImpl });
     calls.push(...g.calls);

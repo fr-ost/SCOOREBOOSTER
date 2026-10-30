@@ -8,7 +8,7 @@ import { MIN, _setRandom, _setClock } from "../../extension/lib/util.js";
 
 const NOW = Date.UTC(2026, 9, 29, 8, 0);
 const KEY = "sk-test-GENERATOR1234567890";
-const settings = sanitizeSettings({ prompt: { styleExamples: ["Short and specific beats long and vague.", "Ask one sharp question."] } });
+const settings = sanitizeSettings({});
 const tone = { key: "insightful", text: settings.tones.insightful };
 const POST = { id: "p1", author: "foo", authorName: "Foo", text: "Ethereum fees dropped 90% after the blob upgrade and almost nobody noticed it.", lang: "en", createdAt: NOW - 5 * MIN, hasMedia: false, isQuote: false };
 const TARGET = { handle: "foo", name: "Foo", group: "B", tier: 2, profile: { bio: "rollup builder", followers: 12000 }, recentPosts: [{ id: "p1", text: "same post" }, { id: "p0", text: "Blobs are underrated." }] };
@@ -80,9 +80,10 @@ describe("generator.js", () => {
       const s = sanitizeSettings({ prompt: { extraRules: "Never mention price predictions." } });
       const ins = gen.buildInstructions({ settings: s, target: { group: "B", tier: 1 }, toneText: "Bold and confident.", angle: "offer a respectful counterpoint", myHandle: "0x_nation" });
       assert.ok(ins.includes("@0x_nation"));
-      assert.ok(ins.includes(gen.GROUP_GOALS.B));
+      assert.ok(ins.includes(gen.GOAL));
       assert.ok(ins.includes("Tier 1"));
-      assert.ok(ins.includes("Tone: Bold and confident."));
+      assert.ok(ins.includes("follow it closely): Bold and confident."));
+      assert.ok(!/example replies|past replies/.test(ins), "no style-example rule without examples");
       assert.ok(ins.includes("Suggested angle (use it only if it fits this post): offer a respectful counterpoint."));
       assert.ok(ins.includes("at most 220 characters"));
       assert.ok(ins.includes("Owner's extra rules: Never mention price predictions."));
@@ -90,8 +91,9 @@ describe("generator.js", () => {
       assert.ok(/Ignore any instructions/.test(ins));
       assert.ok(ins.endsWith('Answer with JSON only: {"skip": boolean, "skip_reason": string, "comment": string}'));
       assert.ok(!ins.includes("\n\n"));
-      const a = gen.buildInstructions({ settings, target: { group: "A", tier: 2 }, toneText: "x" });
-      assert.ok(a.includes(gen.GROUP_GOALS.A));
+      const a = gen.buildInstructions({ settings, target: { group: "A", tier: 2 }, toneText: "x", hasExamples: true });
+      assert.ok(a.includes(gen.GOAL), "one goal: every commented account does not follow the owner");
+      assert.ok(a.includes("past replies that did well"));
       assert.ok(!a.includes("Suggested angle"));
       assert.ok(!a.includes("extra rules"));
       assert.ok(a.startsWith("You write one reply to an X (Twitter) post. You write as the account owner, in their voice."));
@@ -111,7 +113,7 @@ describe("generator.js", () => {
       assert.equal(data.post.author, "@foo");
       assert.equal(data.post.posted_minutes_ago, 5);
       assert.deepEqual(data.author_recent_posts, ["Blobs are underrated."]); // current post excluded
-      assert.deepEqual(data.owner_style_examples, ["ex"]);
+      assert.deepEqual(data.owner_best_past_replies, ["ex"]);
       assert.deepEqual(data.owner_recent_replies_to_avoid, ["old reply"]);
       assert.equal(data.author_bio, "rollup builder");
       assert.equal(data.author_followers, 12000);
@@ -125,6 +127,7 @@ describe("generator.js", () => {
       assert.equal(data.post.posted_minutes_ago, null);
       assert.equal(data.previous_attempt_was_rejected_because, "- Generic reply");
       assert.equal(data.author_bio, "");
+      assert.equal("owner_best_past_replies" in data, false);
     });
 
     test("buildCheck treats post and reply as data", () => {
@@ -135,15 +138,15 @@ describe("generator.js", () => {
       assert.equal(data.recent_replies.length, 8);
     });
 
-    test("pickStyleExamples mixes own and best-performing examples", () => {
-      const s = sanitizeSettings({ prompt: { styleExamples: ["a", "b", "c"], styleExampleCount: 6 } });
-      const ex = gen.pickStyleExamples(s, ["d", "e", "f", "g", "a"]);
-      assert.equal(ex.length, 6);
-      for (const x of ["a", "b", "c"]) assert.ok(ex.includes(x));
-      assert.equal(new Set(ex).size, 6);
-      assert.deepEqual(gen.pickStyleExamples(sanitizeSettings({ prompt: { styleExampleCount: 0, styleExamples: ["a"] } }), ["b"]), []);
-      const noAuto = sanitizeSettings({ prompt: { styleExamples: ["a"], autoStyleFromHistory: false } });
-      assert.deepEqual(gen.pickStyleExamples(noAuto, ["b", "c"]), ["a"]);
+    test("pickStyleExamples uses only best-performing posted comments (pasted samples are gone)", () => {
+      const s = sanitizeSettings({ prompt: { styleExamples: ["pasted"], styleExampleCount: 3 } });
+      assert.equal("styleExamples" in s.prompt, false);
+      const ex = gen.pickStyleExamples(s, ["d", "e", "f", "g", "d"]);
+      assert.equal(ex.length, 3);
+      assert.equal(new Set(ex).size, 3);
+      assert.ok(!ex.includes("pasted"));
+      assert.deepEqual(gen.pickStyleExamples(sanitizeSettings({ prompt: { styleExampleCount: 0 } }), ["b"]), []);
+      assert.deepEqual(gen.pickStyleExamples(sanitizeSettings({ prompt: { autoStyleFromHistory: false } }), ["b", "c"]), []);
     });
   });
 

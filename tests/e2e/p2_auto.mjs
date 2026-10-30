@@ -12,13 +12,14 @@ const xTab = async () => (await H.ctx.pages()).find((p) => /^https:\/\/x\.com\//
 
 try {
   M.addUser("bigbob", { name: "Big Bob", verified: true, followers: 250000 });
-  M.addUser("alice", { name: "Alice", followsMe: true, followers: 8200 });
+  M.addUser("alice", { name: "Alice", followers: 8200 });
   await setup(H, { mode: "auto", safety: { like: { enabled: true, dailyLimit: 5 } } });
-  await H.msg("targetsUpsert", { rows: ["bigbob"], defaults: { group: "B", tier: 1 } });
-  await H.msg("targetsUpsert", { rows: ["alice"], defaults: { group: "A", tier: 2 } });
+  await H.msg("targetsUpsert", { rows: ["bigbob"], defaults: { tier: 1 } });
+  await H.msg("targetsUpsert", { rows: ["alice"], defaults: { tier: 2 } });
 
   // ---- no warm-up: Full auto works from the first day ----
   await H.msg("start");
+  await H.untilChecked(["bigbob", "alice"]); // the real follow check runs before any comment
   let s = (await H.msg("getStatus")).status;
   assert(s.effectiveMode === "auto" && s.warmup === undefined, "day 1: Full auto is active immediately (no warm-up)");
   assert(s.today.limit === 10, "week 1 daily limit is 10");
@@ -95,7 +96,8 @@ try {
   // ---- repeated post failures (composer clears but the reply never appears) ----
   M.replyMode = "drop";
   M.addUser("dave", { followers: 30000 }); M.addUser("erin", { followers: 20000 });
-  await H.msg("targetsUpsert", { rows: ["dave", "erin"], defaults: { group: "B", tier: 2 } });
+  await H.msg("targetsUpsert", { rows: ["dave", "erin"], defaults: { tier: 2 } });
+  await H.markNotFollowing(["dave", "erin"]);
   const pd = M.addPost("dave", "Thread: the three onboarding emails that actually get opened, and why timing beats copy.", 2);
   const pe = M.addPost("erin", "Unpopular opinion: weekly product updates are more valuable than big launches for B2B.", 2);
   await H.msg("resume");
@@ -147,7 +149,8 @@ try {
   await H.settings({ mode: "review" });
   // (erin's earlier unclear post counts as "probably sent", so her 1-per-24h limit is used: new account)
   M.addUser("hank", { followers: 12000 });
-  await H.msg("targetsUpsert", { rows: ["hank"], defaults: { group: "B", tier: 2 } });
+  await H.msg("targetsUpsert", { rows: ["hank"], defaults: { tier: 2 } });
+  await H.markNotFollowing(["hank"]);
   const p9 = M.addPost("hank", "Shipping our first public roadmap this week, curious how it changes support volume.", 2);
   await H.patchState({ nextCommentAt: 0 });
   await H.runNow();
@@ -161,7 +164,8 @@ try {
   await H.settings({ mode: "auto" });
   M.hideReplyBox = true;
   M.addUser("frank", { followers: 50000 });
-  await H.msg("targetsUpsert", { rows: ["frank"], defaults: { group: "B", tier: 2 } });
+  await H.msg("targetsUpsert", { rows: ["frank"], defaults: { tier: 2 } });
+  await H.markNotFollowing(["frank"]);
   const pf = M.addPost("frank", "Only people I mention can reply to this one, testing restricted replies today.", 2);
   await H.patchState({ nextCommentAt: 0, consecutiveFailures: 0 });
   await H.runNow();
@@ -174,7 +178,8 @@ try {
   // ---- a target's reply inside someone else's thread is not commented (only original posts) ----
   M.hideReplyBox = false;
   M.addUser("gina", { followers: 15000 });
-  await H.msg("targetsUpsert", { rows: ["gina"], defaults: { group: "B", tier: 2 } });
+  await H.msg("targetsUpsert", { rows: ["gina"], defaults: { tier: 2 } });
+  await H.markNotFollowing(["gina"]);
   const parent = M.addPost("frank", "Parent post in a thread that gina answers.", 30);
   const pg = M.addPost("gina", "Agree with this thread, the onboarding point is the one most teams miss entirely.", 2, { parentId: parent.id });
   await H.patchState({ nextCommentAt: 0, consecutiveFailures: 0 });

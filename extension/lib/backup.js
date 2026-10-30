@@ -11,7 +11,7 @@ import { sumCalls } from "./costs.js";
 export async function exportData(parts = ["settings", "targets", "history"]) {
   const out = { app: "ScoreX", version: VERSION, exportedAt: new Date(now()).toISOString() };
   if (parts.includes("settings")) out.settings = await getSettings();
-  if (parts.includes("targets")) out.targets = await load(K.targets, {});
+  if (parts.includes("targets")) { out.targets = await load(K.targets, {}); out.blacklist = await load(K.blacklist, {}); }
   if (parts.includes("candidates")) out.candidates = await load(K.candidates, {});
   if (parts.includes("history")) out.history = await H.all();
   if (parts.includes("learning")) out.learning = await load(K.learning, {});
@@ -35,7 +35,8 @@ export async function importData(data, parts = ["settings", "targets", "history"
         const h = normalizeHandle((t && t.handle) || k);
         if (!h || !t || typeof t !== "object") continue;
         // Only user-editable fields + scraped data; relationship timing (used by cleanup) is re-observed.
-        const base = Object.hasOwn(all, h) ? all[h] : newTarget(h, { group: t.group, tier: t.tier, source: "import" });
+        // Follow status is not imported either: every imported target is checked on X again.
+        const base = Object.hasOwn(all, h) ? all[h] : newTarget(h, { tier: t.tier, source: "import" });
         Object.assign(base, sanitizePatch(t));
         delete base.priorityManual;
         if (t.profile && typeof t.profile === "object") base.profile = sanitizeData(t.profile);
@@ -47,6 +48,18 @@ export async function importData(data, parts = ["settings", "targets", "history"
       return all;
     });
     imported.targets = n;
+    if (data.blacklist && typeof data.blacklist === "object") {
+      const clean = {};
+      for (const [k, e] of Object.entries(data.blacklist)) {
+        const h = normalizeHandle((e && e.handle) || k);
+        if (!h || !e || typeof e !== "object") continue;
+        const at = Number(e.at);
+        clean[h] = { handle: h, name: String(e.name || "").slice(0, 80), reason: e.reason === "no_followback" ? "no_followback" : "manual", at: Number.isFinite(at) ? Math.min(at, now()) : now(), days: Number.isFinite(Number(e.days)) ? Number(e.days) : null, comments: Math.max(0, Number(e.comments) || 0), tier: Number(e.tier) === 1 ? 1 : Number(e.tier) === 2 ? 2 : null, followers: Number(e.followers) || null };
+      }
+      await save({ [K.blacklist]: { ...(await load(K.blacklist, {})), ...clean } });
+      await updateTargets((all) => { for (const h of Object.keys(clean)) delete all[h]; return all; });
+      imported.blacklist = Object.keys(clean).length;
+    }
   }
   if (parts.includes("history") && Array.isArray(data.history)) {
     const existing = new Set((await H.all()).map((r) => r.id));
@@ -144,7 +157,7 @@ export async function clearHistory() {
 // Factory reset of everything except API keys and what the safety limits depend on: comments posted in the
 // last 8 days (rolling 24h / 7-day caps) and the spend ledger (monthly budget). The ramp starts again.
 export async function resetAll() {
-  await remove([K.settings, K.targets, K.candidates, K.seen, K.logs, K.discovery, K.selectorOverrides, K.learning, K.state]);
+  await remove([K.settings, K.targets, K.candidates, K.blacklist, K.seen, K.logs, K.discovery, K.selectorOverrides, K.learning, K.state]);
   const keepSince = now() - 8 * 864e5;
   for (const r of await H.all()) {
     const recentPost = (r.status === HS.POSTED || r.maybePosted) && (r.postedAt || r.attemptAt || r.createdAt) >= keepSince;

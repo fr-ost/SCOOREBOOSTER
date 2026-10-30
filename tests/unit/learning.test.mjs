@@ -36,8 +36,11 @@ describe("learning.js", () => {
     const t = newTarget("bob", { group: "B", tier: 1 });
     const arms = L.armsFor(t, s);
     const keys = arms.map((a) => a.key).sort();
-    assert.deepEqual(keys, ["insightful|cheap", "insightful|high", "witty|cheap", "witty|high"]);
-    assert.ok(arms.find((a) => a.key === "insightful|high").isDefault);
+    // The Tone prompt ("main") is always the default arm; the tested tones are added to it.
+    assert.deepEqual(keys, ["insightful|cheap", "insightful|high", "main|cheap", "main|high", "witty|cheap", "witty|high"]);
+    assert.ok(arms.find((a) => a.key === "main|high").isDefault);
+    // No tested tones or presets: a single arm, so A/B testing changes nothing.
+    assert.equal(L.armsFor(t, sanitizeSettings({})).length, 1);
     const t2 = { ...t, tone: "bold", preset: "balanced" };
     assert.deepEqual(L.armsFor(t2, s).map((a) => a.key), ["bold|balanced"]);
   });
@@ -70,6 +73,7 @@ describe("learning.js", () => {
     const hist = [
       ...Array.from({ length: 20 }, () => posted("witty|balanced", "B", { likes: 3, checkedAt: 5 })),
       ...Array.from({ length: 20 }, () => posted("insightful|balanced", "B", { likes: 0, checkedAt: 5 })),
+      ...Array.from({ length: 20 }, () => posted("main|balanced", "B", { likes: 0, checkedAt: 5 })), // the Tone prompt arm
     ];
     let witty = 0;
     for (let i = 0; i < 200; i++) if (L.chooseArm(t, s, hist).tone === "witty") witty++;

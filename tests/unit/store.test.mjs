@@ -99,7 +99,6 @@ describe("store.js", () => {
         account: { handle: " @Me_Handle " },
         safety: { skip: { languages: [" EN ", "", "bn"], blockedWords: ["Scam", "  "], politicalKeywords: "not-an-array" } },
         cleanup: { whitelist: ["@Friend", " other "] },
-        prompt: { styleExamples: [" one ", "", "two"] },
         watch: { listUrls: [" https://x.com/i/lists/1 ", ""] },
       });
       assert.equal(s.account.handle, "Me_Handle");
@@ -107,7 +106,6 @@ describe("store.js", () => {
       assert.deepEqual(s.safety.skip.blockedWords, ["scam"]);
       assert.deepEqual(s.safety.skip.politicalKeywords, []);
       assert.deepEqual(s.cleanup.whitelist, ["friend", "other"]);
-      assert.deepEqual(s.prompt.styleExamples, ["one", "two"]);
       assert.deepEqual(s.watch.listUrls, ["https://x.com/i/lists/1"]);
     });
 

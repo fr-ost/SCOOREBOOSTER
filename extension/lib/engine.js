@@ -3,13 +3,13 @@
 // exactly where it left off. A job lease in state.job prevents overlapping work.
 
 import { STATUS, MODE, HS, STOP, STOP_LABEL, ALARM, K, HARD, OPEN_STATUSES } from "./constants.js";
-import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, log, load, save } from "./store.js";
+import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, getBlacklist, log, load, save } from "./store.js";
 import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
-import { effectiveMode, dailyLimit, groupLimit, generationLimit, likeLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
+import { effectiveMode, dailyLimit, generationLimit, likeLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart } from "./safety.js";
 import { skipReason } from "./filters.js";
-import { effectiveTone, effectivePreset, isActive } from "./targets.js";
+import { effectiveTone, effectivePreset, isActive, followStatus, FS } from "./targets.js";
 import { generate } from "./generator.js";
 import { weightedLength } from "./quality.js";
 import { workerTab, releaseGuard } from "./tabs.js";
@@ -18,6 +18,7 @@ import { postReply } from "./poster.js";
 import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
+import { followStep } from "./follow.js";
 import { cancelDiscovery } from "./discovery.js";
 
 // Background X jobs started outside the tick (profile refreshes) check this flag; Pause/Stop set it.
@@ -43,6 +44,13 @@ export async function scheduleTick(ms, why = "") {
   if (delay < 5 * MIN) tickTimer = setTimeout(() => tick(why === "manual" ? "manual" : "timer"), delay);
   try { await chrome.alarms.create(ALARM.TICK, { when: now() + Math.max(delay + 2000, 30000) }); } catch (_) {}
   await patchState({ nextTickAt: when, nextTickWhy: why });
+}
+
+// "Check now" requests (Run a check now, learning checks). While a tick is running its own final
+// scheduleTick would replace a new timer, so the request is remembered and runs right after that tick.
+export async function requestTick(ms, why = "manual") {
+  if (ticking) { rerunRequested = true; return; }
+  await scheduleTick(ms, why);
 }
 
 // Called once when a (new) service worker instance starts: nothing can be running in this instance
@@ -156,7 +164,7 @@ export async function computeCounts(settings, ts = now()) {
 
 export async function getStatus() {
   const ts = now();
-  const [settings, state, secrets, targets, spend] = await Promise.all([getSettings(), getState(), getSecrets(), getTargets(), getSpend()]);
+  const [settings, state, secrets, targets, spend, blacklist] = await Promise.all([getSettings(), getState(), getSecrets(), getTargets(), getSpend(), getBlacklist()]);
   const c = await computeCounts(settings, ts);
   const total = dailyLimit(settings, state, ts);
   const b = budgetStatus(settings, spend, ts);
@@ -176,8 +184,7 @@ export async function getStatus() {
     sub,
     effectiveMode: effectiveMode(settings, state, ts),
     today: {
-      posted: c.postedToday, limit: total, postedGroup: c.postedGroup,
-      groupLimits: { A: groupLimit(settings, "A", total), B: groupLimit(settings, "B", total) },
+      posted: c.postedToday, limit: total,
       generated: c.generatedToday, generationLimit: generationLimit(settings, state, ts),
       liked: c.likedToday, likeLimit: likeLimit(settings), skipped: c.skippedToday, failed: c.failedToday,
       cost: b.today || c.costToday,
@@ -191,7 +198,22 @@ export async function getStatus() {
     hasApiKey: !!secrets.openaiKey,
     targetCount: all.length,
     activeTargetCount: all.filter((t) => isActive(t, settings)).length,
+    follow: followCounts(all, blacklist),
   };
+}
+
+// Targets by follow status (enabled ones; disabled targets are never checked or commented on).
+export function followCounts(all, blacklist = {}) {
+  const c = { checking: 0, active: 0, follows: 0, followedBack: 0, off: 0, blacklisted: Object.keys(blacklist || {}).length };
+  for (const t of all) {
+    if (t.enabled === false) { c.off++; continue; }
+    const f = followStatus(t);
+    if (f === FS.CHECKING) c.checking++;
+    else if (f === FS.ACTIVE) c.active++;
+    else if (f === FS.FOLLOWS) c.follows++;
+    else c.followedBack++;
+  }
+  return c;
 }
 
 export async function refreshBadge() {
@@ -206,8 +228,12 @@ export async function start() {
   const [settings, secrets, targets, st] = await Promise.all([getSettings(), getSecrets(), getTargets(), getState()]);
   if (!secrets.openaiKey) return { ok: false, error: "Add your OpenAI API key first (Models & Costs)." };
   if (!settings.account.handle) return { ok: false, error: "Set your X handle first (Settings)." };
-  const active = Object.values(targets).filter((t) => isActive(t, settings));
-  if (!active.length) return { ok: false, error: "Add at least one enabled target first (Targets)." };
+  // Targets that are not checked yet count: the engine checks who follows you before commenting.
+  const usable = Object.values(targets).filter((t) => t.enabled !== false && [FS.CHECKING, FS.ACTIVE].includes(followStatus(t)));
+  if (!usable.length) {
+    const any = Object.values(targets).some((t) => t.enabled !== false);
+    return { ok: false, error: any ? "Every target already follows you - add accounts that don't follow you yet (Targets)." : "Add at least one enabled target first (Targets)." };
+  }
   if (settings.watch.strategy === "list" && !settings.watch.listUrls.length) log("warn", "Watch strategy is 'X List' but no list URL is set - using batched search instead.");
   const ts = now();
   await patchState((s) => ({
@@ -273,7 +299,7 @@ export async function clearAlert() {
 export async function runNow() {
   const st = await getState();
   if (st.status !== STATUS.RUNNING) return { ok: false, error: "Start the engine first." };
-  await scheduleTick(1500, "manual");
+  await requestTick(1500, "manual");
   return { ok: true };
 }
 
@@ -301,11 +327,18 @@ async function bestComments(n = 20) {
   return posted.filter((r) => r.results && r.results.likes > 0).sort((a, b) => (b.results.likes || 0) - (a.results.likes || 0)).slice(0, n).map((r) => r.comment);
 }
 
-// Expire open items that are too old to be worth posting.
+// Expire open items that are too old to be worth posting, and drop items for accounts that follow you
+// (followed back since the comment was written) or were removed from the targets.
 async function expireQueue(settings, ts = now()) {
   const open = await H.openQueue();
+  const targets = await getTargets();
   for (const r of open) {
     let why = "";
+    if (r.status !== HS.POSTING) {
+      const t = Object.hasOwn(targets, r.target) ? targets[r.target] : null;
+      if (!t) why = "Removed from your targets";
+      else if ([FS.FOLLOWS, FS.FOLLOWED_BACK].includes(followStatus(t))) why = "Follows you now - no more comments to this account";
+    }
     if (r.status === HS.PENDING_REVIEW && ts - r.createdAt > settings.review.pendingMaxAgeMin * MIN) why = "Expired while waiting for review";
     if (r.status === HS.APPROVED && ts - (r.approvedAt || r.createdAt) > settings.review.approvedMaxAgeMin * MIN) why = "Approved but expired before a posting slot";
     if (r.status === HS.QUEUED && r.postCreatedAt && ts - r.postCreatedAt > (settings.watch.maxPostAgeMin + 25) * MIN) why = "Too late to post (post is no longer fresh)";
@@ -367,10 +400,11 @@ async function tickBody(settings, secrets, reason = "timer") {
   for (const item of due) {
     const target = Object.hasOwn(targetsNow, item.target) ? targetsNow[item.target] : null;
     if (!target || !isActive(target, settings)) {
-      await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: "Target disabled or removed" } : null));
+      const why = !target ? "Target removed" : target.enabled === false ? "Target turned off" : followStatus(target) === FS.CHECKING ? "Follow status unknown - not posted" : "Follows you now - no more comments to this account";
+      await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: why } : null));
       continue;
     }
-    const gate = postGate(settings, state, { postedToday: counts.postedToday, postedGroup: counts.postedGroup, target: counts.targets[item.target] }, target, ts);
+    const gate = postGate(settings, state, { postedToday: counts.postedToday, target: counts.targets[item.target] }, target, ts);
     if (gate.ok) {
       const res = await postOne(item, { tabId, settings, me, counts });
       if (res === "stopped") return null;
@@ -425,20 +459,23 @@ async function tickBody(settings, secrets, reason = "timer") {
     }
   }
 
-  // 3) Background work when idle: queued profile refreshes, learning checks, optional cleanup.
+  // 3) Background work when idle: queued profile refreshes, follow checks, learning checks, optional cleanup.
+  let bg = null;
   if (await stillRunning()) {
-    const bg = await backgroundStep({ tabId, settings, me });
+    bg = await backgroundStep({ tabId, settings, me });
     if (bg && bg.stop) { await stop(bg.stop, bg.detail); return null; }
   }
 
-  // Next tick: random check interval, earlier if a queued comment becomes due.
+  // Next tick: random check interval, earlier if a queued comment becomes due. While newly added targets
+  // still wait for their follow check, come back a bit sooner (still a few profiles per 1.5-3 minutes).
   let delay = nextCheckMs(settings);
+  if (bg && bg.did === "follow" && bg.checkingLeft > 0) delay = Math.min(delay, humanDelay(90 * 1000, 180 * 1000));
   const st2 = await getState();
   const open2 = await H.openQueue();
   const counts2 = await computeCounts(settings, now());
   const tg2 = await getTargets();
   const postable = open2.filter((r) => (r.status === HS.APPROVED || (r.status === HS.QUEUED && mode === MODE.AUTO)) && tg2[r.target]).filter((r) => {
-    const g = postGate(settings, { ...st2, nextCommentAt: 0, breakUntil: 0, lastCommentAt: 0 }, { postedToday: counts2.postedToday, postedGroup: counts2.postedGroup, target: counts2.targets[r.target] }, tg2[r.target], now());
+    const g = postGate(settings, { ...st2, nextCommentAt: 0, breakUntil: 0, lastCommentAt: 0 }, { postedToday: counts2.postedToday, target: counts2.targets[r.target] }, tg2[r.target], now());
     return g.ok || g.reason === "outside_active_hours";
   });
   const nextDue = postable.map((r) => Math.max(r.scheduledFor || 0, st2.nextCommentAt || 0, st2.breakUntil || 0)).sort((a, b) => a - b)[0];
@@ -485,7 +522,7 @@ function scorePost(p, t, ts) {
   const ageMin = p.createdAt ? (ts - p.createdAt) / MIN : 10;
   const m = p.metrics || {};
   const velocity = ((m.likes || 0) + 2 * (m.replies || 0)) / Math.max(1, ageMin);
-  return (t.priority || 50) + (t.tier === 1 ? 15 : 0) + (t.group === "B" ? 5 : 0) - ageMin * 0.8 + Math.min(20, Math.log10(1 + velocity) * 10);
+  return (t.priority || 50) + (t.tier === 1 ? 15 : 0) - ageMin * 0.8 + Math.min(20, Math.log10(1 + velocity) * 10);
 }
 
 async function handleFresh(posts, ctx) {
@@ -558,6 +595,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
     const c = await ensureContext(target, tabId, settings, post);
     if (c && c.stop) { await stop(c.stop, c.detail); return "stopped"; }
     t = c;
+    if (!isActive(t, settings)) { log("info", `Not commenting on @${t.handle}: follows you now`); return "skipped"; }
   }
   let arm = {};
   if (settings.learning.enabled && settings.learning.abTesting) {
@@ -644,7 +682,12 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     await patchState({ ...afterPost(settings, state, ts), consecutiveFailures: 0, lastLikeAt: r.liked ? ts : state.lastLikeAt, internalErrors: 0 });
     await updateTargets((all) => {
       const t = all[rec.target];
-      if (t) { t.stats = t.stats || {}; t.stats.comments = (t.stats.comments || 0) + 1; t.stats.lastCommentAt = ts; }
+      if (t) {
+        t.stats = t.stats || {};
+        t.stats.comments = (t.stats.comments || 0) + 1;
+        t.stats.lastCommentAt = ts;
+        if (!t.stats.firstCommentAt) t.stats.firstCommentAt = ts; // starts the follow-back window
+      }
       return all;
     });
     log("info", `Posted a reply to @${rec.target}${r.liked ? " (and liked the post)" : ""}`);
@@ -681,6 +724,12 @@ async function backgroundStep({ tabId, settings, me }) {
     if (r && r.stop) return r;
     return { did: "refresh" };
   }
+  {
+    const r = await followStep({ tabId, settings, me, shouldStop });
+    if (r && r.stop) return r;
+    if (r && r.did) return r;
+  }
+  if (await shouldStop()) return null;
   if (settings.learning.enabled) {
     const r = await learningStep({ tabId, settings, me, shouldStop });
     if (r && r.stop) return r;

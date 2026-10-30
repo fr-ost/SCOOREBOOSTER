@@ -7,7 +7,7 @@
 import { CMD, STOP } from "./constants.js";
 import { navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
-import { mergePosts, applyProfile, isActive } from "./targets.js";
+import { mergePosts, applyProfile, isActive, followStatus, FS } from "./targets.js";
 import { getSeen, markSeen, updateTargets, getState, patchState, log } from "./store.js";
 import { MIN, now, sleep, humanDelay, randInt } from "./util.js";
 
@@ -155,6 +155,8 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now()) {
     if (!p.id || seen[p.id]) continue;
     const t = Object.hasOwn(targetsMap, p.author) ? targetsMap[p.author] : null;
     if (p.isRepost) continue; // the original may be another target's post: don't mark it seen
+    // A target still waiting for its follow check may turn out not to follow you: look at it again later.
+    if (t && t.enabled !== false && followStatus(t) === FS.CHECKING) continue;
     if (!t || !isActive(t, settings, ts)) { seenNow.push(p.id); continue; }
     const age = p.createdAt ? ts - p.createdAt : null;
     if (age != null && age < minAge) { waiting.push(p); continue; } // revisit next tick

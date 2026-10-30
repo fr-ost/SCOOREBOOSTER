@@ -89,12 +89,10 @@ export default {
     const learningSec = section({ hint: "Tracks follow-backs and responses to adjust priorities and tiers.", actions: btn("Run learning now", (e) => { const b = e.currentTarget; busy(b, async () => { const r = await ctx.send("learningRun", {}, { label: "Learning" }); if (r) toast("Learning run started", { type: "success" }); }); }, { size: "sm", iconName: "refresh" }) },
       h("div", { class: "toggle-grid" },
         f({ path: "learning.enabled", type: "toggle", label: "Learning on" }),
-        f({ path: "learning.autoTierUp", type: "toggle", label: "Move responsive accounts up a tier" }),
-        f({ path: "learning.autoMoveToA", type: "toggle", label: "Move to group A when they follow back" })),
+        f({ path: "learning.autoTierUp", type: "toggle", label: "Move responsive accounts up a tier" })),
       h("div", { class: "form-grid" },
         f({ path: "learning.coldAfterComments", type: "number", label: "Cool down after N comments without response", min: 2, max: 50 }),
         f({ path: "learning.coldCooldownDays", type: "number", label: "Cool-down length (days)", min: 1, max: 90 }),
-        f({ path: "learning.followCheckEveryHours", type: "number", label: "Check follow-backs every (hours)", min: 1, max: 720 }),
         f({ path: "learning.engagementCheckAfterHours", type: "number", label: "Check reply engagement after (hours)", min: 1, max: 720 }),
         f({ path: "learning.maxChecksPerRun", type: "number", label: "Max checks per run", min: 0, max: 10 })));
 
@@ -315,7 +313,7 @@ export default {
       advanced({ key: "settings.general", title: "Mode, time zone and theme", desc: "Also available on the Dashboard, in Safety and in the top bar" }, generalSec),
       advanced({ key: "settings.watch", title: "Watching details", desc: "Search batch size, profiles per check, check interval, quote posts" }, watchMoreSec),
       advanced({ key: "settings.review", title: "Review queue", desc: "Expiry of pending and approved items, max waiting, notifications" }, reviewSec),
-      advanced({ key: "settings.learning", title: "Learning", desc: "Follow-back and engagement checks, cool-downs, automatic tier and group moves" }, learningSec),
+      advanced({ key: "settings.learning", title: "Learning", desc: "Engagement checks, cool-downs, automatic tier moves (follow checks: Targets tab)" }, learningSec),
       cleanupAdv,
       sorsaAdv,
       advanced({ key: "settings.worker", title: "Worker tab and selectors", desc: "Pinned tab or separate window, debug logging, selector overrides" }, workerSec, selectorsSec),

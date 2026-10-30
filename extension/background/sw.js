@@ -8,11 +8,12 @@ import * as engine from "../lib/engine.js";
 import * as T from "../lib/targets.js";
 import { onContentReady, onTabRemoved } from "../lib/tabs.js";
 import { runDiscovery, cancelDiscovery, candidatesToTargets } from "../lib/discovery.js";
-import { testModel, buildInstructions, buildInput, pickStyleExamples } from "../lib/generator.js";
+import { testModel, buildInstructions, buildInput } from "../lib/generator.js";
 import { testSorsa, refreshScores } from "../lib/sorsa.js";
 import { summary as learningSummary, resetAb } from "../lib/learning.js";
 import { preview as cleanupPreview } from "../lib/cleanup.js";
 import { exportData, importData, clearHistory, resetAll } from "../lib/backup.js";
+import { blacklistAdd, blacklistRemove } from "../lib/follow.js";
 import { normalizeHandle, now, sleep } from "../lib/util.js";
 import * as H from "../lib/history.js";
 import { refreshProfile } from "../lib/watcher.js";
@@ -104,15 +105,15 @@ async function refreshTargetsNow(handles) {
 
 async function previewPrompt(handle) {
   const [settings, targets] = await Promise.all([getSettings(), getTargets()]);
-  const t = (handle && targets[normalizeHandle(handle)]) || Object.values(targets)[0] || T.newTarget("example", { group: "B", tier: 1 });
+  const t = (handle && targets[normalizeHandle(handle)]) || Object.values(targets)[0] || T.newTarget("example", { tier: 1 });
   const post = (t.recentPosts && t.recentPosts[0] && { ...t.recentPosts[0], author: t.handle, authorName: t.name }) ||
     { id: "1", author: t.handle, authorName: t.name || "Example", text: "Most teams ship features. The best teams ship distribution. Building is no longer the hard part.", lang: "en", createdAt: now() - 6 * 60 * 1000 };
   const tone = T.effectiveTone(t, settings);
   const previous = (await H.recentPosted(12)).map((r) => r.comment);
   return {
     ok: true,
-    instructions: buildInstructions({ settings, target: t, toneText: tone.text, angle: "(a random angle is chosen per comment)", myHandle: settings.account.handle }),
-    input: buildInput({ post, target: t, styleExamples: pickStyleExamples(settings, []), avoid: previous }),
+    instructions: buildInstructions({ settings, target: t, toneText: tone.text, angle: "(a random angle is chosen per comment)", myHandle: settings.account.handle, hasExamples: false }),
+    input: buildInput({ post, target: t, styleExamples: [], avoid: previous }),
   };
 }
 
@@ -148,9 +149,11 @@ const handlers = {
   targetRefresh: (m) => refreshTargetsNow(m.handles || (m.handle ? [m.handle] : [])),
 
   candidatesAdd: async (m) => {
-    const r = await candidatesToTargets(m.handles || [], m.group === "A" ? "A" : "B", Number(m.tier) === 1 ? 1 : 2, T.upsert);
-    return { ok: true, added: r.added, updated: r.updated };
+    const r = await candidatesToTargets(m.handles || [], Number(m.tier) === 1 ? 1 : 2, T.upsert);
+    return { ok: true, added: r.added, updated: r.updated, blacklisted: r.blacklisted || 0 };
   },
+  blacklistAdd: async (m) => ({ ok: true, ...(await blacklistAdd(m.handles || [], "manual")) }),
+  blacklistRemove: async (m) => ({ ok: true, ...(await blacklistRemove(m.handles || [])) }),
   candidatesRemove: async (m) => {
     const set = new Set((m.handles || []).map(normalizeHandle));
     await updateCandidates((all) => { for (const h of set) delete all[h]; return all; });
@@ -193,7 +196,7 @@ const handlers = {
   learningRun: async () => {
     await patchState({ lastLearningAt: 0, learningForce: true });
     const st = await getState();
-    if (st.status === STATUS.RUNNING) { await engine.scheduleTick(5000, "learning check"); return { ok: true, note: "Checking now" }; }
+    if (st.status === STATUS.RUNNING) { await engine.requestTick(5000, "manual"); return { ok: true, note: "Checking now" }; }
     return { ok: true, note: "Checks run on the next check after you press Start" };
   },
   learningSummary: () => learningSummary(),

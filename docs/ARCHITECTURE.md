@@ -14,7 +14,7 @@ extension/
     db.js                 IndexedDB adapter (+ in-memory adapter for Node tests)
     history.js            history records = review queue + log of every generated comment
     costs.js              real cost from usage, spend ledger, budget, estimates, totals, performance
-    targets.js            target CRUD, import parsing, tone/preset resolution, profile merge
+    targets.js            target CRUD, import parsing, follow status, tone/preset resolution, profile merge
     scores.js             own ranking ("ScoreX rank"), bot flags, tier suggestion, Sorsa mapping
     sorsa.js              optional Sorsa Score provider (user key + optional host permission)
     filters.js            post skip rules (ads, link-only, political, giveaway, gm, language, age)
@@ -26,7 +26,8 @@ extension/
     watcher.js            new-post detection (X List / batched Latest search / profile rotation)
     poster.js             human-like posting flow (navigate, read, scroll, like, type, submit, verify)
     discovery.js          candidate discovery jobs (followers/following/search/common follows)
-    learning.js           follow-back + engagement tracking, priorities, A/B testing (Thompson sampling)
+    follow.js             follow tracking: followers-list scan + profile checks, give-up removal, blacklist
+    learning.js           follow-back credit + engagement tracking, priorities, A/B testing (Thompson sampling)
     cleanup.js            optional unfollow of non-followers after N days (default OFF)
     engine.js             start/pause/stop/resume, the randomized tick, auto-stop, review actions
     notify.js             desktop notifications + badge
@@ -40,7 +41,7 @@ extension/
 ## Ownership rule (race-free storage)
 
 * `sx.settings`, `sx.secrets`, `sx.selectorOverrides`: written by the dashboard, read by the service worker.
-* `sx.state`, `sx.targets`, `sx.candidates`, `sx.discovery`, `sx.logs`, `sx.spend`, `sx.learning`, `sx.seen`
+* `sx.state`, `sx.targets`, `sx.candidates`, `sx.blacklist`, `sx.discovery`, `sx.logs`, `sx.spend`, `sx.learning`, `sx.seen`
   and the IndexedDB history: written **only** by the service worker. The UI reads them (and listens with
   `chrome.storage.onChanged`) and asks the worker for changes with messages.
 
@@ -53,13 +54,15 @@ extension/
 |---|---|---|
 | getStatus | - | `{ status }` (see below) |
 | start / pause / resume / stop / runNow / clearAlert | - | `{}` |
-| targetsUpsert | `{ rows, defaults: {group, tier, source}, overwrite }` | `{ added, updated }` |
-| targetsImport | `{ text, defaults }` (CSV / JSON / plain list) | `{ added, updated, parsed }` |
+| targetsUpsert | `{ rows, defaults: {tier, source}, overwrite }` | `{ added, updated, blacklisted }` |
+| targetsImport | `{ text, defaults }` (CSV / JSON / plain list) | `{ added, updated, blacklisted, parsed }` |
 | targetPatch | `{ handle, patch }` | `{ target }` |
 | targetsBulk | `{ handles, patch }` | `{}` |
 | targetsRemove | `{ handles }` | `{ removed }` |
 | targetRefresh | `{ handles }` | `{ queued }` |
-| candidatesAdd | `{ handles, group, tier }` | `{ added }` |
+| candidatesAdd | `{ handles, tier }` | `{ added, updated, blacklisted }` |
+| blacklistAdd | `{ handles }` (also removes them from the targets) | `{ added, removedTargets }` |
+| blacklistRemove | `{ handles }` | `{ removed }` |
 | candidatesRemove | `{ handles }` | `{}` |
 | candidatesClear | - | `{}` |
 | discoveryStart | `{ source, handles, query, maxUsers, enrich }` | `{}` (progress in `sx.discovery`) |
@@ -79,10 +82,17 @@ extension/
 | historyClear | - | `{}` |
 | resetAll | - | `{}` |
 
-`status` = `{ state, effectiveMode, today: { posted, limit, postedGroup, groupLimits, generated,
-generationLimit, liked, likeLimit, skipped, failed, cost }, month: { cost, budget, pct, reached, warn },
-pendingReview, queued, activeHours: { inside, opensAt, closesAt }, rampStage, daysSinceStart, hasApiKey,
-targetCount, activeTargetCount, label }`.
+`status` = `{ state, effectiveMode, today: { posted, limit, generated, generationLimit, liked, likeLimit,
+skipped, failed, cost }, month: { cost, budget, pct, reached, warn }, pendingReview, queued,
+activeHours: { inside, opensAt, closesAt }, rampStage, daysSinceStart, hasApiKey, targetCount,
+activeTargetCount, follow: { checking, active, follows, followedBack, off, blacklisted }, label }`.
+
+## Follow status
+
+`followStatus(target)` (lib/targets.js) from `target.rel.followsYou`: `checking` (null, not checked yet),
+`active` (false: the only status that is watched and commented on), `follows` (true without a follow-back) and
+`followed_back` (true with `rel.followedBackAt`). `target.group` mirrors it (A = follows you, B = not) and is
+not editable. The 14-day give-up window starts at `target.stats.firstCommentAt`.
 
 ## Content commands (service worker -> x.com tab)
 
@@ -110,7 +120,8 @@ See the header of `lib/history.js`. One record per generated comment. Records wi
 ## Engine tick
 
 One randomized one-shot alarm (`sx.tick`) plus a 1-minute watchdog alarm. Each tick, in order:
-safety gates -> expire stale queue items -> post one due item (approved/queued) -> otherwise watch for new
-posts and generate for the best fresh one -> otherwise background work (profile refresh, learning checks,
-cleanup) -> schedule the next tick at a random interval inside active hours. A job lease in `sx.state.job`
+safety gates -> expire stale queue items (and drop items for accounts that follow you now or were removed)
+-> post one due item (approved/queued) -> otherwise watch for new posts and generate for the best fresh one
+-> otherwise background work (queued profile refreshes, follow checks, learning checks, cleanup) -> schedule
+the next tick at a random interval inside active hours. A job lease in `sx.state.job`
 prevents two ticks from running at once, also across service-worker restarts.

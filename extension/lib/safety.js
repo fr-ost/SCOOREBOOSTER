@@ -22,11 +22,6 @@ export function rampStage(state, ts = now()) { return Math.min(2, Math.floor(day
 export function dailyLimit(settings, state, ts = now()) {
   return clamp(settings.safety.ramp[rampStage(state, ts)] || 0, 0, HARD.dailyComments);
 }
-export function groupLimit(settings, group, total) {
-  const g = settings.groups[group];
-  if (!g || !g.enabled) return 0;
-  return Math.min(total, clamp(g.dailyLimit, 0, HARD.dailyComments));
-}
 export function generationLimit(settings, state, ts = now()) {
   return Math.ceil(dailyLimit(settings, state, ts) * settings.safety.generationFactor);
 }
@@ -86,7 +81,7 @@ export function nextCheckMs(settings) {
 
 // ---------- gates ----------
 
-// Can a comment be posted right now? counts: { postedToday, postedGroup: {A,B}, target: {day, week} }
+// Can a comment be posted right now? counts: { postedToday, target: {day, week} }
 export function postGate(settings, state, counts, target, ts = now()) {
   const ah = activeHours(settings, ts);
   if (!ah.inside) return { ok: false, reason: "outside_active_hours", until: ah.opensAt };
@@ -96,8 +91,6 @@ export function postGate(settings, state, counts, target, ts = now()) {
   const total = dailyLimit(settings, state, ts);
   if (counts.postedToday >= total) return { ok: false, reason: "daily_limit", limit: total };
   if (target) {
-    const gl = groupLimit(settings, target.group, total);
-    if ((counts.postedGroup && counts.postedGroup[target.group] || 0) >= gl) return { ok: false, reason: "group_limit", limit: gl };
     const tc = counts.target || { day: 0, week: 0 };
     if (tc.day >= Math.min(settings.safety.perTargetDay, HARD.perTargetDay)) return { ok: false, reason: "target_day" };
     if (tc.week >= Math.min(settings.safety.perTargetWeek, HARD.perTargetWeek)) return { ok: false, reason: "target_week" };
@@ -111,8 +104,6 @@ export function generateGate(settings, state, counts, target, ts = now()) {
   if (counts.postedToday + counts.openQueue >= total) return { ok: false, reason: "daily_limit" };
   if (counts.generatedToday >= generationLimit(settings, state, ts)) return { ok: false, reason: "generation_limit" };
   if (target) {
-    const gl = groupLimit(settings, target.group, total);
-    if ((counts.postedGroup[target.group] || 0) + (counts.openGroup[target.group] || 0) >= gl) return { ok: false, reason: "group_limit" };
     const tc = counts.target || { day: 0, week: 0, open: 0 };
     if (tc.open > 0) return { ok: false, reason: "target_has_open_item" };
     if (tc.day >= Math.min(settings.safety.perTargetDay, HARD.perTargetDay)) return { ok: false, reason: "target_day" };
@@ -127,7 +118,6 @@ export const GATE_LABEL = {
   break: "Taking a break",
   gap: "Waiting between comments",
   daily_limit: "Daily comment limit reached",
-  group_limit: "Group daily limit reached",
   target_day: "Already commented on this account today",
   target_week: "3 comments on this account this week",
   target_has_open_item: "A comment for this account is already queued",

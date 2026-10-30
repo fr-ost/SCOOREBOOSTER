@@ -1,15 +1,16 @@
-// Targets tab: "Add targets" (paste box, group, tier, import file, export) on top, the targets table with
-// inline edits and bulk actions below, and Discovery + the candidates list in a collapsed section.
-// All target changes go through messages.
+// Targets tab: "Add targets" (paste box, tier, import file, export) on top, the targets table with its
+// follow status (checking / not following / follows you / followed back), inline edits and bulk actions,
+// the follow rules (give-up days, auto-remove, blacklist) below it. Collapsed: follow check details, the
+// blacklist, Discovery + the candidates list, and how ranking and watching work.
+// Only accounts that don't follow you get comments. All target changes go through messages.
 
 import { K, PRESET_KEYS } from "../../lib/constants.js";
 import { parseHandleList, toCsv, num } from "../../lib/util.js";
-import { parseImport, allToneKeys } from "../../lib/targets.js";
-import { h, clear, section, sub, advanced, btn, busy, toast, icon, renderTable, groupBadge, tierBadge, badge, xLink, selectEl, toggleEl, labeled, confirmDialog, download, readFileText, stamp, progressBar, fmtCount, fmtAgo, fmtDate, fmtDateTime, debounce, truncate, add, fill } from "../components.js";
+import { parseImport, allToneKeys, followStatus, followDays, FS, FS_LABEL, MAIN_TONE } from "../../lib/targets.js";
+import { h, clear, section, sub, advanced, btn, busy, toast, icon, renderTable, tierBadge, followBadge, badge, xLink, selectEl, toggleEl, labeled, confirmDialog, download, readFileText, stamp, progressBar, fmtCount, fmtAgo, fmtDate, fmtDateTime, debounce, truncate, add, fill } from "../components.js";
 
-// Values match lib/discovery.js sourceUrls().
+// Values match lib/discovery.js sourceUrls(). "My followers" is not offered: followers are never commented on.
 const SOURCES = [
-  ["myFollowers", "My followers (group A candidates)"],
   ["followersOf", "Followers of @account"],
   ["followingOf", "Following of @account"],
   ["search", "Keyword search (people)"],
@@ -18,8 +19,8 @@ const SOURCES = [
 const WATCH_LABEL = { list: "X List (recommended)", search: "Batched Latest search", rotation: "Profile rotation" };
 
 export function toneLabel(key, settings) {
-  if (!key) return "Group default";
-  if (key === "custom") return "Custom text";
+  if (!key || key === MAIN_TONE) return "Your Tone prompt";
+  if (key === "custom") return "Custom text (old)";
   if (key.startsWith("custom:")) {
     const c = (settings.customTones || []).find((x) => "custom:" + x.id === key);
     return c ? c.name || "Custom tone" : "Custom (missing)";
@@ -36,7 +37,7 @@ const C = {
   overlap: (c) => (c.overlap != null ? c.overlap : c.overlapCount != null ? c.overlapCount : null),
   sources: (c) => (Array.isArray(c.sources) ? c.sources : c.source ? [c.source] : []),
   tier: (c) => Number(c.suggestedTier || c.tier) || null,
-  group: (c) => c.suggestedGroup || c.group || (c.followsYou || (c.rel && c.rel.followsYou) ? "A" : null),
+  followsYou: (c) => !!(c.followsYou || (c.rel && c.rel.followsYou) || (c.profile && c.profile.followsYou)),
   pass: (c) => (c.pass != null ? c.pass : c.filter ? c.filter.pass : null),
   why: (c) => c.why || (c.filter && c.filter.why) || [],
 };
@@ -44,13 +45,13 @@ const C = {
 export default {
   id: "targets",
   title: "Targets",
-  hint: "The accounts ScoreX replies to. Group A follows you (keep warm), group B does not yet (get noticed).",
+  hint: "The accounts ScoreX replies to. Only accounts that don't follow you get comments, and comments stop once they follow back.",
   async render(root, ctx) {
     const selected = new Set();
     const candSelected = new Set();
     const sortState = { key: "priority", dir: "desc" };
     const candSort = { key: "score", dir: "desc" };
-    const f = { q: "", group: "", tier: "", enabled: "" };
+    const f = { q: "", status: "", tier: "", enabled: "" };
     const cf = { q: "", passOnly: false };
 
     // ------------------------------------------------ summary
@@ -58,7 +59,6 @@ export default {
 
     // ------------------------------------------------ add / import / export
     const addText = h("textarea", { class: "input", id: "addHandles", rows: 3, placeholder: "@naval\nhttps://x.com/balajis\nvitalikbuterin, paulg" });
-    const addGroup = selectEl([["B", "B · does not follow me"], ["A", "A · follows me"]], "B", { id: "addGroup" });
     const addTier = selectEl([["2", "Tier 2 · smart account"], ["1", "Tier 1 · big influencer"]], "2", { id: "addTier" });
     const addCount = h("span", { class: "muted small" });
     addText.addEventListener("input", () => { const n = parseHandleList(addText.value).length; addCount.textContent = n ? `${n} account${n === 1 ? "" : "s"} recognised` : ""; });
@@ -67,8 +67,8 @@ export default {
       if (!rows.length) { toast("Paste at least one @handle or x.com profile link.", { type: "warn" }); return; }
       const b = e.currentTarget;
       await busy(b, async () => {
-        const r = await ctx.send("targetsUpsert", { rows, defaults: { group: addGroup.value, tier: Number(addTier.value), source: "manual" }, overwrite: false }, { label: "Add targets" });
-        if (r) { toast(`Added ${num(r.added)}, updated ${num(r.updated)}`, { type: "success" }); addText.value = ""; addCount.textContent = ""; }
+        const r = await ctx.send("targetsUpsert", { rows, defaults: { tier: Number(addTier.value), source: "manual" }, overwrite: false }, { label: "Add targets" });
+        if (r) { addedToast(r); addText.value = ""; addCount.textContent = ""; }
       });
     }, { kind: "primary", iconName: "plus", id: "addTargetsBtn" });
 
@@ -81,10 +81,10 @@ export default {
         const text = await readFileText(file);
         const parsed = parseImport(text);
         if (!parsed.length) { toast("No handles found in that file.", { type: "warn" }); return; }
-        const ok = await confirmDialog(`Found ${parsed.length} account${parsed.length === 1 ? "" : "s"} in ${file.name}. Rows without a group/tier use ${addGroup.value === "A" ? "group A" : "group B"} / tier ${addTier.value}. Import them?`, { title: "Import targets", okLabel: "Import" });
+        const ok = await confirmDialog(`Found ${parsed.length} account${parsed.length === 1 ? "" : "s"} in ${file.name}. Rows without a tier use tier ${addTier.value}. ScoreX first checks who already follows you and only comments on accounts that don't. Import them?`, { title: "Import targets", okLabel: "Import" });
         if (!ok) return;
-        const r = await ctx.send("targetsImport", { text, defaults: { group: addGroup.value, tier: Number(addTier.value), source: "import" } }, { label: "Import" });
-        if (r) toast(`Imported: ${num(r.added)} added, ${num(r.updated)} updated (${num(r.parsed != null ? r.parsed : parsed.length)} rows)`, { type: "success" });
+        const r = await ctx.send("targetsImport", { text, defaults: { tier: Number(addTier.value), source: "import" } }, { label: "Import" });
+        if (r) addedToast(r, `Imported ${num(r.parsed != null ? r.parsed : parsed.length)} rows: added`);
       } catch (err) { toast("Could not read the file: " + err.message, { type: "error" }); }
     });
 
@@ -92,12 +92,15 @@ export default {
       const list = ctx.targetList();
       if (!list.length) { toast("No targets to export.", { type: "warn" }); return; }
       const cols = [
-        { key: "handle", label: "handle" }, { key: "name", label: "name" }, { key: "group", label: "group" }, { key: "tier", label: "tier" },
-        { key: "enabled", label: "enabled", get: (t) => (t.enabled !== false ? "yes" : "no") }, { key: "tone", label: "tone" }, { key: "preset", label: "preset" },
+        { key: "handle", label: "handle" }, { key: "name", label: "name" }, { key: "tier", label: "tier" },
+        { key: "enabled", label: "enabled", get: (t) => (t.enabled !== false ? "yes" : "no") },
+        { key: "follow", label: "follow_status", get: (t) => (t.rel && t.rel.gone ? "Not found" : FS_LABEL[followStatus(t)]) },
+        { key: "first", label: "first_comment", get: (t) => (t.stats && t.stats.firstCommentAt ? new Date(t.stats.firstCommentAt).toISOString() : "") },
+        { key: "followedBack", label: "followed_back", get: (t) => (t.rel && t.rel.followedBackAt ? new Date(t.rel.followedBackAt).toISOString() : "") },
+        { key: "tone", label: "tone" }, { key: "preset", label: "preset" },
         { key: "priority", label: "priority" }, { key: "followers", label: "followers", get: (t) => (t.profile && t.profile.followers) || "" },
         { key: "own", label: "scorex_rank", get: (t) => (t.score && t.score.own != null ? t.score.own : "") },
         { key: "sorsa", label: "sorsa_score", get: (t) => (t.score && t.score.sorsa != null ? t.score.sorsa : "") },
-        { key: "followsYou", label: "follows_you", get: (t) => (t.rel && t.rel.followsYou != null ? (t.rel.followsYou ? "yes" : "no") : "") },
         { key: "comments", label: "comments", get: (t) => (t.stats && t.stats.comments) || 0 },
         { key: "last", label: "last_comment", get: (t) => (t.stats && t.stats.lastCommentAt ? new Date(t.stats.lastCommentAt).toISOString() : "") },
         { key: "notes", label: "notes" },
@@ -106,24 +109,24 @@ export default {
     };
 
     const importLabel = h("label", { class: "btn btn-sm", for: "importFile", tabindex: "0", onKeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInput.click(); } } }, icon("upload"), h("span", null, "Import file…"));
-    const addSec = section({ title: "Add targets", hint: "Paste @handles or x.com profile links, one per line or separated by commas." },
+    const addSec = section({ title: "Add targets", hint: "Paste @handles or x.com profile links, one per line or separated by commas. ScoreX first checks who already follows you and only comments on accounts that don't." },
       h("div", { class: "add-box" },
         h("div", { class: "stack-sm" },
           h("label", { class: "sr-only", for: "addHandles" }, "Handles or profile links"),
           addText,
-          h("div", { class: "toolbar toolbar-end" }, labeled("Group", addGroup), labeled("Tier", addTier), addBtn, addCount)),
+          h("div", { class: "toolbar toolbar-end" }, labeled("Tier", addTier), addBtn, addCount)),
         h("div", { class: "stack-sm" },
           sub("From a file",
-            h("p", { class: "small muted" }, "CSV (handle, group, tier, tone, notes), JSON or a plain list. Missing group/tier use the selects."),
+            h("p", { class: "small muted" }, "CSV (handle, tier, tone, notes), JSON or a plain list. Missing tiers use the Tier select."),
             h("div", { class: "toolbar" }, importLabel, fileInput, btn("Export CSV", exportCsv, { iconName: "download", size: "sm", id: "exportTargetsBtn", title: "All targets with scores and stats" }))))));
 
     // ------------------------------------------------ targets table
     const search = h("input", { class: "input", type: "search", placeholder: "Search handle, name or bio", id: "targetSearch", "aria-label": "Search targets" });
-    const fGroup = selectEl([["", "All groups"], ["A", "Group A"], ["B", "Group B"]], "", { "aria-label": "Filter by group" });
+    const fStatus = selectEl([["", "All statuses"], ...[FS.CHECKING, FS.ACTIVE, FS.FOLLOWS, FS.FOLLOWED_BACK].map((k) => [k, FS_LABEL[k]]), [GONE, "Not found"]], "", { id: "targetStatusFilter", "aria-label": "Filter by follow status" });
     const fTier = selectEl([["", "All tiers"], ["1", "Tier 1"], ["2", "Tier 2"]], "", { "aria-label": "Filter by tier" });
     const fEnabled = selectEl([["", "Enabled + disabled"], ["on", "Enabled only"], ["off", "Disabled only"]], "", { "aria-label": "Filter by enabled" });
     search.addEventListener("input", debounce(() => { f.q = search.value.trim().toLowerCase(); drawTable(true); }, 200));
-    fGroup.addEventListener("change", () => { f.group = fGroup.value; drawTable(true); });
+    fStatus.addEventListener("change", () => { f.status = fStatus.value; drawTable(true); });
     fTier.addEventListener("change", () => { f.tier = fTier.value; drawTable(true); });
     fEnabled.addEventListener("change", () => { f.enabled = fEnabled.value; drawTable(true); });
 
@@ -131,7 +134,7 @@ export default {
     const tableHost = h("div", { id: "targetsTable" });
 
     const tableSec = section({ wide: true, title: "Your targets", actions: summary },
-      h("div", { class: "toolbar filters" }, h("div", { class: "search-wrap" }, icon("search"), search), fGroup, fTier, fEnabled, h("span", { class: "spacer" }), h("span", { class: "small muted" }, "Edits save at once. Click a column to sort.")),
+      h("div", { class: "toolbar filters" }, h("div", { class: "search-wrap" }, icon("search"), search), fStatus, fTier, fEnabled, h("span", { class: "spacer" }), h("span", { class: "small muted" }, "Edits save at once. Click a column to sort.")),
       bulkBar,
       tableHost);
 
@@ -143,7 +146,7 @@ export default {
 
     function filtered() {
       return ctx.targetList().filter((t) => {
-        if (f.group && t.group !== f.group) return false;
+        if (f.status && fsOf(t) !== f.status) return false;
         if (f.tier && String(t.tier) !== f.tier) return false;
         if (f.enabled === "on" && t.enabled === false) return false;
         if (f.enabled === "off" && t.enabled !== false) return false;
@@ -157,8 +160,7 @@ export default {
 
     function toneOptions(t) {
       const s = ctx.settings;
-      const g = s.groups[t.group] || {};
-      const opts = [["", `Group default (${toneLabel(g.tone, s)})`]];
+      const opts = [["", "Your Tone prompt"]];
       for (const k of allToneKeys(s)) opts.push([k, toneLabel(k, s)]);
       if (t.tone && !opts.some((o) => o[0] === t.tone)) opts.push([t.tone, toneLabel(t.tone, s)]);
       return opts;
@@ -171,20 +173,15 @@ export default {
         { key: "handle", label: "Account", title: "Handle (opens x.com) and display name", render: (t) => h("div", { class: "cell-account" },
           h("div", { class: "cell-handle" }, xLink(t.handle), t.profile && t.profile.verified ? h("span", { class: "verified", title: "Verified" }, icon("check")) : null),
           h("div", { class: "cell-sub", title: (t.profile && t.profile.bio) || "" }, t.name || (t.profile && t.profile.name) || "")), sort: (t) => t.handle, defaultDir: "asc" },
-        { key: "group", label: "Group", render: (t) => {
-          const sel = selectEl([["A", "A"], ["B", "B"]], t.group, { class: "badge-select badge-group-" + String(t.group || "b").toLowerCase(), "aria-label": `Group for @${t.handle}`, title: t.group === "A" ? "Group A - follows you (keep warm)" : "Group B - does not follow you (get noticed)" });
-          sel.addEventListener("change", () => patchTarget(t.handle, { group: sel.value }));
-          return sel;
-        } },
         { key: "tier", label: "Tier", render: (t) => {
           const sel = selectEl([["1", "T1"], ["2", "T2"]], String(t.tier), { class: "badge-select badge-tier-" + (Number(t.tier) === 1 ? 1 : 2), "aria-label": `Tier for @${t.handle}`, title: Number(t.tier) === 1 ? "Tier 1 - big influencer" : "Tier 2 - smart account" });
           sel.addEventListener("change", () => patchTarget(t.handle, { tier: Number(sel.value) }));
           return sel;
         } },
+        { key: "follow", label: "Follow status", className: "col-follow", title: "Checking: not checked yet (no comments). Not following: ScoreX comments on them. Follows you: never commented on. Followed back: comments stopped.", render: (t) => followBadge(t, s), sort: followSortKey, defaultDir: "asc" },
         { key: "followers", label: "Followers", align: "right", render: (t) => fmtCount(t.profile && t.profile.followers != null ? t.profile.followers : null), sort: (t) => (t.profile ? t.profile.followers : null) },
         { key: "own", label: "ScoreX rank", align: "right", title: "Own 0-100 rank from followers, engagement rate, activity and quality", render: (t) => scoreChip(t.score && t.score.own), sort: (t) => (t.score ? t.score.own : null) },
         { key: "sorsa", label: "Sorsa Score", align: "right", title: "Shown when the Sorsa integration is enabled in Settings", render: (t) => (t.score && t.score.sorsa != null ? fmtCount(t.score.sorsa) : "-"), sort: (t) => (t.score ? t.score.sorsa : null) },
-        { key: "followsYou", label: "Follows you", render: (t) => { const v = t.rel && t.rel.followsYou; return v === true ? badge("Yes", "green") : v === false ? badge("No", "grey") : h("span", { class: "muted", title: "Not checked yet" }, "?"); }, sort: (t) => (t.rel && t.rel.followsYou ? 1 : t.rel && t.rel.followsYou === false ? 0 : -1) },
         { key: "priority", label: "Priority", align: "right", render: (t) => {
           const inp = h("input", { type: "number", class: "input input-xs", min: "0", max: "100", step: "1", value: String(t.priority != null ? t.priority : 50), "aria-label": `Priority for @${t.handle}` });
           inp.addEventListener("change", () => { const v = Math.max(0, Math.min(100, Math.round(Number(inp.value) || 0))); inp.value = String(v); patchTarget(t.handle, { priority: v }); });
@@ -199,14 +196,14 @@ export default {
           return sel;
         } },
         { key: "preset", label: "Preset", sort: false, render: (t) => {
-          const m = s.presetMatrix[`${t.group}${t.tier}`];
-          const sel = selectEl([["", `Matrix (${m || "balanced"})`], ...PRESET_KEYS.map((k) => [k, k === "high" ? "High quality" : k === "balanced" ? "Balanced" : "Cheap"])], t.preset || "", { class: "input input-sm", "aria-label": `Model preset override for @${t.handle}` });
+          const m = s.presetMatrix[`B${Number(t.tier) === 1 ? 1 : 2}`];
+          const sel = selectEl([["", `Tier preset (${m || "balanced"})`], ...PRESET_KEYS.map((k) => [k, k === "high" ? "High quality" : k === "balanced" ? "Balanced" : "Cheap"])], t.preset || "", { class: "input input-sm", "aria-label": `Model preset override for @${t.handle}` });
           sel.addEventListener("change", () => patchTarget(t.handle, { preset: sel.value }));
           return sel;
         } },
-        { key: "enabled", label: "On · actions", className: "col-actions col-sticky-right", title: "Enabled toggle, refresh profile, remove", sort: (t) => (t.enabled !== false ? 1 : 0), render: (t) => h("div", { class: "row-actions" },
+        { key: "enabled", label: "On · actions", className: "col-actions col-sticky-right", title: "Enabled toggle, re-check follow status, remove", sort: (t) => (t.enabled !== false ? 1 : 0), render: (t) => h("div", { class: "row-actions" },
           toggleEl("", t.enabled !== false, (v) => patchTarget(t.handle, { enabled: v }), { title: `Enable @${t.handle}` }),
-          btn("", (e) => { const b = e.currentTarget; busy(b, async () => { const r = await ctx.send("targetRefresh", { handles: [t.handle] }, { label: "Refresh profile" }); if (r) toast(`Profile refresh queued for @${t.handle}`, { type: "success" }); }); }, { iconName: "refresh", size: "sm", kind: "ghost", title: `Refresh @${t.handle}'s profile and score` }),
+          btn("", (e) => { const b = e.currentTarget; busy(b, async () => { const r = await ctx.send("targetRefresh", { handles: [t.handle] }, { label: "Re-check" }); if (r) toast(`Re-check queued for @${t.handle} (follow status and profile)`, { type: "success" }); }); }, { iconName: "refresh", size: "sm", kind: "ghost", title: `Re-check follow status and profile of @${t.handle}` }),
           btn("", async () => {
             if (!(await confirmDialog(`Remove @${t.handle} from your targets? Its history stays.`, { title: "Remove target", okLabel: "Remove", danger: true }))) return;
             const r = await ctx.send("targetsRemove", { handles: [t.handle] }, { label: "Remove" });
@@ -226,16 +223,19 @@ export default {
         const r = await ctx.send("targetsBulk", { handles: handles(), patch }, { label });
         if (r) toast(`${label}: ${n} target${n === 1 ? "" : "s"}`, { type: "success" });
       };
-      const gSel = selectEl([["", "Set group…"], ["A", "Group A"], ["B", "Group B"]], "", { class: "input input-sm", "aria-label": "Set group for selected" });
-      gSel.addEventListener("change", () => { if (gSel.value) bulk({ group: gSel.value }, "Set group " + gSel.value); gSel.value = ""; });
       const tSel = selectEl([["", "Set tier…"], ["1", "Tier 1"], ["2", "Tier 2"]], "", { class: "input input-sm", "aria-label": "Set tier for selected" });
       tSel.addEventListener("change", () => { if (tSel.value) bulk({ tier: Number(tSel.value) }, "Set tier " + tSel.value); tSel.value = ""; });
       fill(bulkBar, 
         h("strong", null, `${n} selected`),
-        gSel, tSel,
+        tSel,
         btn("Enable", () => bulk({ enabled: true }, "Enable"), { size: "sm" }),
         btn("Disable", () => bulk({ enabled: false }, "Disable"), { size: "sm" }),
-        btn("Refresh profiles", async () => { const r = await ctx.send("targetRefresh", { handles: handles() }, { label: "Refresh" }); if (r) toast(`Queued ${num(r.queued, n)} profile refreshes`, { type: "success" }); }, { size: "sm", iconName: "refresh" }),
+        btn("Re-check follow status", async () => { const r = await ctx.send("targetRefresh", { handles: handles() }, { label: "Re-check" }); if (r) toast(`Queued ${num(r.queued, n)} re-check${num(r.queued, n) === 1 ? "" : "s"} (follow status and profile)`, { type: "success" }); }, { size: "sm", iconName: "refresh", id: "bulkRecheckBtn" }),
+        btn("Blacklist", async () => {
+          if (!(await confirmDialog(`Blacklist ${n} account${n === 1 ? "" : "s"}? ${n === 1 ? "It is" : "They are"} removed from your targets and never added again by paste, import or discovery. History stays, and you can undo this in the Blacklist section.`, { title: "Blacklist targets", okLabel: "Blacklist", danger: true }))) return;
+          const r = await ctx.send("blacklistAdd", { handles: handles() }, { label: "Blacklist" });
+          if (r) { toast(`Blacklisted ${n} (${num(r.removedTargets)} removed from targets)`, { type: "success" }); selected.clear(); drawBulk(); }
+        }, { size: "sm", kind: "danger-soft", id: "bulkBlacklistBtn" }),
         btn("Remove", async () => {
           if (!(await confirmDialog(`Remove ${n} target${n === 1 ? "" : "s"}? Their history stays.`, { title: "Remove targets", okLabel: "Remove", danger: true }))) return;
           const r = await ctx.send("targetsRemove", { handles: handles() }, { label: "Remove" });
@@ -246,14 +246,20 @@ export default {
 
     function drawSummary() {
       const list = ctx.targetList();
-      const by = (fn) => list.filter(fn).length;
-      const item = (n, label, lead) => h("span", { class: "summary-item" }, lead || null, h("span", { class: "summary-num" }, String(n)), label);
+      const by = (st) => list.filter((t) => fsOf(t) === st).length;
+      const off = list.filter((t) => t.enabled === false).length;
+      const black = Object.keys(ctx.data[K.blacklist] || {}).length;
+      const item = (key, n, label, color, title) => h("span", { class: "summary-item", title: title || null, dataset: { sum: key } },
+        color ? h("span", { class: ["hs", "hs-" + color], "aria-hidden": "true" }) : null, h("span", { class: "summary-num" }, String(n)), label);
       fill(summary,
-        item(list.length, "targets"),
-        item(by((t) => t.group === "A"), "follow you", groupBadge("A")),
-        item(by((t) => t.group === "B"), "to win over", groupBadge("B")),
-        item(by((t) => Number(t.tier) === 1), "tier 1"),
-        item(by((t) => t.enabled !== false), "on"));
+        item("total", list.length, "targets"),
+        item(FS.CHECKING, by(FS.CHECKING), "checking", "grey", "Not checked yet: no comments until ScoreX knows whether they follow you"),
+        item(FS.ACTIVE, by(FS.ACTIVE), "not following", "ink", "Don't follow you: ScoreX comments on them"),
+        item(FS.FOLLOWS, by(FS.FOLLOWS), "follow you", "green-o", "Already followed you: never commented on"),
+        item(FS.FOLLOWED_BACK, by(FS.FOLLOWED_BACK), "followed back", "green", "Followed you back after ScoreX's comments: comments stopped"),
+        by(GONE) ? item(GONE, by(GONE), "not found", "red", "Profile not found on X (renamed, suspended or deleted): turned off") : null,
+        off ? item("off", off, "off", null, "Turned off: never checked or commented on") : null,
+        item("blacklisted", black, "blacklisted", "red", "Never added again (Blacklist section below)"));
     }
 
     let pendingDraw = false;
@@ -366,7 +372,7 @@ export default {
     const candBar = h("div", { class: "toolbar" });
     const candHost = h("div", { id: "candidatesTable" });
 
-    const addCandidates = async (group) => {
+    const addCandidates = async () => {
       const handles = [...candSelected];
       if (!handles.length) return;
       const cands = ctx.data[K.candidates] || {};
@@ -376,12 +382,13 @@ export default {
         if (!byTier.has(tier)) byTier.set(tier, []);
         byTier.get(tier).push(hd);
       }
-      let added = 0, okAll = true;
+      const sum = { added: 0, updated: 0, blacklisted: 0 };
+      let okAll = true;
       for (const [tier, list] of byTier) {
-        const r = await ctx.send("candidatesAdd", { handles: list, group, tier }, { label: "Add candidates" });
-        if (r) added += num(r.added, list.length); else okAll = false;
+        const r = await ctx.send("candidatesAdd", { handles: list, tier }, { label: "Add candidates" });
+        if (r) { sum.added += num(r.added); sum.updated += num(r.updated); sum.blacklisted += num(r.blacklisted); } else okAll = false;
       }
-      if (added) toast(`Added ${added} to group ${group}`, { type: "success" });
+      if (sum.added || sum.updated || sum.blacklisted) addedToast(sum, "Added", " to your targets");
       if (okAll) candSelected.clear();
       drawCandidates(true);
     };
@@ -394,8 +401,7 @@ export default {
         h("span", { class: "spacer" }),
         h("span", { class: "muted small" }, n ? `${n} selected` : "Select candidates to add them"),
         candTier,
-        btn("Add to group A", () => addCandidates("A"), { size: "sm", disabled: !n, title: "Accounts that follow you - keep warm" }),
-        btn("Add to group B", () => addCandidates("B"), { size: "sm", disabled: !n, title: "Accounts that don't follow you - get noticed" }),
+        btn("Add to targets", () => addCandidates(), { size: "sm", kind: n ? "primary" : "", disabled: !n, id: "candAddBtn", title: "Add the selected accounts to your targets (who already follows you is checked first)" }),
         btn("Remove", async () => { const r = await ctx.send("candidatesRemove", { handles: [...candSelected] }, { label: "Remove candidates" }); if (r) { candSelected.clear(); drawCandidates(true); } }, { size: "sm", disabled: !n, kind: "ghost" }),
         btn("Clear all", async () => {
           if (!(await confirmDialog("Remove every candidate from the list?", { title: "Clear candidates", okLabel: "Clear", danger: true }))) return;
@@ -408,6 +414,7 @@ export default {
       if (!force && candHost.contains(document.activeElement) && document.activeElement !== document.body) return;
       const all = Object.values(ctx.data[K.candidates] || {}).filter((c) => c && c.handle);
       const targetSet = new Set(ctx.targetList().map((t) => t.handle));
+      const black = ctx.data[K.blacklist] || {};
       for (const hd of [...candSelected]) if (!all.some((c) => c.handle === hd)) candSelected.delete(hd);
       const list = all.filter((c) => {
         if (cf.passOnly && C.pass(c) === false) return false;
@@ -417,14 +424,14 @@ export default {
       drawCandBar();
       clear(candHost).appendChild(renderTable({
         columns: [
-          { key: "handle", label: "Handle", render: (c) => h("div", { class: "cell-handle" }, xLink(c.handle), targetSet.has(c.handle) ? badge("target", "blue", "Already a target") : null), sort: (c) => c.handle, defaultDir: "asc" },
+          { key: "handle", label: "Handle", render: (c) => h("div", { class: "cell-handle" }, xLink(c.handle), targetSet.has(c.handle) ? badge("target", "blue", "Already a target") : null, Object.hasOwn(black, c.handle) ? badge("blacklisted", "red", "On your blacklist - it is skipped when added") : null), sort: (c) => c.handle, defaultDir: "asc" },
           { key: "name", label: "Name", render: (c) => h("span", { class: "cell-name", title: (c.profile && c.profile.bio) || c.bio || "" }, C.name(c) || "-"), sort: (c) => C.name(c).toLowerCase() },
           { key: "followers", label: "Followers", align: "right", render: (c) => fmtCount(C.followers(c)), sort: C.followers },
           { key: "score", label: "Score", align: "right", render: (c) => scoreChip(C.score(c)), sort: C.score },
           { key: "flags", label: "Flags", sort: false, render: (c) => { const fl = C.flags(c); return fl.length ? h("div", { class: "chips-inline" }, fl.map((x) => badge(String(x).replace(/_/g, " "), "amber"))) : "-"; } },
           { key: "overlap", label: "Overlap", align: "right", title: "How many source accounts follow this account (common follows)", render: (c) => (C.overlap(c) != null ? String(C.overlap(c)) : "-"), sort: C.overlap },
           { key: "sources", label: "Sources", sort: false, render: (c) => { const s = C.sources(c); return s.length ? h("span", { class: "small", title: s.join(", ") }, truncate(s.join(", "), 40)) : "-"; } },
-          { key: "suggested", label: "Suggested", sort: (c) => C.tier(c), render: (c) => h("div", { class: "chips-inline" }, C.group(c) ? groupBadge(C.group(c)) : null, C.tier(c) ? tierBadge(C.tier(c)) : null) },
+          { key: "suggested", label: "Suggested", sort: (c) => C.tier(c), render: (c) => h("div", { class: "chips-inline" }, C.tier(c) ? tierBadge(C.tier(c)) : null, C.followsYou(c) ? badge("follows you", "green", "Already follows you - ScoreX never comments on it") : null) },
           { key: "pass", label: "Filters", sort: (c) => (C.pass(c) === false ? 0 : 1), render: (c) => { const p = C.pass(c); const why = C.why(c); return p === false ? h("span", { title: why.join(", ") }, badge("No", "red"), h("span", { class: "small muted" }, " " + truncate(why.join(", "), 40))) : p === true ? badge("Pass", "green") : "-"; } },
         ],
         rows: list,
@@ -438,7 +445,7 @@ export default {
       }));
     }
 
-    const candSec = section({ wide: true, title: "Candidates", hint: "Accounts found by discovery. Pick the good ones and add them to a group." }, candBar, candHost);
+    const candSec = section({ wide: true, title: "Candidates", hint: "Accounts found by discovery. Pick the good ones and add them to your targets. Accounts that already follow you are never commented on." }, candBar, candHost);
 
     // ------------------------------------------------ explanation + watch summary
     const watchHost = h("div");
@@ -463,6 +470,109 @@ export default {
       h("p", { class: "muted small" }, "Tier 1 = big influencer, tier 2 = smart account. Priority (0-100) decides who goes first when several targets post at once."));
     const watchSec = section({ title: "Watching for new posts" }, watchHost);
 
+    // ------------------------------------------------ follow rules + follow checks
+    const giveUpField = ctx.field({ path: "follow.giveUpDays", type: "number", label: "Remove after", suffix: "days", min: 3, max: 90, id: "giveUpDays", hint: "of comments without a follow-back (3-90)" });
+    const autoRemoveField = ctx.field({ path: "follow.autoRemove", type: "toggle", label: "Remove accounts that don't follow back", id: "followAutoRemove" });
+    const blacklistField = ctx.field({ path: "follow.blacklist", type: "toggle", label: "Add removed accounts to the blacklist", id: "followBlacklist" });
+    const syncFollowRules = () => {
+      const off = !ctx.settings.follow.autoRemove;
+      giveUpField.control.disabled = off;
+      blacklistField.control.disabled = off;
+    };
+    syncFollowRules();
+    ctx.addRefresher(() => { if (!giveUpField.isConnected) return false; syncFollowRules(); return true; });
+    const rulesSec = section({ title: "Follow rules", id: "followRules", hint: "Accounts that follow you are never commented on, and comments stop as soon as someone follows back. The day counter in the table starts with the first comment." },
+      h("div", { class: "form-row" }, giveUpField, autoRemoveField, blacklistField));
+
+    const followAdv = advanced({ key: "targets.follow", title: "Follow checks", id: "followChecksAdv", desc: "How ScoreX detects who follows you, and how often it checks" },
+      section({ title: "Check frequency", hint: "Checks run while the engine is idle, between comments, and use the same X tab." },
+        h("div", { class: "form-row" },
+          ctx.field({ path: "follow.scanEveryHours", type: "number", label: "Scan my followers every", suffix: "h", min: 1, max: 24, id: "followScanHours", hint: "Your newest followers, where follow-backs show up (1-24)" }),
+          ctx.field({ path: "follow.recheckHours", type: "number", label: "Re-check commented accounts every", suffix: "h", min: 12, max: 336, id: "followRecheckHours", hint: "Profile visit for the \"Follows you\" badge (12-336)" }),
+          ctx.field({ path: "follow.checksPerRun", type: "number", label: "Profile checks per run", min: 1, max: 8, id: "followChecksPerRun", hint: "Profile visits per idle check (1-8)" }))),
+      section({ title: "How follow detection works" },
+        h("ul", { class: "plain-list small", id: "followHow" },
+          h("li", null, h("strong", null, "Checking"), ": new targets get no comments until ScoreX knows whether they follow you."),
+          h("li", null, "ScoreX reads your followers list on X (one page shows many accounts with X's \"Follows you\" badge) and visits the profiles it could not place."),
+          h("li", null, h("strong", null, "Follows you"), ": never commented on. ", h("strong", null, "Not following"), ": ScoreX comments on their posts."),
+          h("li", null, h("strong", null, "Followed back"), ": comments stop at once, open queue items for that account are dropped."),
+          h("li", null, "After the give-up days without a follow-back: one last profile check, then the account is removed (and blacklisted when that is on)."),
+          h("li", null, "If X stops showing the \"Follows you\" badge, ScoreX stops for safety instead of guessing."))));
+
+    // ------------------------------------------------ blacklist
+    const blSelected = new Set();
+    const blSort = { key: "at", dir: "desc" };
+    const blBar = h("div", { class: "toolbar" });
+    const blHost = h("div", { id: "blacklistTable" });
+    const blText = h("textarea", { class: "input", id: "blacklistText", rows: 2, placeholder: "@spam_account, https://x.com/someone" });
+    const blList = () => Object.values(ctx.data[K.blacklist] || {}).filter((e) => e && e.handle);
+    const blReason = (e) => (e.reason === "no_followback" ? (e.days != null ? `No follow-back after ${e.days} day${e.days === 1 ? "" : "s"}` : "No follow-back") : e.reason === "manual" ? "Added by you" : e.reason || "-");
+    function drawBlBar() {
+      const n = blSelected.size;
+      fill(blBar,
+        h("span", { class: "muted small" }, n ? `${n} selected` : "Select accounts to allow them again"),
+        btn("Remove from blacklist", (e) => {
+          const b = e.currentTarget;
+          busy(b, async () => {
+            const r = await ctx.send("blacklistRemove", { handles: [...blSelected] }, { label: "Remove from blacklist" });
+            if (r) { toast(`Removed ${num(r.removed, n)} from the blacklist`, { type: "success" }); blSelected.clear(); drawBlacklist(); }
+          });
+        }, { size: "sm", disabled: !n, id: "blacklistRemoveBtn" }));
+    }
+    function drawBlacklist() {
+      const list = blList();
+      for (const hd of [...blSelected]) if (!list.some((e) => e.handle === hd)) blSelected.delete(hd);
+      drawBlBar();
+      clear(blHost).appendChild(renderTable({
+        columns: [
+          { key: "handle", label: "Account", render: (e) => xLink(e.handle), sort: (e) => e.handle, defaultDir: "asc" },
+          { key: "name", label: "Name", render: (e) => h("span", { class: "cell-name" }, e.name || "-"), sort: (e) => String(e.name || "").toLowerCase(), defaultDir: "asc" },
+          { key: "reason", label: "Reason", render: blReason, sort: blReason, defaultDir: "asc" },
+          { key: "at", label: "Added", render: (e) => h("span", { class: "nowrap", title: fmtDateTime(e.at) }, fmtDate(e.at)) },
+          { key: "comments", label: "Comments", align: "right", render: (e) => String(num(e.comments)) },
+        ],
+        rows: list,
+        rowKey: (e) => e.handle,
+        selection: blSelected,
+        onSelectionChange: drawBlBar,
+        sortState: blSort,
+        maxRows: 100,
+        empty: "No blacklisted accounts. Accounts removed for not following back are added here automatically (Follow rules).",
+        caption: "Blacklist",
+      }));
+      const n = list.length;
+      blAdv.setDesc(n ? `${n} account${n === 1 ? "" : "s"} ScoreX never adds again` : "Accounts ScoreX never adds again (none yet)");
+      blAdv.setTag(n ? String(n) : "");
+    }
+    const blAddBtn = btn("Add to blacklist", (e) => {
+      const handles = parseHandleList(blText.value);
+      if (!handles.length) { toast("Paste at least one @handle or x.com profile link.", { type: "warn" }); blText.focus(); return; }
+      const b = e.currentTarget;
+      busy(b, async () => {
+        const inTargets = handles.filter((hd) => Object.hasOwn(ctx.targets, hd)).length;
+        if (inTargets && !(await confirmDialog(`${inTargets} of these ${inTargets === 1 ? "is a target and is" : "are targets and are"} removed from your targets. Continue?`, { title: "Add to blacklist", okLabel: "Blacklist", danger: true }))) return;
+        const r = await ctx.send("blacklistAdd", { handles }, { label: "Add to blacklist" });
+        if (r) { toast(`Blacklisted ${handles.length}${num(r.removedTargets) ? ` (${num(r.removedTargets)} removed from targets)` : ""}`, { type: "success" }); blText.value = ""; }
+      });
+    }, { size: "sm", iconName: "plus", id: "blacklistAddBtn" });
+    const blExport = () => {
+      const list = blList();
+      if (!list.length) { toast("The blacklist is empty.", { type: "warn" }); return; }
+      download(`scorex-blacklist-${stamp()}.csv`, toCsv(list.sort((a, b) => a.handle.localeCompare(b.handle)), [
+        { key: "handle", label: "handle" }, { key: "name", label: "name" },
+        { key: "reason", label: "reason", get: blReason },
+        { key: "at", label: "added", get: (e) => (e.at ? new Date(e.at).toISOString() : "") },
+        { key: "days", label: "days", get: (e) => (e.days != null ? e.days : "") },
+        { key: "comments", label: "comments", get: (e) => num(e.comments) },
+        { key: "tier", label: "tier", get: (e) => e.tier || "" },
+        { key: "followers", label: "followers", get: (e) => (e.followers != null ? e.followers : "") },
+      ]), "text/csv");
+    };
+    const blAdv = advanced({ key: "targets.blacklist", title: "Blacklist", id: "blacklistAdv", desc: "" },
+      section({ wide: true, title: "Blacklisted accounts", hint: "Never added again by paste, import or discovery.", actions: btn("Export CSV", blExport, { size: "sm", iconName: "download", id: "blacklistExportBtn" }) }, blBar, blHost),
+      section({ title: "Add accounts", hint: "One per line or comma separated. They are also removed from your targets." },
+        h("label", { class: "sr-only", for: "blacklistText" }, "Handles to blacklist"), blText, h("div", { class: "toolbar" }, blAddBtn)));
+
     const discAdv = advanced({ key: "targets.discovery", title: "Discovery", desc: "" }, discSec, discFiltersSec, candSec);
     function drawDiscDesc() {
       const d = ctx.data[K.discovery];
@@ -474,19 +584,45 @@ export default {
       discAdv.setDesc(parts.join(" · "));
     }
 
-    add(root, addSec, tableSec, discAdv,
+    add(root, addSec, tableSec, rulesSec, followAdv, blAdv, discAdv,
       advanced({ key: "targets.about", title: "About ranking and watching", desc: "How the scores work and how new posts are found" }, aboutSec, watchSec));
     drawSummary();
     drawTable(true);
+    drawBlacklist();
     drawDiscovery();
     drawCandidates(true);
     drawWatch();
     ctx.on(K.targets, () => { drawSummary(); drawTable(); drawCandidates(); });
+    ctx.on(K.blacklist, () => { drawSummary(); drawBlacklist(); drawCandidates(); });
     ctx.on(K.candidates, () => { drawCandidates(); drawDiscDesc(); });
     ctx.on(K.discovery, drawDiscovery);
     ctx.on("settings", () => { drawWatch(); drawTable(); });
   },
 };
+
+// Toast for targetsUpsert / targetsImport / candidatesAdd results ({ added, updated, blacklisted }).
+function addedToast(r, verb = "Added", suffix = "") {
+  const added = num(r.added), updated = num(r.updated), black = num(r.blacklisted);
+  const parts = [`${verb} ${added}${suffix}`];
+  if (updated) parts.push(`${updated} updated`);
+  if (black) parts.push(`${black} skipped (blacklisted)`);
+  const text = parts.join(", ") + (added ? ". Follow status is checked before any comment." : ".");
+  toast(text, { type: added || updated ? "success" : "warn" });
+}
+
+// Follow status for the filter and the summary: a profile that was not found on X counts on its own.
+const GONE = "gone";
+const fsOf = (t) => (t.rel && t.rel.gone ? GONE : followStatus(t));
+
+// Follow status order for sorting: not following (with the oldest first comment first), checking,
+// followed back, follows you; profiles not found last.
+const FS_ORDER = { [FS.ACTIVE]: 1, [FS.CHECKING]: 2, [FS.FOLLOWED_BACK]: 3, [FS.FOLLOWS]: 4 };
+function followSortKey(t) {
+  if (t.rel && t.rel.gone) return 9;
+  const st = followStatus(t);
+  const days = st === FS.ACTIVE ? followDays(t) : null;
+  return (FS_ORDER[st] || 5) - (days != null ? Math.min(days, 999) / 1000 : 0);
+}
 
 function scoreChip(v) {
   if (v == null || !Number.isFinite(Number(v))) return h("span", { class: "muted" }, "-");

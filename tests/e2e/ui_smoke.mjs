@@ -2,7 +2,10 @@
 // dashboard tab + the popup in light and dark mode, fails on any page error or console error, and
 // exercises the top bar (tab strip, status, primary engine button), the setup checklist, the always-usable
 // Review/Full auto switch, collapsed Advanced sections (remembered per tab), settings persistence/clamping,
-// masked API keys, the cost estimator, the theme switch and the narrow layout.
+// masked API keys, the cost estimator, the theme switch and the narrow layout. Also the Tone prompt (no
+// pasted comment samples), follow tracking on Targets (follow status column/filter/summary, "day N/14",
+// follow rules, the blacklist through the real worker), the 2-row tier preset table and that no
+// "Group A"/"Group B" text is left anywhere.
 //
 // Run: node tests/e2e/ui_smoke.mjs     Screenshots: tests/e2e/out/
 import { createRequire } from "module";
@@ -39,26 +42,28 @@ async function seed() {
   const util = await import(chrome.runtime.getURL("lib/util.js"));
   const now = Date.now(), MIN = 60e3, HR = 36e5, DAY = 864e5;
   const tz = "Asia/Dhaka";
+  // Follow status (lib/targets.js followStatus): followsYou null = checking, false = not following (commented
+  // on; "day N/14" from stats.firstCommentAt), true = follows you, true + rel.followedBackAt = followed back.
   const T = (handle, o) => ({
-    handle, name: o.name, group: o.group, tier: o.tier, enabled: o.enabled !== false, tone: o.tone || "", preset: o.preset || "", notes: "", source: "manual",
+    handle, name: o.name, group: o.followsYou ? "A" : "B", tier: o.tier, enabled: o.enabled !== false, tone: o.tone || "", preset: o.preset || "", notes: "", source: "manual",
     addedAt: now - 20 * DAY,
     profile: { handle, name: o.name, bio: o.bio, followers: o.followers, following: o.following || 800, verified: !!o.verified, updatedAt: now - DAY },
     recentPosts: [], lastPostAt: now - 2 * HR, lastCheckedAt: now - HR,
-    rel: { followsYou: o.followsYou, youFollow: true, checkedAt: now - DAY },
+    rel: { followsYou: o.followsYou, youFollow: true, checkedAt: o.followsYou == null ? null : now - DAY, followedBackAt: o.followedBackAt || null, ...(o.gone ? { gone: true } : {}) },
     score: { own: o.own, sorsa: o.sorsa == null ? null : o.sorsa, combined: o.own, flags: [], bot: false, updatedAt: now - DAY },
     priority: o.priority || 50, coldUntil: o.coldUntil || null,
-    stats: { comments: o.comments || 0, lastCommentAt: o.comments ? now - o.lastAgo : null, engaged: 1, noResponseStreak: 0, likes: 3, replies: 1, authorReplies: 0, lastEngagedAt: null },
+    stats: { comments: o.comments || 0, firstCommentAt: o.firstAgo ? now - o.firstAgo : null, lastCommentAt: o.comments ? now - o.lastAgo : null, engaged: 1, noResponseStreak: 0, likes: 3, replies: 1, authorReplies: 0, lastEngagedAt: null },
   });
   const targets = {};
   for (const t of [
-    T("naval", { name: "Naval", group: "B", tier: 1, followers: 2900000, own: 91, sorsa: 2410, followsYou: false, verified: true, bio: "Angel investor. Wealth, happiness and the future of technology.", priority: 85, comments: 4, lastAgo: 2 * DAY }),
-    T("balajis", { name: "Balaji", group: "B", tier: 1, followers: 1100000, own: 88, sorsa: 1980, followsYou: false, verified: true, bio: "Network state. Formerly CTO Coinbase, GP a16z.", priority: 80, comments: 2, lastAgo: 5 * DAY, tone: "expert" }),
-    T("dwarkesh_sp", { name: "Dwarkesh Patel", group: "B", tier: 2, followers: 210000, own: 79, followsYou: null, bio: "Host of the Dwarkesh Podcast.", priority: 60 }),
-    T("karpathy", { name: "Andrej Karpathy", group: "B", tier: 1, followers: 1300000, own: 93, sorsa: 2650, followsYou: false, verified: true, bio: "Building @EurekaLabsAI. Previously Director of AI @ Tesla.", priority: 90, comments: 1, lastAgo: 9 * HR, preset: "high" }),
-    T("onchain_anna", { name: "Anna | onchain", group: "A", tier: 2, followers: 18400, own: 64, followsYou: true, bio: "Onchain analyst. Charts, flows, no shilling.", priority: 55, comments: 7, lastAgo: 26 * HR }),
-    T("devrel_sam", { name: "Sam builds", group: "A", tier: 2, followers: 9200, own: 58, followsYou: true, bio: "DevRel. Shipping small tools every week.", priority: 45, comments: 3, lastAgo: 3 * DAY, coldUntil: now + 6 * DAY }),
-    T("macro_mira", { name: "Mira Macro", group: "A", tier: 1, followers: 86000, own: 76, sorsa: 640, followsYou: true, bio: "Macro, rates and liquidity. Ex-sell side.", priority: 70, comments: 5, lastAgo: 40 * HR }),
-    T("quiet_quant", { name: "Quiet Quant", group: "B", tier: 2, followers: 4300, own: 41, followsYou: false, bio: "Systematic trading notes.", enabled: false }),
+    T("naval", { name: "Naval", tier: 1, followers: 2900000, own: 91, sorsa: 2410, followsYou: false, verified: true, bio: "Angel investor. Wealth, happiness and the future of technology.", priority: 85, comments: 4, lastAgo: 2 * DAY, firstAgo: 5 * DAY + 3 * HR }),
+    T("balajis", { name: "Balaji", tier: 1, followers: 1100000, own: 88, sorsa: 1980, followsYou: false, verified: true, bio: "Network state. Formerly CTO Coinbase, GP a16z.", priority: 80, comments: 2, lastAgo: 5 * DAY, firstAgo: 12 * DAY + 5 * HR, tone: "expert" }),
+    T("dwarkesh_sp", { name: "Dwarkesh Patel", tier: 2, followers: 210000, own: 79, followsYou: null, bio: "Host of the Dwarkesh Podcast.", priority: 60 }),
+    T("karpathy", { name: "Andrej Karpathy", tier: 1, followers: 1300000, own: 93, sorsa: 2650, followsYou: false, verified: true, bio: "Building @EurekaLabsAI. Previously Director of AI @ Tesla.", priority: 90, comments: 1, lastAgo: 9 * HR, firstAgo: 9 * HR, preset: "high" }),
+    T("onchain_anna", { name: "Anna | onchain", tier: 2, followers: 18400, own: 64, followsYou: true, bio: "Onchain analyst. Charts, flows, no shilling.", priority: 55 }),
+    T("devrel_sam", { name: "Sam builds", tier: 2, followers: 9200, own: 58, followsYou: true, followedBackAt: now - 2 * DAY, bio: "DevRel. Shipping small tools every week.", priority: 45, comments: 3, lastAgo: 3 * DAY, firstAgo: 8 * DAY, coldUntil: now + 6 * DAY }),
+    T("macro_mira", { name: "Mira Macro", tier: 1, followers: 86000, own: 76, sorsa: 640, followsYou: true, bio: "Macro, rates and liquidity. Ex-sell side.", priority: 70 }),
+    T("quiet_quant", { name: "Quiet Quant", tier: 2, followers: 4300, own: 41, followsYou: false, gone: true, bio: "Systematic trading notes.", enabled: false }),
   ]) targets[t.handle] = t;
 
   const call = (modelId, modelName, effort, input, output, reasoning, cost, kind = "gen") => ({ kind, modelId, modelName, effort, usage: { input, cached: Math.round(input * 0.3), cacheWrite: 0, output, reasoning }, cost, ms: 2300, ok: true });
@@ -113,12 +118,16 @@ async function seed() {
     vitalikbuterin: { handle: "vitalikbuterin", name: "vitalik.eth", followers: 5800000, score: { own: 95, flags: [] }, overlap: 3, sources: ["common:naval", "common:balajis", "common:karpathy"], suggestedTier: 1, suggestedGroup: "B", pass: false, why: ["followers above range"] },
     sarah_ml: { handle: "sarah_ml", name: "Sarah | ML eng", followers: 23100, score: { own: 72, flags: [] }, overlap: 2, sources: ["followers:karpathy"], suggestedTier: 2, suggestedGroup: "B", pass: true, why: [] },
     gm_bot_99: { handle: "gm_bot_99", name: "GM GM", followers: 310, score: { own: 9, flags: ["gm_spam", "default_avatar"], bot: true }, overlap: 1, sources: ["followers:naval"], suggestedTier: 2, suggestedGroup: "B", pass: false, why: ["followers below range", "looks like a bot/spam"] },
-    rates_rick: { handle: "rates_rick", name: "Rick on Rates", followers: 64200, score: { own: 77, flags: [] }, overlap: 2, sources: ["following:macro_mira"], suggestedTier: 1, suggestedGroup: "A", followsYou: true, pass: true, why: [] },
+    rates_rick: { handle: "rates_rick", name: "Rick on Rates", followers: 64200, score: { own: 77, flags: [] }, overlap: 2, sources: ["following:macro_mira"], suggestedTier: 1, suggestedGroup: "A", followsYou: true, pass: false, why: ["already follows you"] },
+  };
+  const blacklist = {
+    old_spammer: { handle: "old_spammer", name: "Old Spammer", reason: "no_followback", at: now - 3 * DAY, days: 14, comments: 6, tier: 2, followers: 5400 },
   };
   await chrome.storage.local.set({
     "sx.targets": targets,
     "sx.logs": logs,
     "sx.candidates": cands,
+    "sx.blacklist": blacklist,
     "sx.discovery": { status: "running", source: "followersOf", step: "Reading followers of @karpathy", progress: { done: 0, total: 1 }, found: 0, message: "followers of @karpathy: 64 accounts", startedAt: now - 4 * MIN, finishedAt: null, updatedAt: now },
     "sx.spend": { days, months: { [month]: 0.6342 }, byModelMonth: {} },
     "sx.state": {
@@ -151,6 +160,36 @@ async function savedSettings(page) {
 async function waitSaved(page) {
   await page.waitForFunction(() => { const el = document.getElementById("saveInd"); return el && /Saved/.test(el.textContent); }, null, { timeout: 5000 });
 }
+// Polls chrome.storage until the saved settings satisfy pred (more reliable than the "Saved" indicator,
+// which can still show a previous save).
+async function waitSetting(page, pred, timeout = 5000) {
+  const end = Date.now() + timeout;
+  let s = null;
+  while (Date.now() < end) {
+    s = await savedSettings(page);
+    try { if (s && pred(s)) return s; } catch (_) { /* not there yet */ }
+    await page.waitForTimeout(100);
+  }
+  return s;
+}
+async function storageKey(page, key) {
+  return page.evaluate(async (k) => (await chrome.storage.local.get(k))[k], key);
+}
+async function waitStorage(page, key, pred, timeout = 8000) {
+  const end = Date.now() + timeout;
+  let v = null;
+  while (Date.now() < end) {
+    v = await storageKey(page, key);
+    try { if (pred(v || {})) return v; } catch (_) { /* not there yet */ }
+    await page.waitForTimeout(100);
+  }
+  return v;
+}
+// Leftovers of the removed group A/B model anywhere in the page (including collapsed sections and options).
+async function groupLeftovers(page) {
+  return page.evaluate(() => (document.body.textContent.match(/\bgroups? [AB]\b/gi) || []).join(", "));
+}
+async function rowCount(page, sel) { return page.locator(sel).count(); }
 
 // ------------------------------------------------------------------ main
 const userDir = fs.mkdtempSync(path.join(os.tmpdir(), "scorex-ui-"));
@@ -185,6 +224,7 @@ try {
       const dt = await page.evaluate(() => document.documentElement.getAttribute("data-theme"));
       const failedRender = await page.locator("#view >> text=This tab failed to render").count();
       check(dt === theme && failedRender === 0, `${tab} renders in ${theme}`);
+      if (theme === "light") { const g = await groupLeftovers(page); check(!g, `${tab}: no "Group A" / "Group B" text left` + (g ? ` (found: ${g})` : "")); }
       await shot(page, `${theme}-${tab}.png`);
     }
   }
@@ -211,7 +251,8 @@ try {
   check((await savedSettings(page)).mode === "review", "switching back to Review saves settings.mode = review");
   check(await page.locator("#setupChecklist").isVisible(), "setup checklist is shown while setup is incomplete");
   const stepDone = async (k) => (await page.locator(`#setupChecklist [data-step="${k}"]`).getAttribute("class")).includes("is-done");
-  check(!(await stepDone("key")) && !(await stepDone("handle")) && (await stepDone("targets")) && !(await stepDone("examples")) && (await stepDone("start")), "checklist: targets + start done; key, handle, examples open");
+  check(!(await stepDone("key")) && !(await stepDone("handle")) && (await stepDone("targets")) && !(await stepDone("tone")) && (await stepDone("start")), "checklist: targets + start done; key, handle, Tone prompt open");
+  check((await page.locator('#setupChecklist [data-step="examples"]').count()) === 0 && /Write your Tone prompt/.test(await page.locator('#setupChecklist [data-step="tone"]').innerText()) && (await page.locator('#setupChecklist [data-step="tone"] a[href="#tones"]').count()) === 1, "checklist step 4 is \"Write your Tone prompt\" (Default, Edit tone link), no comment samples step");
   check((await page.locator("#setupChecklist .checklist-count").innerText()).trim() === "2 / 5", "checklist counts 2 / 5");
   await page.click('#setupChecklist [data-step="handle"] button:has-text("Confirm")');
   await page.waitForFunction(() => document.querySelector('#setupChecklist [data-step="handle"]')?.classList.contains("is-done"), null, { timeout: 5000 });
@@ -220,6 +261,10 @@ try {
   check((await page.locator("#reviewPreview .pv").count()) === 3, "review preview lists 3 pending comments");
   check((await page.locator("#activityLog .log").count()) === 8, "recent activity lists 8 log lines");
   check(await page.locator("#runNowBtn").isDisabled(), "Run a check now is disabled while the engine is not running");
+  await page.waitForFunction(() => document.getElementById("figActive")?.textContent === "3", null, { timeout: 8000 }).catch(() => {});
+  const figs = await page.evaluate(() => ["figActive", "figChecking", "figFollowedBack", "figFollows"].map((id) => document.getElementById(id)?.textContent));
+  check(JSON.stringify(figs) === JSON.stringify(["3", "1", "1", "2"]), "follow figures from getStatus: commenting on 3, checking 1, followed back 1, follow you 2 (" + figs.join(", ") + ")");
+  check(!/Group [AB]/.test(await page.locator(".figs").innerText()) && (await page.locator('#reviewPreview .badge-group-a, #reviewPreview .badge-group-b').count()) === 0, "no group figures or group badges on the dashboard");
 
   await openTab(page, base, "targets");
   check((await page.locator("#targetsTable tbody tr").count()) === 8, "targets table has 8 rows");
@@ -232,6 +277,38 @@ try {
   await page.waitForTimeout(400);
   check((await page.locator("#targetsTable tbody tr").count()) === 1, "target search filters the table");
   await page.fill("#targetSearch", "");
+  await page.waitForFunction(() => document.querySelectorAll("#targetsTable tbody tr").length === 8, null, { timeout: 3000 });
+
+  console.log("follow tracking (targets)");
+  check((await page.locator("#addGroup").count()) === 0 && (await page.locator("#addTier").count()) === 1, "Add box has a Tier select and no Group select");
+  const heads = (await page.locator("#targetsTable thead th").allTextContents()).map((x) => x.replace(/[▲▼]/g, "").trim());
+  check(heads.some((x) => /Follow status/.test(x)) && !heads.some((x) => /^\s*(Group|Follows you)\s*$/.test(x)), "table has one Follow status column (no Group or Follows you columns): " + heads.filter(Boolean).join(" | "));
+  const fsCounts = await page.evaluate(() => { const c = {}; for (const el of document.querySelectorAll("#targetsTable tbody [data-fs]")) c[el.dataset.fs] = (c[el.dataset.fs] || 0) + 1; return c; });
+  check(fsCounts.checking === 1 && fsCounts.active === 3 && fsCounts.follows === 2 && fsCounts.followed_back === 1, "follow status column renders 1 Checking, 3 Not following, 2 Follows you, 1 Followed back: " + JSON.stringify(fsCounts));
+  const rowFs = async (hd, sel = "") => page.locator(`#targetsTable tr[data-key="${hd}"] .fs${sel}`).first().textContent();
+  check((await page.locator('#targetsTable tr[data-key="naval"] .fs-days').textContent()) === "day 5/14", "Not following shows day 5/14 (days since the first comment / give-up days)");
+  check((await page.locator('#targetsTable tr[data-key="balajis"] .fs-days.is-near').textContent()) === "day 12/14", "close to the give-up day the counter is highlighted (day 12/14)");
+  check((await page.locator('#targetsTable tr[data-key="karpathy"] .fs-days').textContent()) === "day 0/14", "first comment today shows day 0/14");
+  check((await page.locator('#targetsTable tr[data-key="dwarkesh_sp"] .fs-days').count()) === 0 && /^Checking/.test(await rowFs("dwarkesh_sp")), "an unchecked target shows Checking without a day counter");
+  check(/^Followed back/.test(await rowFs("devrel_sam")) && (await page.locator('#targetsTable tr[data-key="devrel_sam"] .fs .fs-extra').count()) === 1, "a follow-back shows Followed back with its date");
+  check(/^Follows you/.test(await rowFs("macro_mira")) && /never commented/.test(await page.locator('#targetsTable tr[data-key="macro_mira"] .fs').getAttribute("title")), "an account that already follows you shows Follows you (never commented on)");
+  check(/^Not found/.test(await rowFs("quiet_quant")), "a profile that was not found shows Not found");
+  const sum = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll("#targetsSummary [data-sum]")].map((el) => [el.dataset.sum, el.querySelector(".summary-num").textContent])));
+  check(sum.total === "8" && sum.checking === "1" && sum.active === "3" && sum.follows === "2" && sum.followed_back === "1" && sum.gone === "1" && sum.off === "1" && sum.blacklisted === "1", "summary counts: 8 targets, 1 checking, 3 not following, 2 follow you, 1 followed back, 1 not found, 1 off, 1 blacklisted: " + JSON.stringify(sum));
+  const statusOpts = await page.locator("#targetStatusFilter option").allInnerTexts();
+  check(["All statuses", "Checking", "Not following", "Follows you", "Followed back"].every((x) => statusOpts.includes(x)) && !statusOpts.some((x) => /group/i.test(x)), "status filter replaces the group filter: " + statusOpts.join(", "));
+  for (const [v, n] of [["follows", 2], ["active", 3], ["followed_back", 1], ["checking", 1], ["", 8]]) {
+    await page.selectOption("#targetStatusFilter", v);
+    await page.waitForFunction((x) => document.querySelectorAll("#targetsTable tbody tr").length === x, n, { timeout: 3000 }).catch(() => {});
+    check((await rowCount(page, "#targetsTable tbody tr")) === n, `status filter "${v || "all"}" shows ${n} rows`);
+  }
+  await page.locator('#targetsTable tr[data-key="naval"] td.col-check input').check();
+  check(await page.locator("#bulkBar").isVisible() && (await page.locator('#bulkBar select[aria-label="Set group for selected"]').count()) === 0 && (await page.locator("#bulkRecheckBtn").count()) === 1 && (await page.locator("#bulkBlacklistBtn").count()) === 1, "bulk bar: no Set group; Re-check follow status and Blacklist present");
+  await page.click('#bulkBar button:has-text("Clear selection")');
+  const blAdv = page.locator('details[data-adv="targets.blacklist"]');
+  check(!(await blAdv.evaluate((d) => d.open)) && /1 account ScoreX never adds again/.test(await blAdv.locator("summary").innerText()), "Blacklist is a collapsed section and its summary counts 1 account");
+  check(!(await page.locator('details[data-adv="targets.follow"]').evaluate((d) => d.open)), "Follow checks is a collapsed section");
+
   await page.click("#addTargetsBtn");
   await page.waitForSelector(".toast-warn", { timeout: 3000 });
   check(true, "empty Add shows a warning toast");
@@ -239,6 +316,75 @@ try {
   await page.click("#addTargetsBtn");
   await page.waitForFunction(() => document.querySelectorAll("#targetsTable tbody tr").length === 10, null, { timeout: 8000 });
   check(true, "targetsUpsert through the worker adds 2 targets and the table live-updates (10 rows)");
+  check((await page.locator('#targetsTable tr[data-key="new_target_x"] [data-fs="checking"]').count()) === 1 && (await page.locator('#targetsTable tr[data-key="another_one"] [data-fs="checking"]').count()) === 1, "new targets start as Checking");
+  await page.fill("#addHandles", "@old_spammer");
+  await page.click("#addTargetsBtn");
+  await page.waitForFunction(() => [...document.querySelectorAll(".toast")].some((t) => /1 skipped \(blacklisted\)/.test(t.textContent)), null, { timeout: 8000 }).then(() => true, () => false).then((ok) => check(ok, "adding a blacklisted handle is skipped and the toast says so"));
+  check((await rowCount(page, "#targetsTable tbody tr")) === 10, "the blacklisted handle was not added (still 10 rows)");
+
+  console.log("blacklist");
+  await page.locator('#targetsTable tr[data-key="another_one"] td.col-check input').check();
+  await page.click("#bulkBlacklistBtn");
+  await page.click(".modal-footer .btn-danger");
+  await page.waitForFunction(() => document.querySelectorAll("#targetsTable tbody tr").length === 9, null, { timeout: 8000 });
+  let bl = await waitStorage(page, "sx.blacklist", (v) => v.another_one);
+  check(bl && bl.another_one && bl.another_one.reason === "manual" && !(await storageKey(page, "sx.targets")).another_one, "bulk Blacklist (blacklistAdd through the worker) moves @another_one from the targets to the blacklist");
+  await blAdv.locator("summary").click();
+  await page.waitForFunction(() => document.querySelectorAll("#blacklistTable tbody tr").length === 2, null, { timeout: 5000 }).catch(() => {});
+  const blText = await page.locator("#blacklistTable").innerText();
+  check((await rowCount(page, "#blacklistTable tbody tr")) === 2 && /old_spammer/.test(blText) && /No follow-back after 14 days/.test(blText) && /Added by you/.test(blText), "Blacklist table lists the seeded entry (no follow-back after 14 days) and the new one (added by you)");
+  check(/2 accounts ScoreX never adds again/.test(await blAdv.locator("summary").innerText()) && (await page.locator('#targetsSummary [data-sum="blacklisted"] .summary-num').textContent()) === "2", "Blacklist summary and the targets summary count 2");
+  check(await page.locator("#blacklistRemoveBtn").isDisabled(), "Remove from blacklist is disabled until a row is selected");
+  await page.locator('#blacklistTable tr[data-key="old_spammer"] td.col-check input').check();
+  await page.click("#blacklistRemoveBtn");
+  await page.waitForFunction(() => document.querySelectorAll("#blacklistTable tbody tr").length === 1, null, { timeout: 8000 }).catch(() => {});
+  bl = await waitStorage(page, "sx.blacklist", (v) => !v.old_spammer);
+  check(bl && !bl.old_spammer && bl.another_one && (await rowCount(page, "#blacklistTable tbody tr")) === 1, "Remove from blacklist (blacklistRemove through the worker) removes @old_spammer");
+  await page.fill("#blacklistText", "@spam_bot_1, https://x.com/spam_bot_2");
+  await page.click("#blacklistAddBtn");
+  bl = await waitStorage(page, "sx.blacklist", (v) => v.spam_bot_1 && v.spam_bot_2);
+  await page.waitForFunction(() => document.querySelectorAll("#blacklistTable tbody tr").length === 3, null, { timeout: 5000 }).catch(() => {});
+  check(bl && bl.spam_bot_1 && bl.spam_bot_2 && (await rowCount(page, "#blacklistTable tbody tr")) === 3, "Add to blacklist from the text box adds 2 handles");
+  await shot(page, "light-targets-blacklist.png");
+  await blAdv.locator("summary").click();
+
+  console.log("follow rules");
+  const giveUp = page.locator("#giveUpDays");
+  await giveUp.fill("21");
+  await giveUp.press("Tab");
+  let fs1 = await waitSetting(page, (x) => x.follow.giveUpDays === 21);
+  check(fs1 && fs1.follow.giveUpDays === 21, "Remove after N days saves settings.follow.giveUpDays = 21");
+  await page.waitForFunction(() => document.querySelector('#targetsTable tr[data-key="naval"] .fs-days')?.textContent === "day 5/21", null, { timeout: 3000 }).then(() => true, () => false).then((ok) => check(ok, "the day counter follows the setting (day 5/21)"));
+  await giveUp.fill("200");
+  await giveUp.press("Tab");
+  fs1 = await waitSetting(page, (x) => x.follow.giveUpDays === 90);
+  check(fs1 && fs1.follow.giveUpDays === 90 && (await giveUp.inputValue()) === "90", "give-up days 200 is clamped to 90");
+  await giveUp.fill("14");
+  await giveUp.press("Tab");
+  await waitSetting(page, (x) => x.follow.giveUpDays === 14);
+  await page.click('label[for="followBlacklist"]');
+  fs1 = await waitSetting(page, (x) => x.follow.blacklist === false);
+  check(fs1 && fs1.follow.blacklist === false, "\"Add removed accounts to the blacklist\" toggle saves settings.follow.blacklist = false");
+  await page.click('label[for="followBlacklist"]');
+  await waitSetting(page, (x) => x.follow.blacklist === true);
+  await page.click('label[for="followAutoRemove"]');
+  fs1 = await waitSetting(page, (x) => x.follow.autoRemove === false);
+  check(fs1 && fs1.follow.autoRemove === false && (await giveUp.isDisabled()) && (await page.locator("#followBlacklist").isDisabled()), "turning auto-remove off saves follow.autoRemove = false and disables the dependent fields");
+  await page.click('label[for="followAutoRemove"]');
+  fs1 = await waitSetting(page, (x) => x.follow.autoRemove === true);
+  check(fs1 && fs1.follow.autoRemove === true && !(await giveUp.isDisabled()), "turning auto-remove back on re-enables them");
+  const followAdv = page.locator('details[data-adv="targets.follow"]');
+  await followAdv.locator("summary").click();
+  await page.locator("#followRecheckHours").fill("5");
+  await page.locator("#followRecheckHours").press("Tab");
+  fs1 = await waitSetting(page, (x) => x.follow.recheckHours === 12);
+  check(fs1 && fs1.follow.recheckHours === 12 && fs1.follow.scanEveryHours === 2 && fs1.follow.checksPerRun === 4, "Follow checks: re-check hours 5 is clamped to 12 (scan every 2 h, 4 checks per run unchanged)");
+  check(/Follows you/.test(await page.locator("#followHow").innerText()), "Follow checks explains how detection works");
+  await followAdv.locator("summary").click();
+
+  check((await page.locator('#discSource option[value="myFollowers"]').count()) === 0, "Discovery no longer offers \"My followers\" as a source");
+  check((await page.locator("#candAddBtn").count()) === 1 && (await page.locator('#candidatesTable button:has-text("Add to group"), [data-adv="targets.discovery"] button:has-text("Add to group")').count()) === 0, "Candidates: one Add to targets button (no Add to group A/B)");
+  check(/follows you/.test(await page.locator('#candidatesTable tr[data-key="rates_rick"]').textContent()), "a candidate that follows you is marked \"follows you\"");
 
   await openTab(page, base, "review");
   check((await page.locator("#pendingList .review-card").count()) === 3, "review queue shows 3 pending cards");
@@ -256,6 +402,39 @@ try {
   await page.selectOption("#hStatus", "posted");
   await page.waitForFunction(() => document.getElementById("historyCount")?.textContent === "6", null, { timeout: 5000 });
   check(true, "history status filter (posted = 6)");
+
+  check((await page.locator("#hGroup").count()) === 0 && !(await page.locator("#historyTable thead th").allInnerTexts()).some((x) => /^\s*Group\s*$/.test(x)), "history has no Group filter or column");
+
+  console.log("tone prompt");
+  await openTab(page, base, "tones");
+  const DEF_TONE = await page.evaluate(async () => (await import("/lib/store.js")).DEFAULT_TONE_PROMPT);
+  check((await page.locator("#tonePrompt").inputValue()) === DEF_TONE, "Tone prompt textarea shows the default Tone prompt");
+  check(await page.locator("#toneResetBtn").isDisabled(), "Reset to default is disabled while the default is in use");
+  check((await page.locator("#styleExamples, #newExample, #exProgress, #groupTones, #addExampleBtn").count()) === 0 && !/style examples|paste 5|new example|custom text for this group/i.test(await page.locator("#view").textContent()), "no comment samples UI and no group tones on Tone & Prompts");
+  const myTone = "Dry, precise and a little contrarian. Lowercase. One concrete number when the post has data.";
+  await page.fill("#tonePrompt", myTone);
+  await page.locator("#tonePrompt").press("Tab");
+  let ts1 = await waitSetting(page, (x) => x.prompt.tone === myTone);
+  check(ts1 && ts1.prompt.tone === myTone && !("styleExamples" in ts1.prompt), "editing the Tone prompt saves settings.prompt.tone (no styleExamples key)");
+  check(!(await page.locator("#toneResetBtn").isDisabled()) && (await page.locator("#toneCount").innerText()).trim() === `${myTone.length} / 2000`, "Reset is enabled for a custom Tone prompt and the counter shows its length");
+  check((await page.locator("#abTones .chip").count()) === 5 && /Tones to test against your Tone prompt/.test(await page.locator('details[data-adv="tones.ab"]').textContent()), "A/B testing: one tone list (5 built-in tones) tested against the Tone prompt");
+  check(/Best comments per prompt/.test(await page.locator('details[data-adv="tones.advanced"]').textContent()) && (await page.locator("#autoStyleToggle").count()) === 1, "Advanced: learn from my best comments (automatic style references)");
+  await page.reload();
+  await page.waitForSelector('#view[data-ready="tones"]');
+  check((await page.locator("#tonePrompt").inputValue()) === myTone, "the Tone prompt persists after reload");
+  await shot(page, "light-tones-custom.png");
+  await openTab(page, base, "overview");
+  check(await stepDone("tone") && /Custom/.test(await page.locator('#setupChecklist [data-step="tone"]').innerText()), "checklist: \"Write your Tone prompt\" is done (Custom) once it differs from the default");
+  await openTab(page, base, "tones");
+  await page.click("#toneResetBtn");
+  await page.click(".modal-footer .btn-primary");
+  ts1 = await waitSetting(page, (x) => x.prompt.tone === DEF_TONE);
+  await page.waitForFunction((d) => document.getElementById("tonePrompt")?.value === d, DEF_TONE, { timeout: 3000 }).catch(() => {});
+  check(ts1 && ts1.prompt.tone === DEF_TONE && (await page.locator("#tonePrompt").inputValue()) === DEF_TONE, "Reset to default restores the default Tone prompt");
+  await page.fill("#tonePrompt", "");
+  await page.locator("#tonePrompt").press("Tab");
+  ts1 = await waitSetting(page, (x) => x.prompt.tone === DEF_TONE);
+  check(ts1 && ts1.prompt.tone === DEF_TONE && (await page.locator("#tonePrompt").inputValue()) === DEF_TONE, "an empty Tone prompt falls back to the default");
 
   console.log("settings persist + clamp");
   await openTab(page, base, "safety");
@@ -305,6 +484,13 @@ try {
   await waitSaved(page);
   check(/of \$5\.00/.test(await page.locator("#budgetStatus").innerText()), "budget status shows spend of $5.00");
   await shot(page, "light-models-after.png");
+  const mrows = await page.locator("#presetMatrix tbody tr").allInnerTexts();
+  check(mrows.length === 2 && /Tier 1 · big influencer/.test(mrows[0]) && /Tier 2 · smart account/.test(mrows[1]), "Models: preset per tier has 2 rows (tier 1, tier 2)");
+  await page.getByLabel("Preset for tier 1").selectOption("cheap");
+  const ms = await waitSetting(page, (x) => x.presetMatrix.B1 === "cheap");
+  check(ms && ms.presetMatrix.B1 === "cheap" && ms.presetMatrix.B2 === "balanced", "tier 1 preset saves presetMatrix.B1");
+  await page.getByLabel("Preset for tier 1").selectOption("high");
+  await waitSetting(page, (x) => x.presetMatrix.B1 === "high");
 
   console.log("theme");
   await page.click('#themeSwitch [data-value="dark"]');
@@ -369,6 +555,15 @@ try {
   await openTab(page, base, "settings");
   await page.screenshot({ path: path.join(OUT, "narrow-settings.png"), fullPage: false });
   check((await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)) <= 0, "no horizontal page scroll on Settings at 800px");
+  for (const w of [800, 560]) {
+    await page.setViewportSize({ width: w, height: 1000 });
+    for (const tab of ["targets", "tones", "overview"]) {
+      await openTab(page, base, tab);
+      if (tab !== "overview" || w === 560) await page.screenshot({ path: path.join(OUT, `narrow-${w}-${tab}.png`), fullPage: true });
+      const ov = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+      check(ov <= 0, `no horizontal page scroll on ${tab} at ${w}px (overflow ${ov}px)`);
+    }
+  }
   await page.setViewportSize({ width: 1360, height: 900 });
 
   console.log("advanced sections");
@@ -382,7 +577,7 @@ try {
   check(await page.locator('details[data-adv="models.advanced"]').evaluate((d) => d.open), "Models: Advanced stays open after reload (localStorage)");
   check((await page.locator('details[data-adv="models.advanced"] #modelsTable tbody tr').count()) >= 3, "Models: the model/price table lives in Advanced");
   await page.locator('details[data-adv="models.advanced"] summary').click();
-  for (const [tab, keys] of [["safety", ["safety.advanced"]], ["settings", ["settings.review", "settings.cleanup", "settings.data"]], ["tones", ["tones.advanced", "tones.ab"]], ["history", ["history.totals"]]]) {
+  for (const [tab, keys] of [["safety", ["safety.advanced"]], ["settings", ["settings.review", "settings.cleanup", "settings.data"]], ["tones", ["tones.advanced", "tones.ab"]], ["history", ["history.totals"]], ["targets", ["targets.follow", "targets.blacklist", "targets.discovery", "targets.about"]]]) {
     await openTab(page, base, tab);
     for (const k of keys) check((await page.locator(`details[data-adv="${k}"]`).count()) === 1 && !(await page.locator(`details[data-adv="${k}"]`).evaluate((d) => d.open)), `${tab}: "${k}" is a collapsed section`);
   }
@@ -424,6 +619,8 @@ try {
   check((await popup.locator("#pControls .btn-primary").count()) === 1, "popup has one primary engine button");
   check(/\d+ \/ \d+/.test(await popup.locator("#pQuota").innerText()) && (await popup.locator("#pQuota .quota").count()) === 1, "popup shows the 24h quota bar");
   check(!/warm-?up/i.test(await popup.locator("body").innerText()), "no warm-up text in the popup");
+  const qs = await popup.locator("#pQuotaSub").innerText();
+  check(/\d+\sgenerated/.test(qs) && /\d+\scommenting/.test(qs) && !/\bA\s\d+\s·\sB\s\d+/.test(qs), "popup quota line shows generated + follow counts, no A/B split: " + qs);
 } catch (e) {
   failed++;
   console.log("  FAIL exception: " + (e && e.stack ? e.stack : e));

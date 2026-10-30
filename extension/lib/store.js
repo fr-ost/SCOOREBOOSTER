@@ -2,7 +2,7 @@
 //
 // Ownership rule (keeps writes race-free):
 //   * settings, secrets, selectorOverrides  -> written by the dashboard, read by the service worker
-//   * state, targets, candidates, seen, logs, learning, discovery, history (IndexedDB)
+//   * state, targets, candidates, blacklist, seen, logs, learning, discovery, history (IndexedDB)
 //                                           -> written ONLY by the service worker; the UI asks via messages
 // Every read-modify-write in the service worker goes through withLock(key) so interleaved
 // async handlers never lose an update.
@@ -54,6 +54,9 @@ export const DEFAULT_TONES = {
   expert: "Expert and precise. Show domain knowledge with one specific detail, mechanism or example.",
 };
 
+// The default Tone prompt (Tone & Prompts tab). Sent with every comment unless a target has its own tone.
+export const DEFAULT_TONE_PROMPT = "Insightful and sharp, like a smart builder who knows the space. Add one concrete point, data angle, implication or counterpoint the author did not mention. Casual and confident, never sycophantic, never salesy.";
+
 export const DEFAULT_POLITICAL_KEYWORDS = [
   "election", "elections", "vote for", "voting", "ballot", "democrat", "democrats", "republican", "republicans", "gop", "maga",
   "trump", "biden", "kamala", "harris", "obama", "putin", "zelensky", "netanyahu", "modi", "parliament", "congressman", "senator",
@@ -82,11 +85,13 @@ export const DEFAULT_SETTINGS = {
     scrolls: 1, // light scroll on watch pages to load a few more posts
   },
 
+  // Legacy per-group settings (before follow tracking): only read to migrate an old tone into prompt.tone.
   groups: {
     A: { enabled: true, tone: "friendly", customTone: "", dailyLimit: 10 },
     B: { enabled: true, tone: "insightful", customTone: "", dailyLimit: 20 },
   },
-  // Model preset per group + tier ("A1" = group A, tier 1 ...).
+  // Model preset per tier. Only accounts that don't follow you are commented on, so B1 / B2 are used
+  // (A1 / A2 are kept for old exports).
   presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" },
 
   models: DEFAULT_MODELS,
@@ -105,10 +110,20 @@ export const DEFAULT_SETTINGS = {
   customTones: [], // [{ id, name, text }]
 
   prompt: {
-    styleExamples: [], // your best past comments (5-10), pasted in the Tone & Prompts tab
-    styleExampleCount: 6,
-    autoStyleFromHistory: true, // also use your best-performing posted comments as examples
+    tone: "", // your Tone prompt (empty = DEFAULT_TONE_PROMPT)
+    styleExampleCount: 4, // best-performing posted comments shown to the model as style references
+    autoStyleFromHistory: true,
     extraRules: "",
+  },
+
+  // Follow tracking: only accounts that don't follow you are commented on.
+  follow: {
+    giveUpDays: 14, // days of comments without a follow-back before a target is removed
+    autoRemove: true,
+    blacklist: true, // removed targets go to the blacklist (never re-added by import or discovery)
+    scanEveryHours: 2, // how often your newest followers are scanned for follow-backs
+    recheckHours: 72, // profile re-check of the accounts you comment on
+    checksPerRun: 4, // profile visits per idle check
   },
 
   review: {
@@ -150,14 +165,12 @@ export const DEFAULT_SETTINGS = {
     enabled: true,
     abTesting: true,
     explore: 0.2, // share of comments used to test other tones/models
-    abTones: { A: ["friendly", "witty", "insightful"], B: ["insightful", "bold", "expert"] }, // tones tested per group
+    abTones: { A: [], B: [] }, // extra tones tested against your Tone prompt ("main"); B = the accounts you comment on
     abPresets: [], // empty = only the matrix preset; add e.g. ["balanced","cheap"] to test models
     minSamples: 8,
     coldAfterComments: 6, // no response after N comments -> lower frequency
     coldCooldownDays: 10,
     autoTierUp: true,
-    autoMoveToA: true, // a group B target that follows back moves to group A
-    followCheckEveryHours: 24,
     engagementCheckAfterHours: 24,
     maxChecksPerRun: 3,
   },
@@ -278,8 +291,30 @@ export function sanitizeSettings(raw) {
   q.minChars = clamp(Math.round(num(q.minChars, 12)), 1, 200);
   q.maxChars = clamp(Math.round(num(q.maxChars, 220)), q.minChars + 10, HARD.maxCommentChars);
 
-  s.prompt.styleExamples = (Array.isArray(s.prompt.styleExamples) ? s.prompt.styleExamples : []).map((x) => String(x).trim()).filter(Boolean).slice(0, 30);
-  s.prompt.styleExampleCount = clamp(Math.round(num(s.prompt.styleExampleCount, 6)), 0, 10);
+  // Settings from before the Tone prompt existed: take over the tone the user had chosen, and drop the old
+  // default A/B tone lists (they would test other tones against the user's own prompt).
+  const legacy = !(raw && raw.prompt && typeof raw.prompt.tone === "string");
+  if (legacy) {
+    const b = s.groups.B || {};
+    const custom = b.tone === "custom" ? String(b.customTone || "").trim() : b.tone && String(b.tone).startsWith("custom:") ? ((s.customTones || []).find((c) => "custom:" + c.id === b.tone) || {}).text : "";
+    const builtin = DEFAULT_TONES[b.tone] && s.tones[b.tone] && s.tones[b.tone] !== DEFAULT_TONES[b.tone] ? s.tones[b.tone] : "";
+    s.prompt.tone = custom || builtin || "";
+    const oldAb = { A: ["friendly", "witty", "insightful"], B: ["insightful", "bold", "expert"] };
+    const ab = s.learning.abTones;
+    if (ab && !Array.isArray(ab)) for (const g of ["A", "B"]) if (JSON.stringify(ab[g]) === JSON.stringify(oldAb[g])) ab[g] = [];
+  }
+  s.prompt.tone = String(s.prompt.tone || "").trim().slice(0, 2000) || DEFAULT_TONE_PROMPT;
+  delete s.prompt.styleExamples; // pasted comment samples are no longer used
+  s.prompt.styleExampleCount = clamp(Math.round(num(s.prompt.styleExampleCount, 4)), 0, 10);
+  s.prompt.extraRules = String(s.prompt.extraRules || "").slice(0, 2000);
+
+  const fo = s.follow;
+  fo.giveUpDays = clamp(Math.round(num(fo.giveUpDays, 14)), 3, 90);
+  fo.autoRemove = fo.autoRemove !== false;
+  fo.blacklist = fo.blacklist !== false;
+  fo.scanEveryHours = clamp(num(fo.scanEveryHours, 2), 1, 24);
+  fo.recheckHours = clamp(num(fo.recheckHours, 72), 12, 336);
+  fo.checksPerRun = clamp(Math.round(num(fo.checksPerRun, 4)), 1, 8);
 
   s.review.pendingMaxAgeMin = clamp(num(s.review.pendingMaxAgeMin, 180), 10, 24 * 60);
   s.review.approvedMaxAgeMin = clamp(num(s.review.approvedMaxAgeMin, 240), 10, 24 * 60);
@@ -290,6 +325,7 @@ export function sanitizeSettings(raw) {
 
   const l = s.learning;
   if (Array.isArray(l.abTones)) l.abTones = { A: l.abTones.slice(), B: l.abTones.slice() };
+  delete l.autoMoveToA; delete l.followCheckEveryHours; // replaced by follow tracking (settings.follow)
   if (!l.abTones || typeof l.abTones !== "object") l.abTones = deepClone(DEFAULT_SETTINGS.learning.abTones);
   for (const g of ["A", "B"]) l.abTones[g] = (Array.isArray(l.abTones[g]) ? l.abTones[g] : []).map(String).filter(Boolean).slice(0, 12);
   l.abPresets = (Array.isArray(l.abPresets) ? l.abPresets : []).filter((p) => ["high", "balanced", "cheap"].includes(p));
@@ -386,6 +422,9 @@ export function patchState(patch) {
 
 export async function getTargets() { return load(K.targets, {}); }
 export function updateTargets(fn) { return update(K.targets, {}, fn); }
+
+export async function getBlacklist() { return load(K.blacklist, {}); }
+export function updateBlacklist(fn) { return update(K.blacklist, {}, fn); }
 
 export async function getCandidates() { return load(K.candidates, {}); }
 export function updateCandidates(fn) { return update(K.candidates, {}, fn); }
