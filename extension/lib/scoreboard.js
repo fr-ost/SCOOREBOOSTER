@@ -10,7 +10,7 @@
 // }
 
 import { K } from "./constants.js";
-import { load, update, withLock, getSettings, getSecrets, getTargets, updateTargets, updateCandidates, getBlacklist, log } from "./store.js";
+import { load, update, withLock, getSettings, getSecrets, getTargets, updateTargets, updateCandidates, getBlacklist, log, resetCount } from "./store.js";
 import { providerDefs, pickMode, modeNeeds, runCapability, CAPS } from "./providers.js";
 import { combinedScore } from "./scores.js";
 import { now, DAY, HOUR, sleep, dayKey, normalizeHandle, clamp, num } from "./util.js";
@@ -22,7 +22,13 @@ export const TARGET_SCORE_MAX_AGE = 7 * DAY; // provider scores of targets are r
 const FAIL_STREAK = 3; // a target-score run stops after this many failures in a row (outage, changed site)
 // Errors that every following request would hit too: the run stops at the first one.
 const FATAL = ["auth", "rate", "cap", "disabled", "permission", "no_mode", "blocked", "unsupported", "unknown", "login"];
+// Your own score after one of these answers is asked again the next day, as after a success (a bot check, a refused
+// key or quota, a login wall, no data, a changed page); network errors and setup problems retry at the next refresh.
+const OWN_NEXT_DAY = ["blocked", "auth", "rate", "login", "parse", "not_found"];
 const lastCall = new Map(); // providerId -> ts (pacing inside one worker instance)
+// Reset everything (lib/backup.js) since this operation started: it sends nothing more and writes nothing back.
+const RESET = { ok: false, error: "reset", message: "Stopped: ScoreX was reset" };
+const stale = (ctx) => resetCount() !== ctx.epoch;
 
 export async function getBoard() { return load(K.scoreboard, {}); }
 export function updateBoard(fn) { return update(K.scoreboard, {}, fn); }
@@ -75,11 +81,13 @@ async function ready(id, cap, { settings, secrets, defs }) {
 // One provider call with pacing and the daily request cap. Calls to one provider run one at a time (a background
 // job and a one-off check from the popup no longer fire together), and the request is reserved against today's cap
 // inside the scoreboard lock, so two calls at once can never both pass a cap that only one of them fits under.
+// The settings are read again for every call: a provider turned off while a job runs is not asked again.
 async function call(id, cap, handle, ctx) {
-  const r = await ready(id, cap, ctx);
-  if (!r.ok) return r;
   return withLock("sx.provider." + id, async () => {
-    const today = dayKey(now(), ctx.settings.timezone);
+    const settings = await getSettings();
+    const r = await ready(id, cap, { ...ctx, settings });
+    if (!r.ok) return r;
+    const today = dayKey(now(), settings.timezone);
     let allowed = false;
     await updateBoard((b) => {
       b.usage = b.usage || {};
@@ -95,21 +103,25 @@ async function call(id, cap, handle, ctx) {
     const gap = ctx.gapMs != null ? ctx.gapMs : clamp(num(r.def.minIntervalMs, spec.kind === "tab" ? 4000 : 1200), 250, 60000);
     const wait = (lastCall.get(id) || 0) + gap - now();
     if (wait > 0) await sleep(wait);
+    if (stale(ctx)) return { ...RESET, provider: id }; // nothing is awaited between this check and the request
     lastCall.set(id, now());
     const res = await runCapability(r.def, r.mode, cap, handle, { key: r.key, fetchImpl: ctx.fetchImpl, readPage: ctx.readPage });
     return { ...res, provider: id, mode: r.mode };
   });
 }
 
+// extra.epoch: the reset count when the outer operation started (a smart-follower search passes its own down).
 async function context(extra = {}) {
+  const epoch = resetCount();
   const [settings, secrets, defs] = await Promise.all([getSettings(), getSecrets(), getDefs()]);
-  return { settings, secrets, defs, ...extra };
+  return { settings, secrets, defs, epoch, ...extra };
 }
 function enabledWith(ctx, cap) {
   return Object.values(ctx.defs).filter((d) => ctx.settings.providers && ctx.settings.providers[d.id] && ctx.settings.providers[d.id].enabled && Object.values(d.modes || {}).some((m) => m[cap]));
 }
 
-// Your own scores. Skips providers refreshed in the last 20 hours unless forced.
+// Your own scores. Skips providers refreshed in the last 20 hours unless forced, and providers whose site refused or
+// had no score in the last 20 hours (OWN_NEXT_DAY: README "tries again another day").
 export async function refreshOwn({ force = false, only = null, ...extra } = {}) {
   const ctx = await context(extra);
   const me = normalizeHandle(ctx.settings.account.handle);
@@ -120,7 +132,9 @@ export async function refreshOwn({ force = false, only = null, ...extra } = {}) 
     if (only && !only.includes(def.id)) continue;
     const cur = (board.own || {})[def.id];
     if (!force && cur && cur.at && now() - cur.at < 20 * HOUR) { results[def.id] = { ok: true, cached: true, score: cur.score, max: cur.max != null ? cur.max : null, url: cur.url || "" }; continue; }
+    if (!force && cur && cur.errorAt && OWN_NEXT_DAY.includes(cur.errorCode) && now() - cur.errorAt < 20 * HOUR) { results[def.id] = { ok: false, cached: true, error: cur.errorCode, message: cur.error || "", url: cur.url || "" }; continue; }
     const r = await call(def.id, "score", me, ctx);
+    if (stale(ctx)) return { ok: false, error: RESET.message, results };
     results[def.id] = r;
     const d = dayKey(now(), ctx.settings.timezone);
     await updateBoard((b) => {
@@ -132,7 +146,7 @@ export async function refreshOwn({ force = false, only = null, ...extra } = {}) 
         history.sort((a, b2) => (a.d < b2.d ? -1 : 1));
         b.own[def.id] = { score: r.score, max: r.max != null ? r.max : prev.max || null, at: now(), url: r.url || prev.url || "", error: "", errorAt: null, history: history.slice(-HISTORY_POINTS) };
       } else {
-        b.own[def.id] = { ...prev, error: r.message || r.error || "error", errorAt: now() };
+        b.own[def.id] = { ...prev, error: r.message || r.error || "error", errorCode: r.error || "error", errorAt: now() };
       }
       return b;
     });
@@ -154,6 +168,7 @@ export async function checkScores(handle, extra = {}) {
     const r = await call(def.id, "score", h, ctx);
     results[def.id] = r.ok ? { score: r.score, max: r.max != null ? r.max : null, url: r.url || "" } : { error: r.message || r.error, url: r.url || "" };
   }
+  if (stale(ctx)) return { ok: false, error: RESET.message };
   await updateBoard((b) => {
     b.checks = b.checks || {};
     b.checks[h] = { at: now(), results };
@@ -195,6 +210,7 @@ export async function smartFollowersOf(handle, { providers = null, maxAgeMs = 3 
     const r = await call(def.id, "smartFollowers", h, ctx);
     results[def.id] = r.ok ? { list: r.list || [], total: r.total != null ? r.total : null, url: r.url || "", at: now() } : { list: [], error: r.message || r.error, url: r.url || "", at: now() };
   }
+  if (stale(ctx)) return { ok: false, error: RESET.message };
   await updateBoard((b) => {
     b.smart = b.smart || {};
     // Results of providers not asked this time (a `providers` filter) stay in the cache.
@@ -234,10 +250,10 @@ export async function sweepSmartFollowers(handles, extra = {}) {
   const errors = [];
   let done = 0;
   for (const src of list) {
-    if (extra.shouldStop && (await extra.shouldStop())) break;
+    if (stale(ctx) || (extra.shouldStop && (await extra.shouldStop()))) break;
     if (extra.onProgress) await extra.onProgress({ done, total: list.length, current: src, found: found.size });
     done++;
-    const r = await smartFollowersOf(src, extra);
+    const r = await smartFollowersOf(src, { ...extra, epoch: ctx.epoch });
     if (!r.ok) { errors.push(`@${src}: ${r.error}`); if (/Turn on/.test(r.error || "")) break; continue; }
     for (const [pid, res] of Object.entries(r.results)) if (res.error) errors.push(`@${src} (${ctx.defs[pid] ? ctx.defs[pid].name : pid}): ${res.error}`);
     for (const it of r.merged) {
@@ -253,8 +269,10 @@ export async function sweepSmartFollowers(handles, extra = {}) {
   // The search can take minutes: accounts added as targets or blacklisted meanwhile are left out too.
   const [targetsNow, blackNow] = await Promise.all([getTargets(), getBlacklist()]);
   // sx.candidates stays at the newest / best CANDIDATES_CAP entries (updateCandidates, lib/store.js); seenAt marks a
-  // repeat find as recent.
+  // repeat find as recent. After Reset everything (it cleared the candidates) nothing found before it is written.
+  let reset = false;
   await updateCandidates((all) => {
+    if (stale(ctx)) { reset = true; return all; }
     for (const c of found.values()) {
       if (Object.hasOwn(targetsNow, c.handle) || Object.hasOwn(blackNow, c.handle)) continue;
       const prev = Object.hasOwn(all, c.handle) && all[c.handle] && typeof all[c.handle] === "object" ? all[c.handle] : {};
@@ -276,6 +294,7 @@ export async function sweepSmartFollowers(handles, extra = {}) {
     }
     return all;
   });
+  if (reset) return { ok: false, error: RESET.message, found: 0, errors };
   log("info", `Smart followers: ${found.size} candidates from ${list.length} account${list.length === 1 ? "" : "s"}`);
   // Nothing found and every request failed: an error, not "done".
   if (!found.size && errors.length) return { ok: false, error: errors[0] + (errors.length > 1 ? ` (and ${errors.length - 1} more)` : ""), found: 0, errors };
@@ -301,6 +320,7 @@ export async function refreshTargetScores(handles, providerId, { maxAgeMs = TARG
     const prev = targets[h].score && targets[h].score.providers && targets[h].score.providers[providerId];
     if (prev && prev.at && now() - prev.at < maxAgeMs) continue;
     const r = await call(providerId, "score", h, ctx);
+    if (stale(ctx)) return { ok: false, error: RESET.message, updated, failed }; // the targets are gone
     const missing = !r.ok && r.error === "not_found";
     if (!r.ok && !missing) {
       failed++; streak++; lastError = r.message || r.error || "error";

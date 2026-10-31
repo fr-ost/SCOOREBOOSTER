@@ -1,7 +1,7 @@
 // ScoreX - export / import as JSON. API keys (sx.secrets) are never exported or imported.
 
 import { K, VERSION, STATUS, HS, OPEN_STATUSES } from "./constants.js";
-import { load, save, remove, update, getSettings, saveSettings, sanitizeSettings, updateTargets, updateBlacklist, updateCandidates, getTargets, getBlacklist, CANDIDATES_CAP, DEFAULT_STATE } from "./store.js";
+import { load, save, remove, update, getSettings, saveSettings, sanitizeSettings, updateTargets, updateBlacklist, updateCandidates, getTargets, getBlacklist, CANDIDATES_CAP, DEFAULT_STATE, noteReset } from "./store.js";
 import * as H from "./history.js";
 import { db, STORES } from "./db.js";
 import { now, normalizeHandle } from "./util.js";
@@ -62,11 +62,16 @@ export async function importData(data, parts = ["settings", "targets", "history"
         const cur = Object.hasOwn(all, h) ? all[h] : null;
         if (!cur && Object.hasOwn(black, h)) { skipped++; continue; }
         const wasManualTier = !!(cur && cur.tierManual);
+        const manualPriority = cur && cur.priorityManual ? cur.priority : null;
         // Only user-editable fields + scraped data; relationship timing (used by cleanup) is re-observed.
         // Follow status is not imported either: every imported target is checked on X again.
         const base = cur || newTarget(h, { tier: t.tier, source: "import" });
         Object.assign(base, sanitizePatch(t));
-        delete base.priorityManual;
+        // sanitizePatch marks every priority as set by hand: only the ones that were stay so (self-learning sets the
+        // rest). A priority you set here wins over an automatic one from the backup.
+        if (t.priorityManual === true && Object.hasOwn(t, "priority")) base.priorityManual = true;
+        else if (manualPriority != null) { base.priority = manualPriority; base.priorityManual = true; }
+        else delete base.priorityManual;
         // sanitizePatch marks every tier as chosen by hand; after a restore only the tiers that were manual stay
         // manual (otherwise self-learning would never move any imported target to tier 1).
         if (t.tierManual === true || wasManualTier) base.tierManual = true; else delete base.tierManual;
@@ -172,21 +177,35 @@ export function cleanHistoryRecord(r) {
 
 // Clears history but keeps what the safety limits depend on: comments posted (or probably posted) in the
 // last 8 days and items still in the queue. Without them the daily / per-target limits would reset.
+// Skipped and failed records of the last 8 days are shortened like the retention does (lib/history.js
+// compactRecord), not deleted: their post id is the engine's only "post already handled" mark (a post you skipped
+// must not get a new reply from catch-up, whose window is at most 168 h), and their attempts keep counting toward
+// today's generation limit.
 export async function clearHistory() {
   const keepSince = now() - 8 * 864e5;
-  let removed = 0, kept = 0;
+  let removed = 0, kept = 0, shortened = 0;
   for (const r of await H.all()) {
     const recentPost = (r.status === HS.POSTED || r.maybePosted) && (r.postedAt || r.attemptAt || r.createdAt) >= keepSince;
     if (recentPost || OPEN_STATUSES.includes(r.status)) { kept++; continue; }
+    if ((r.status === HS.SKIPPED || r.status === HS.FAILED) && r.createdAt >= keepSince) {
+      const short = H.compactRecord(r);
+      if (r.attempts > 0) short.attempts = r.attempts;
+      if (Object.keys(short).length !== Object.keys(r).length) { await db().put(STORES.history, short); shortened++; }
+      kept++;
+      continue;
+    }
     await H.remove(r.id);
     removed++;
   }
-  return { ok: true, removed, kept };
+  return { ok: true, removed, kept, shortened };
 }
 
 // Factory reset of everything except API keys and what the safety limits depend on: comments posted in the
 // last 8 days (rolling 24h / 7-day caps) and the spend ledger (monthly budget). The ramp starts again.
 export async function resetAll() {
+  // First: a score job still running (smart-follower search, target scores) stops before its next request and does
+  // not write its results back into the lists cleared here (lib/scoreboard.js).
+  noteReset();
   // Provider overrides are your config like the selector overrides, conversation alerts are worker data: both go.
   await remove([K.settings, K.targets, K.candidates, K.blacklist, K.seen, K.logs, K.discovery, K.selectorOverrides, K.providerOverrides, K.learning, K.conversations, K.state]);
   // Score history, checks and smart-follower lists go; today's request counts per provider stay (like the spend

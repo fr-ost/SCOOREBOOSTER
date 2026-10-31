@@ -45,6 +45,13 @@ export function update(key, def, fn) {
   });
 }
 
+// ---------- reset counter ----------
+// "Reset everything" (lib/backup.js resetAll) counts up here, in the same worker as the score jobs: a job or a provider
+// call that started before a reset sees a different number and stops (no more requests, no write of its results).
+let resets = 0;
+export function noteReset() { resets++; }
+export function resetCount() { return resets; }
+
 // ---------- defaults ----------
 
 export const DEFAULT_TONES = {

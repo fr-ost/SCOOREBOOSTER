@@ -9,7 +9,7 @@
 //          site's bot checks work as when you browse it); needs the optional "scripting" permission
 // Capabilities: score (an account's score) and smartFollowers (an account's top / smart followers).
 
-import { fetchData, pickValue, pickList, jsonFromHtml, textFromHtml, readPageInTab, toNumber } from "./pagereader.js";
+import { fetchData, pickValue, pickList, jsonFromHtml, textFromHtml, readPageInTab, toNumber, pluck } from "./pagereader.js";
 import { deepMerge, deepClone, clamp, num } from "./util.js";
 import { PROVIDER_DEFS } from "./providerdefs.js";
 
@@ -156,12 +156,31 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
   if (cap === "score") {
     out.score = toNumber(pickValue(spec.value, { json, text }));
     if (spec.max) out.max = toNumber(pickValue(spec.max, { json, text }));
-    if (out.score == null) return { ok: false, error: "parse", message: `No score in ${def.name}'s answer (site changed? check Settings > Scores)`, url: pageUrl };
+    if (out.score == null) {
+      // "No data for this account" is an answer, not a failure: a page saying so (the provider's notFound text, as in
+      // the tab mode) or JSON whose score field is there but null (Sorsa: { score: null }). A score on the page wins.
+      const nf = spec.notFound || def.notFound;
+      if ((text !== undefined && nf && pickValue({ regex: nf }, { text }) !== undefined) || (json !== undefined && nullAtPath(json, spec.value && spec.value.path)))
+        return { ok: false, error: "not_found", message: `${def.name} has no data for @${vars.handle}`, url: pageUrl };
+      return { ok: false, error: "parse", message: `No score in ${def.name}'s answer (site changed? check Settings > Scores)`, url: pageUrl };
+    }
   } else {
     out.list = pickList(spec.list, json);
     if (spec.total) out.total = toNumber(pickValue(spec.total, { json, text }));
   }
   return finish(def, cap, out, pageUrl, vars.handle);
+}
+
+// True when one of the value paths is present in the JSON with the value null (a missing field is a changed API).
+function nullAtPath(json, path) {
+  for (const p of Array.isArray(path) ? path : [path]) {
+    if (typeof p !== "string" || !p) continue;
+    const parts = p.replace(/\[(\d+)\]/g, ".$1").split(".").filter(Boolean);
+    const key = parts.pop();
+    const parent = parts.length ? pluck(json, parts.join(".")) : json;
+    if (parent && typeof parent === "object" && Object.prototype.hasOwnProperty.call(parent, key) && parent[key] === null) return true;
+  }
+  return false;
 }
 
 function finish(def, cap, r, pageUrl, self = "") {
