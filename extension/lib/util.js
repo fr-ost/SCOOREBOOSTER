@@ -213,47 +213,53 @@ export function inWindow(ts, startHHMM, endHHMM, timeZone) {
   return cur >= s || cur < end; // crosses midnight
 }
 
-// First instant at which the local wall clock of day q reaches `minutes` after midnight. A wall time inside a
-// spring-forward gap (02:30 in New York on the DST day) does not exist: zonedTime maps it an hour early or
-// late, so the answer is then the transition instant itself (03:00 EDT), found by bisection.
-function wallClockAt(q, minutes, timeZone) {
+// Instants at which the local wall clock of day q shows `minutes` after midnight, earliest first: one on most days,
+// two when a DST fall-back repeats that time (01:30 in New York on the fall-back day: 01:30 EDT, then 01:30 EST).
+// A wall time inside a spring-forward gap (02:30 in New York on the DST day) does not exist: zonedTime maps it an
+// hour early or late, so the answer is then the transition instant itself (03:00 EDT), found by bisection.
+function wallClockTimes(q, minutes, timeZone) {
   const h = Math.floor(minutes / 60), mi = minutes % 60;
   const target = Date.UTC(q.year, q.month - 1, q.day, h, mi);
   const t = zonedTime(q.year, q.month, q.day, h, mi, timeZone);
   const wall = (x) => x + tzOffset(x, timeZone);
-  if (wall(t) === target) return t;
+  // zonedTime finds one of them; the offsets in force 3 hours before and after it give the other one, if any.
+  const out = [...new Set([target - tzOffset(t - 3 * HOUR, timeZone), t, target - tzOffset(t + 3 * HOUR, timeZone)])]
+    .filter((x) => wall(x) === target).sort((a, b) => a - b);
+  if (out.length) return out;
   let lo = t - 3 * HOUR, hi = t + 3 * HOUR;
-  if (wall(lo) >= target || wall(hi) < target) return t;
+  if (wall(lo) >= target || wall(hi) < target) return [t];
   while (hi - lo > MIN) {
     const mid = lo + Math.floor((hi - lo) / (2 * MIN)) * MIN;
     if (wall(mid) >= target) hi = mid; else lo = mid;
   }
-  return hi;
+  return [hi];
 }
 
-// Next instant >= ts at which the window opens (ts itself if already inside).
+// Next instant >= ts at which the window opens (ts itself if already inside): the first time after ts that the wall
+// clock shows the start time inside the window. On a DST fall-back day that can be the start's second occurrence (a
+// tick in the repeated hour still gets that day's window); a window that falls in a spring-forward gap is skipped.
 export function nextWindowStart(ts, startHHMM, endHHMM, timeZone) {
   if (inWindow(ts, startHHMM, endHHMM, timeZone)) return ts;
   const s = parseHHMM(startHHMM);
   const p = zonedParts(ts, timeZone);
-  let cand = wallClockAt(p, s, timeZone);
-  if (cand <= ts) cand = wallClockAt(addDays(p, 1), s, timeZone);
-  return cand;
+  for (let i = 0; i < 3; i++) {
+    for (const c of wallClockTimes(addDays(p, i), s, timeZone)) if (c > ts && inWindow(c, startHHMM, endHHMM, timeZone)) return c;
+  }
+  return wallClockTimes(addDays(p, 1), s, timeZone)[0];
 }
 
 // Instant at which the current window closes (only meaningful when inside).
 export function currentWindowEnd(ts, startHHMM, endHHMM, timeZone) {
   const e = parseHHMM(endHHMM);
   if (e == null) return ts + DAY;
-  // Step by calendar days (not ts + 24h): DST days are 23h/25h long and "+24h" can skip or repeat a day.
+  // Step by calendar days (not ts + 24h): DST days are 23h/25h long and "+24h" can skip or repeat a day. "24:00" maps
+  // to 00:00 of today here, which has passed, so tomorrow's is taken.
   let d = zonedParts(ts, timeZone);
-  const at = (q) => wallClockAt(q, e % 1440, timeZone);
-  let cand = at(d); // "24:00" maps to 00:00 of today here and is moved to tomorrow by the loop
-  for (let i = 0; cand <= ts && i < 4; i++) {
-    d = addDays(d, 1);
-    cand = at(d);
+  for (let i = 0; i < 5; i++, d = addDays(d, 1)) {
+    const c = wallClockTimes(d, e % 1440, timeZone).find((x) => x > ts);
+    if (c != null) return c;
   }
-  return cand;
+  return ts + DAY;
 }
 
 export function fmtDuration(ms) {

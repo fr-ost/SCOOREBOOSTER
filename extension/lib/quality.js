@@ -84,11 +84,10 @@ export function sanitizeComment(raw) {
   // while apostrophes inside words ("don't") are fine
   const q = t.match(/^["'“”‘’«»`](.*)["'“”‘’«»`]$/s);
   if (q && !/["“”«»]/.test(q[1]) && !/(?:^|[^\p{L}\p{N}])['‘’`]|['‘’`](?:$|[^\p{L}\p{N}])/u.test(q[1])) t = q[1].trim();
-  // leading @mentions the model may add: "@a, nice" / "@a: nice" / "@a @b nice" / "@a Fees..." -> the rest. One
-  // handle followed by a lowercase word may be the subject ("@base is winning..."), and "@a's point" is a
-  // possessive: both stay and fail the mention rule.
-  t = t.replace(/^@[A-Za-z0-9_]{1,15}(?:[\s,:]+@[A-Za-z0-9_]{1,15})+(?:[\s,:]+|$)/, "");
-  t = t.replace(/^@[A-Za-z0-9_]{1,15}(?:\s*[,:]\s*|\s+(?=\p{Lu})|$)/u, "");
+  // leading @mentions the model may add: "@a, nice" / "@a: nice" / "@a @b, nice" / "@a @b Fees..." -> the rest. A
+  // handle (or a chain of them) followed by a lowercase word may be the subject ("@base is winning...", "@a @b would
+  // both disagree..."), and "@a's point" is a possessive: they stay and fail the mention rule.
+  t = t.replace(/^@[A-Za-z0-9_]{1,15}(?:[\s,:]+@[A-Za-z0-9_]{1,15})*(?:\s*[,:]\s*|\s+(?=\p{Lu})|$)/u, "");
   // em dash / horizontal bar: a spaced one before a capital, when it is the only one, starts a new sentence
   // ("Fees dropped — Users never noticed"); the others become commas ("Two chains — Base and Arbitrum — dominate").
   // An unspaced one before a capital ("the US—China chip war") is ambiguous: it stays and fails the dash rule.

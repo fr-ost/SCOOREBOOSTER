@@ -14,7 +14,7 @@ const GM_RE = /^(?:gm|gn|gmgm|gm gm|good ?morning|good ?night|gm fam|gm frens|gm
 // Trading slang that sounds tragic: "RIP shorts", "longs got killed in an hour", "thoughts and prayers for the bears".
 const LOSERS = String.raw`shorts?|longs?|bears?|bulls?|shorters|longers|bags?|portfolios?|alts?|altcoins?|memecoins?|leverage|degens?|jeets?|fudders|paper hands|traders?|positions?|liquidity`;
 const SENSITIVE_RE = new RegExp(String.raw`\b(?:rest in peace|passed away|passing of (?!(?:the |this |a |an )?(?:[\w-]+ )?(?:bill|act|law|laws|proposal|amendment|resolution|torch|baton)\b)|condolences|funeral|suicide|mourning|earthquake|mass shooting|terror attack|prayers for (?!(?:the |all |all the |my |our |your )?(?:${LOSERS})\b)|(?<!\b(?:${LOSERS})\s+(?:(?:got|get|getting|were|was|are|been|just|all)\s+)*)(?:killed in|died in|murdered))\b`, "i");
-const SENSITIVE_WORDS = ["নিহত", "ইন্নালিল্লাহ", "ইন্না লিল্লাহ", "innalillahi", "inna lillahi", "निधन", "श्रद्धांजलि"];
+const SENSITIVE_WORDS = ["নিহত", "ইন্নালিল্লাহ", "ইন্না লিল্লাহ", "ইন্নালিল্লাহি", "ইন্না লিল্লাহি", "innalillahi", "inna lillahi", "निधन", "श्रद्धांजलि"];
 // "RIP <someone>" is tragic; "RIP shorts", "about to rip", "rip-off" are not.
 const RIP_RE = /\b(?:rip|r\.i\.p)\b\.?/gi;
 const RIP_VERB_BEFORE = /\b(?:to|will|would|could|can|gonna|should|might|may|it'll|let it|let her|let em)\s+$/i;
@@ -44,9 +44,28 @@ export function textWithoutLinks(text) {
 function normKw(s) {
   return String(s || "").normalize("NFKC").toLowerCase()
     .replace(/['’]s\b/g, "").replace(/s['’](?=\s|$)/g, "s") // "Trump's", "Israel’s", "Republicans'"
+    .replace(/(\p{Script=Bengali})(লীগ)/gu, "$1 $2") // "League" is often written joined: "আওয়ামীলীগ" = "আওয়ামী লীগ"
     .replace(/[^\p{L}\p{M}\p{N}\s$#@]/gu, " ")
     .replace(/(^|[^\p{L}\p{M}])\p{M}+/gu, "$1")
     .replace(/\s+/g, " ").trim();
+}
+
+// Bengali attaches case endings and particles to the word: "বিএনপির" (BNP's), "নিহতদের" (of those killed),
+// "জামায়াতে", "বিএনপিসহ" (BNP and others), "বিএনপিও" (BNP too). A keyword ending in Bengali script also matches
+// with one of them.
+const BN_ENDINGS = ["র", "এর", "ের", "কে", "রে", "তে", "ে", "এ", "য়", "য়ে", "রা", "েরা", "এরা", "দের", "দেরকে", "গুলো", "গুলোর",
+  "গুলোকে", "গুলোতে", "গুলি", "গুলির", "টা", "টি", "টার", "টির", "সহ", "পন্থী"].map((x) => x.normalize("NFKC"));
+const BN_SUFFIX = `(?:${BN_ENDINGS.join("|")})?(?:ও|ই)?`;
+const bnRes = new Map();
+function bnKeywordRe(kw) {
+  let re = bnRes.get(kw);
+  if (!re) {
+    if (bnRes.size > 500) bnRes.clear();
+    const esc = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    re = new RegExp(`(?<= )[#$]?${esc}${BN_SUFFIX}(?= )`, "u");
+    bnRes.set(kw, re);
+  }
+  return re;
 }
 
 // Whole-word / whole-phrase match. political=true ignores the NOT_POLITICAL phrases (unless a keyword is one).
@@ -58,6 +77,7 @@ function hasKeyword(text, list, political = false) {
     if (!kw) continue;
     const hay = political && !NOT_POLITICAL.some((p) => (" " + kw + " ").includes(" " + p + " ")) ? tn : t;
     if (hay.includes(" " + kw + " ") || hay.includes(" #" + kw + " ") || hay.includes(" $" + kw + " ")) return String(k).toLowerCase().trim();
+    if (/\p{Script=Bengali}$/u.test(kw) && bnKeywordRe(kw).test(hay)) return String(k).toLowerCase().trim();
   }
   return "";
 }

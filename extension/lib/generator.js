@@ -85,8 +85,9 @@ export function buildInstructions({ settings, target, toneText, angle, myHandle,
   ].filter((l) => l !== "").join("\n");
 }
 
-// Untrusted text is JSON-encoded (no raw newlines), so only the real delimiter line can close the block.
-const dataBlock = (data) => "<<<DATA\n" + JSON.stringify(data, null, 1) + "\nDATA>>>";
+// Untrusted text is JSON-encoded (no raw newlines), so only the real delimiter line can close the block. JSON.stringify
+// leaves the other line breaks raw (U+2028 / U+2029 and the C1 controls such as NEL U+0085): they are escaped too.
+const dataBlock = (data) => "<<<DATA\n" + JSON.stringify(data, null, 1).replace(/[\u0080-\u009f\u2028\u2029]/g, (c) => "\\u" + c.charCodeAt(0).toString(16).padStart(4, "0")) + "\nDATA>>>";
 
 export function buildInput({ post, target, styleExamples, avoid, feedback, ownerEdits, ts = now() }) {
   const profile = target.profile || {};
