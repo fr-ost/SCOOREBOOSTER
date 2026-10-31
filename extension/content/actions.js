@@ -174,11 +174,13 @@
     selectAllIn(box); // replaces whatever is in the box
     await D.sleep(20);
     dispatchPaste(box, clean);
-    await D.sleep(160);
+    // X's editor shows the pasted text on its next render, which can lag in a background tab: wait for it before
+    // trying a fallback, so the text never goes in twice.
+    await D.waitFor(() => (boxText(box) ? true : null), 1200, 100);
     if (!same() && !boxText(box)) {
       selectAllIn(box);
       try { box.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertFromPaste", data: clean, bubbles: true, cancelable: true, composed: true })); } catch (_) {}
-      await D.sleep(140);
+      await D.waitFor(() => (boxText(box) ? true : null), 800, 100);
     }
     if (!same() && !boxText(box)) {
       selectAllIn(box);
