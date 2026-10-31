@@ -39,6 +39,8 @@ export async function runSelfTest() {
     const add = (id, label, ok, detail) => checks.push({ id, label, ok, detail });
     for (const p of PAGES) {
       const nav = await navigate(tabId, p.url(me), { purpose: "diagnostics" }); // counted in the X footprint as diagnostics
+      // Pause/Stop pressed: nothing more is loaded, and the partial run is not kept as the last live test.
+      if (nav.aborted) return { ok: false, aborted: true, error: "Stopped by Pause/Stop before the test finished", checks, at: now() };
       if (!nav.ok) { add(p.id, p.label, false, nav.budget ? "Not loaded: the X page-load budget (Safety) is used up - try again later" : "The page did not load"); continue; }
       const w = await waitForPage(tabId, p.wait, 20000);
       const v = pageVerdict(w.page, settings);

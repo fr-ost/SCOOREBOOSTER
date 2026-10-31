@@ -213,14 +213,18 @@ describe("engine fixes (review round 2)", () => {
       if (msg.sx === "selfTest") return { ok: true, me: ME, counts: { primaryColumn: 1, tweet: 3, tweetText: 3, tweetUserName: 3, tweetTime: 3, replyButton: 3, profileUserName: 1, profileFollowers: 1, userCell: 5, followsYouBadge: 5 }, cells: 5, badgeCells: 5 };
       return { ok: true };
     };
-    await runSelfTest();
+    const r1 = await runSelfTest();
     assert.equal(stoppedAt, 1, "Stop was pressed while the first test page was open (setup)");
     assert.deepEqual(env.navigations.slice(stoppedAt).map(([, u]) => u), [], "X pages loaded after Stop");
     assert.equal((await getState()).job, null, "the lease is released");
-    // A later self-test (a new job) runs normally.
+    assert.equal(r1.ok, false);
+    assert.equal(r1.aborted, true, "the run says it was stopped");
+    assert.equal((await getState()).lastSelfTest, null, "a stopped run is not kept as the last live test");
+    // A later self-test (a new job) runs normally and is kept.
     env.content = null;
     await runSelfTest();
     assert.equal(env.navigations.length, 1 + 3);
+    assert.ok((await getState()).lastSelfTest, "a finished run is kept as the last live test");
   });
 
   // ---------------- ENG2-7 / UIV-8 ----------------
