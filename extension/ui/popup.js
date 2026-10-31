@@ -15,7 +15,7 @@ import * as history from "../lib/history.js";
 import {
   h, btn, busy, send, toast, icon, statusInfo, primaryAction, isSafetyStop, fig, fmtUsd, fmtAgo, fmtTime, fmtIn, fmtNum,
   setTz, fill, clear, delta, expiryChip, followBadge, tierBadge, riskChip, healthCheck, healthLabel, diagSquare,
-  providerKey, providerName, enabledProviders, primaryProvider, historyDelta, confirmDialog, truncate,
+  providerKey, providerName, enabledProviders, primaryProvider, historyDelta, confirmDialog, truncate, approvedSummary,
 } from "./components.js";
 import { responsive, rhythm, rhythmFrom, miniBars, stepLine, vizClass } from "./charts.js";
 
@@ -24,7 +24,7 @@ let state = { ...DEFAULT_STATE };
 let status = null;
 const data = { spend: null, targets: {}, board: {}, convos: null, blacklist: {}, secretsRev: null };
 let pending = [];
-let queued = 0;
+let queued = []; // approved + queued replies
 let recent = [];
 let profile = null; // { handle } from the active x.com tab
 let profileCheck = null; // last scoreCheck answer for that handle
@@ -259,7 +259,7 @@ function renderReview() {
     icon("chevron"));
   let body;
   if (!next) {
-    body = h("p", { class: "small muted" }, queued ? `Nothing to review. ${queued} approved, waiting for their slot.` : "Nothing waiting for review.");
+    body = h("p", { class: "small muted" }, queued.length ? `Nothing to review. ${approvedSummary(queued, data.targets, settings, state)}` : "Nothing waiting for review.");
   } else {
     const t = data.targets[next.target];
     const fs = t ? followStatus(t) : null;
@@ -359,7 +359,7 @@ async function loadHistory() {
   try {
     const now = Date.now();
     const [p, a, q, rec] = await Promise.all([history.byStatus(HS.PENDING_REVIEW), history.byStatus(HS.APPROVED), history.byStatus(HS.QUEUED), history.since(now - 26 * HOUR)]);
-    pending = p; queued = a.length + q.length; recent = rec;
+    pending = p; queued = [...a, ...q]; recent = rec;
   } catch (_) { /* keep last */ }
 }
 async function refresh() {

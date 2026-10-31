@@ -1,7 +1,7 @@
 // ScoreX - export / import as JSON. API keys (sx.secrets) are never exported or imported.
 
 import { K, VERSION, STATUS, HS, OPEN_STATUSES } from "./constants.js";
-import { load, save, remove, update, getSettings, saveSettings, sanitizeSettings, updateTargets, updateBlacklist, updateCandidates, getTargets, getBlacklist, CANDIDATES_CAP, DEFAULT_STATE, noteReset } from "./store.js";
+import { load, save, remove, update, withLock, getSettings, saveSettings, sanitizeSettings, updateTargets, updateBlacklist, updateCandidates, getTargets, getBlacklist, CANDIDATES_CAP, DEFAULT_STATE, noteReset } from "./store.js";
 import * as H from "./history.js";
 import { db, STORES } from "./db.js";
 import { now, normalizeHandle } from "./util.js";
@@ -207,7 +207,11 @@ export async function resetAll() {
   // not write its results back into the lists cleared here (lib/scoreboard.js).
   noteReset();
   // Provider overrides are your config like the selector overrides, conversation alerts are worker data: both go.
-  await remove([K.settings, K.targets, K.candidates, K.blacklist, K.seen, K.logs, K.discovery, K.selectorOverrides, K.providerOverrides, K.learning, K.conversations, K.state]);
+  await remove([K.settings, K.blacklist, K.seen, K.logs, K.discovery, K.selectorOverrides, K.providerOverrides, K.learning, K.conversations, K.state]);
+  // Targets and candidates go under their locks: a score job's write already under way (it read the lists before this
+  // reset) finishes first and is cleared with them, instead of writing the old lists back after the reset.
+  await withLock(K.targets, () => remove([K.targets]));
+  await withLock(K.candidates, () => remove([K.candidates]));
   // Score history, checks and smart-follower lists go; today's request counts per provider stay (like the spend
   // ledger they protect a cap: a reset must not let a provider be asked past its daily cap).
   await update(K.scoreboard, {}, (b) => (b && b.usage && typeof b.usage === "object" ? { usage: b.usage } : {}));

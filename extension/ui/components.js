@@ -19,7 +19,7 @@
 
 import { STATUS, STOP, STOP_LABEL, HS, MODE, HARD } from "../lib/constants.js";
 import { fmtUsd, fmtCount, fmtDuration, truncate, num } from "../lib/util.js";
-import { FS, FS_LABEL, followStatus, followDays } from "../lib/targets.js";
+import { FS, FS_LABEL, followStatus, followDays, isActive } from "../lib/targets.js";
 import { dailyLimit, accountsLimit } from "../lib/safety.js";
 import { PROVIDER_DEFS } from "../lib/providerdefs.js";
 import { getSecrets } from "../lib/store.js";
@@ -500,6 +500,23 @@ export function isSafetyStop(state) {
   if (!state || state.status === STATUS.RUNNING) return false;
   if (state.alert) return true;
   return state.status === STATUS.STOPPED && !!state.stopReason && state.stopReason !== STOP.USER;
+}
+// Why the engine drops an approved or queued reply instead of posting it, or "" when it can post. Same rule as its
+// posting loop (lib/engine.js tickBody): every item whose target is not active (lib/targets.js isActive) is skipped.
+export function dropReasonOf(rec, targets, settings) {
+  const who = "@" + ((rec && rec.target) || "?");
+  const t = rec && targets && Object.hasOwn(targets, rec.target) ? targets[rec.target] : null;
+  if (!t) return `${who} is no longer one of your targets`;
+  if (isActive(t, settings)) return "";
+  if (!t.enabled) return t.rel && t.rel.gone ? `X says ${who} no longer exists, so the target was turned off` : `${who} is turned off in Targets`;
+  return followStatus(t) === FS.CHECKING ? `ScoreX does not know yet whether ${who} follows you` : `${who} follows you now`;
+}
+// Today and popup line for approved replies: the ones the engine drops are not promised a slot, and while the engine
+// is not running the slot waits for Start / resume.
+export function approvedSummary(list, targets, settings, state) {
+  const dropped = list.filter((r) => dropReasonOf(r, targets, settings)).length, queued = list.length - dropped, st = state || {};
+  const when = st.status === STATUS.RUNNING ? "waiting for their posting slot" : `posting after you ${st.status === STATUS.PAUSED || isSafetyStop(st) ? "resume" : "press Start"}`;
+  return [queued ? `${queued} approved, ${when}.` : "", dropped ? `${dropped} approved will not post (the account follows you now, was turned off or removed, or its follow status is unknown).` : ""].filter(Boolean).join(" ");
 }
 // Engine status -> display info. Safety stops are red.
 export function statusInfo(state) {

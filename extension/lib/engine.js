@@ -300,7 +300,7 @@ export async function start(opts = {}) {
   const ts = now();
   await patchState((s) => ({
     status: STATUS.RUNNING, stopReason: null, stopDetail: "", alert: null, startedAt: ts,
-    firstStartedAt: st.firstStartedAt || ts, consecutiveFailures: 0, softErrors: 0, errorPageStreak: 0, tabErrors: 0, internalErrors: 0, emptyStreak: 0,
+    firstStartedAt: st.firstStartedAt || ts, consecutiveFailures: 0, softErrors: 0, errorPageStreak: 0, watchRetryAt: null, tabErrors: 0, internalErrors: 0, emptyStreak: 0,
     accountUnknownStreak: 0, emptyWatchStreak: 0,
     job: leaseLive(s.job) ? s.job : null, // never drop a live lease (e.g. a running discovery)
   }));
@@ -327,7 +327,7 @@ export async function resume() {
   if (st.status === STATUS.RUNNING) return { ok: true };
   if (st.status === STATUS.STOPPED) return start({ reviewed: true });
   handoverRefresh();
-  await patchState({ status: STATUS.RUNNING, alert: null, consecutiveFailures: 0, softErrors: 0, errorPageStreak: 0, tabErrors: 0, internalErrors: 0, accountUnknownStreak: 0 });
+  await patchState({ status: STATUS.RUNNING, alert: null, consecutiveFailures: 0, softErrors: 0, errorPageStreak: 0, watchRetryAt: null, tabErrors: 0, internalErrors: 0, accountUnknownStreak: 0 });
   log("info", "Resumed");
   await scheduleTick(randInt(3000, 10000), "resume");
   await refreshBadge();
@@ -542,34 +542,39 @@ async function tickBody(settings, secrets, reason = "timer") {
   if (!(await stillRunning())) return null;
 
   // 2) Watch for new posts and generate (unless the review queue is full). Watch pages are never loaded
-  //    more often than the hard minimum interval, whatever schedules the tick.
-  // A manual "Run a check now" waits for the hard minimum interval instead of being dropped.
+  //    more often than the hard minimum interval, nor during the back-off after a failed watch load (watchRetryAt),
+  //    whatever schedules the tick (a "check now", an approval, a learning check).
+  // A manual "Run a check now" waits for both instead of being dropped.
   const sinceWatch = state.lastWatchAt ? ts - state.lastWatchAt : Infinity;
   const minWatchGap = HARD.minCheckIntervalSec * 1000;
-  if (counts.pendingReview < settings.review.maxPending && sinceWatch < minWatchGap && reason === "manual") {
-    return { delay: minWatchGap - sinceWatch + 1000, why: "manual" };
+  const watchWait = Math.max(minWatchGap - sinceWatch, (state.watchRetryAt || 0) - ts, 0);
+  if (counts.pendingReview < settings.review.maxPending && watchWait > 0 && reason === "manual") {
+    return { delay: watchWait + 1000, why: "manual" };
   }
   let revisitAt = 0; // a post about to enter the comment window: come back for it (after the idle work below)
-  if (counts.pendingReview < settings.review.maxPending && sinceWatch >= minWatchGap) {
+  if (counts.pendingReview < settings.review.maxPending && watchWait <= 0) {
     const room = await pageRoom(settings, 1);
     if (room.left < 1) return budgetWait(room, ts);
     const targets = await getTargets();
     const w = await withPurpose("watch", () => watchOnce(tabId, settings, targets, ts));
     if (w.stop) { await stop(w.stop, `${w.detail || ""} (while checking ${w.source || "posts"})`); return null; }
-    if (w.aborted) return null; // Pause/Stop pressed during the check
+    // Pause/Stop pressed during the check. A watch page X already loaded still counts toward the hard minimum interval.
+    if (w.aborted) { if (w.loaded) await patchState({ lastWatchAt: now() }); return null; }
     if (await stopIfAccountUnknown(settings)) return null;
     if (!w.ok && w.soft === "page_budget") return budgetWait(await pageRoom(settings, 1), now()); // not an X error
     if (!w.ok) {
       // Every failed watch (any kind) counts toward the 5-in-a-row stop; "Something went wrong" pages also have their
       // own count, and only three of them in a row are the rate-limit stop. A failed load is still a watch page load:
-      // lastWatchAt keeps the next one (a "check now" too) at least the hard minimum interval away.
+      // lastWatchAt keeps the next one (a "check now" too) at least the hard minimum interval away, and watchRetryAt
+      // keeps every earlier tick (a "check now", an approval) from reloading it before the 2-5 min back-off ends.
       const n = (state.softErrors || 0) + 1;
       const errorPages = w.soft === "error_page" ? (state.errorPageStreak || 0) + 1 : 0;
-      await patchState({ softErrors: n, errorPageStreak: errorPages, lastWatchAt: now() });
+      const backoff = humanDelay(2 * MIN, 5 * MIN);
+      await patchState({ softErrors: n, errorPageStreak: errorPages, lastWatchAt: now(), watchRetryAt: now() + backoff });
       log("warn", `Watch check failed (${w.soft || "unknown"})`, w.detail || "");
       if (errorPages >= 3) { await stop(STOP.RATE_LIMIT, "X kept showing 'Something went wrong' (often a temporary rate limit)"); return null; }
       if (n >= 5) { await stop(STOP.DOM_CHANGED, "Watch pages failed 5 times in a row"); return null; }
-      return { delay: humanDelay(2 * MIN, 5 * MIN), why: "retry after soft error" };
+      return { delay: backoff, why: "retry after soft error" };
     }
     const emptyStreak = w.visibleEmpty ? (state.emptyStreak || 0) + 1 : 0;
     const hiddenStreak = w.hiddenEmpty ? (state.hiddenEmptyStreak || 0) + 1 : 0;
@@ -577,7 +582,7 @@ async function tickBody(settings, secrets, reason = "timer") {
     // counts as fresh). A check that read no page (no active targets) leaves the streak as it is.
     const fresh = !!((w.posts && w.posts.length) || (w.waiting && w.waiting.length));
     const emptyWatchStreak = !w.source ? state.emptyWatchStreak || 0 : fresh ? 0 : (state.emptyWatchStreak || 0) + 1;
-    await patchState({ softErrors: 0, errorPageStreak: 0, emptyStreak, hiddenEmptyStreak: hiddenStreak, emptyWatchStreak, ...(fresh ? { lastFreshAt: now() } : {}), lastWatchAt: now(), lastWatchSource: w.source, lastWatchScanned: w.scanned });
+    await patchState({ softErrors: 0, errorPageStreak: 0, watchRetryAt: null, emptyStreak, hiddenEmptyStreak: hiddenStreak, emptyWatchStreak, ...(fresh ? { lastFreshAt: now() } : {}), lastWatchAt: now(), lastWatchSource: w.source, lastWatchScanned: w.scanned });
     if (emptyStreak >= 4) { await stop(STOP.DOM_CHANGED, "No posts rendered on watch pages 4 times in a row - X may have changed its page"); return null; }
     if (hiddenStreak === 3) await notify("sx-hidden", "ScoreX: X tab not rendering", "X showed no posts while its tab was hidden. Open Settings > Advanced and switch to 'separate window', or enable 'bring X tab to front'.");
     if (w.posts.length) {
@@ -983,7 +988,20 @@ export async function reviewAction(msg) {
   return res;
 }
 
+// Records with a Regenerate running in this worker: a second request (another dashboard visit or window) is refused
+// instead of paying for a second generation of the same reply.
+const regenerating = new Set();
+
 async function reviewActionInner({ id, action, text }) {
+  if (action === "regenerate") {
+    if (regenerating.has(id)) return { ok: false, error: "A new reply is already being written for this post" };
+    regenerating.add(id);
+    try { return await reviewActionCore({ id, action, text }); } finally { regenerating.delete(id); }
+  }
+  return reviewActionCore({ id, action, text });
+}
+
+async function reviewActionCore({ id, action, text }) {
   const rec = await H.get(id);
   if (!rec) return { ok: false, error: "Item not found" };
   const editable = [HS.PENDING_REVIEW, HS.APPROVED, HS.QUEUED].includes(rec.status);

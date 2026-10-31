@@ -214,6 +214,14 @@ function diagnosticsSection(ctx, { full = false } = {}) {
     announce("Live X test started. It takes about 30 seconds.");
     const r = await ctx.send("selfTest", {}, { raw: true, quiet: true, label: "Live X test" });
     liveRunning = false;
+    // Stopped by Pause/Stop: not a test result. The last complete test stays shown and saved (the worker does not keep
+    // the partial run either).
+    if (r && r.aborted) {
+      drawHead(); drawLive();
+      announce("Live X test stopped by Pause/Stop before it finished.");
+      toast("Live X test stopped by Pause/Stop before it finished. The last complete test is still shown.", { type: "info" });
+      return;
+    }
     live = r && r.ok !== false && Array.isArray(r.checks) ? { at: r.at || Date.now(), checks: r.checks, stop: r.stop || null } : { at: Date.now(), checks: [], error: (r && r.error) || "No answer from the background worker." };
     writeLive(live);
     drawHead(); drawLive();

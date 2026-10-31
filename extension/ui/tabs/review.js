@@ -11,7 +11,7 @@ import { num } from "../../lib/util.js";
 import {
   h, clear, section, btn, busy, toast, icon, tierBadge, followBadge, statusBadge, badge, xLink, link, confirmDialog, modal, emptyState,
   fmtUsd, fmtCount, fmtNum, fmtAgo, fmtTime, fmtIn, fmtDateTime, truncate, debounce, uidShort, add, isTyping, hasOverlay, announce,
-  kbd, keyLegend, helpSheet, expiryChip, followDay, dayMeter, primaryProvider, providerName, providerKey, segmented, isSafetyStop,
+  kbd, keyLegend, helpSheet, expiryChip, followDay, dayMeter, primaryProvider, providerName, providerKey, segmented, isSafetyStop, dropReasonOf,
 } from "../components.js";
 import { toneLabel } from "./targets.js";
 import { PRESET_LABEL } from "./models.js";
@@ -22,9 +22,15 @@ const MOD = /Mac|iPhone|iPad/i.test((navigator.userAgentData && navigator.userAg
 const readLS = (k) => { try { return window.localStorage.getItem(k); } catch (_) { return null; } };
 const writeLS = (k, v) => { try { window.localStorage.setItem(k, v); } catch (_) { /* storage blocked */ } };
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
-// Unsaved edits (id -> { text, base }) live outside the screen, so leaving Review (rail, a link, the popup opening
-// another screen in this tab) and coming back keeps them. They last until this dashboard tab is closed or reloaded.
+// Unsaved edits (id -> { text, base, status }) live outside the screen, so leaving Review (rail, a link, the popup
+// opening another screen in this tab) and coming back keeps them. They last until this dashboard tab is closed or
+// reloaded. An edit of a reply waiting for review is dropped once the reply was approved elsewhere (Today, the popup):
+// that approval took the text as it was, and the card must show what will be posted.
 const drafts = new Map();
+// Regenerate requests still running (record ids), kept outside the screen like the drafts: leaving Review and coming
+// back while the model writes must not offer a second (paid) Regenerate. regenView: the open screen's card updater.
+const regenerating = new Set();
+let regenView = null;
 
 export default {
   id: "review",
@@ -32,7 +38,6 @@ export default {
   async render(root, ctx) {
     const cards = new Map(); // id -> { el, ta, kind, rec, sig, followsNow, refs }
     const ops = new Map(); // id -> held approve / skip { id, rec, action, text, kind, until, timer, tick, el, sending }
-    const regenerating = new Set(); // ids with a Regenerate request running (a card rebuilt meanwhile stays busy)
     let opOrder = [];
     let pending = [], waiting = [];
     let lastSig = null;
@@ -120,15 +125,16 @@ export default {
       const s = ctx.settings, t = targetOf(rec), pid = primaryProvider(s, board());
       const fd = t ? followDay(t, s) : null;
       return JSON.stringify([kind, rec.status, rec.updatedAt, rec.comment, rec.scheduledFor, t ? followStatus(t) : null, t && t.tier, t && t.stats && t.stats.comments,
-        t && t.rel && t.rel.gone, fd && [fd.day, fd.of, fd.near], pid, providerScore(t, pid), s.quality.maxChars, s.review.pendingMaxAgeMin]);
+        t && t.rel && t.rel.gone, !!t, t && t.enabled, fd && [fd.day, fd.of, fd.near], pid, providerScore(t, pid), s.quality.maxChars, s.review.pendingMaxAgeMin]);
     }
 
     // ------------------------------------------------ cards
-    // Why an approved reply will not post (the engine drops it), or "".
+    // Why an approved reply will not post (the engine drops it: target removed, turned off, follows you, status
+    // unknown), or "".
     const dropReason = (rec) => {
       if (rec.status === HS.POSTING) return "";
-      if (!targetOf(rec)) return `@${rec.target} is no longer one of your targets, so this reply will be dropped instead of posted.`;
-      return followsNowOf(rec) ? `@${rec.target} follows you now, so this reply will be dropped instead of posted.` : "";
+      const why = dropReasonOf(rec, ctx.targets, ctx.settings);
+      return why ? `${why}, so this reply will be dropped instead of posted.` : "";
     };
     function slotNode(rec) {
       if (rec.status === HS.POSTING) return [h("span", { class: "spinner" }), " Posting now…"];
@@ -145,9 +151,9 @@ export default {
       const followsNow = kind === "pending" && followsNowOf(rec);
       const dropNote = kind === "waiting" ? dropReason(rec) : "";
       const base = rec.comment || "";
-      const d = drafts.get(rec.id);
-      if (d && d.base !== base) drafts.delete(rec.id);
-      const text = d && d.base === base ? d.text : base;
+      let d = drafts.get(rec.id);
+      if (d && (d.base !== base || (d.status === HS.PENDING_REVIEW && rec.status !== HS.PENDING_REVIEW))) { drafts.delete(rec.id); d = null; }
+      const text = d ? d.text : base;
       const refs = {};
 
       const taId = uidShort("rc_");
@@ -162,7 +168,7 @@ export default {
         counter.className = "char-count" + (n > HARD.maxCommentChars ? " is-over" : n > s.quality.maxChars ? " is-warn" : "");
         counter.title = n > HARD.maxCommentChars ? "Too long for X" : n > s.quality.maxChars ? `Longer than your max (${s.quality.maxChars})` : "X counts CJK characters and emoji as two";
         const dirty = ta.value !== base;
-        if (dirty) drafts.set(rec.id, { text: ta.value, base }); else drafts.delete(rec.id);
+        if (dirty) drafts.set(rec.id, { text: ta.value, base, status: rec.status }); else drafts.delete(rec.id);
         el.classList.toggle("is-dirty", dirty);
         if (saveBtn) saveBtn.hidden = !dirty;
       };
@@ -502,6 +508,10 @@ export default {
       const b = c.el.querySelector('[data-ctl="regen"]');
       if (b) { b.disabled = on; b.classList.toggle("is-busy", on); }
     }
+    // A Regenerate started on an earlier visit of this screen frees this visit's card when it answers.
+    const view = { busy: setRegenBusy, reload: () => (root.isConnected ? reload() : null) };
+    regenView = view;
+    ctx.onDispose(() => { if (regenView === view) regenView = null; });
     async function regenerate(rec) {
       const c = cards.get(rec.id);
       if (!c || c.kind !== "pending" || ops.has(rec.id) || regenerating.has(rec.id)) return;
@@ -521,6 +531,7 @@ export default {
         setRegenBusy(rec.id, false);
       }
       if (root.isConnected) await reload();
+      else if (regenView) { regenView.busy(rec.id, false); await regenView.reload(); }
     }
     function openPost(rec) {
       if (!rec.postUrl) { toast("This post has no link.", { type: "warn" }); return; }

@@ -8,6 +8,7 @@
 
 import { K, ALARM } from "../../lib/constants.js";
 import { providerDefs, pickMode, modeNeeds } from "../../lib/providers.js";
+import { OWN_NEXT_DAY } from "../../lib/scoreboard.js";
 import { normalizeHandle, num, dayKey } from "../../lib/util.js";
 import {
   h, clear, fill, add, section, advanced, btn, busy, toast, tag, statusSquare, providerKey, providerName, primaryProvider,
@@ -176,7 +177,10 @@ export default {
     async function nextRefreshAt() {
       const list = scoreProviders().filter((p) => readiness(p).kind === "ready" || readiness(p).kind === "error");
       if (!list.length || !ctx.settings.scores.autoRefreshOwn) return null;
-      let due = Math.min(...list.map((p) => (p.own && p.own.at ? p.own.at + OWN_FRESH_MS : Date.now())));
+      // A site is asked again 20 h after its last score, and 20 h after it refused (bot check, key, no score...): the
+      // automatic refresh skips it until then (lib/scoreboard.js refreshOwn).
+      const dueOf = (o) => Math.max(o && o.at ? o.at + OWN_FRESH_MS : 0, o && o.errorAt && OWN_NEXT_DAY.includes(o.errorCode) ? o.errorAt + OWN_FRESH_MS : 0, Date.now());
+      let due = Math.min(...list.map((p) => dueOf(p.own)));
       try {
         const a = await chrome.alarms.get(ALARM.SCORES);
         if (a && a.scheduledTime) {

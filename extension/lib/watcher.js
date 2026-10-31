@@ -74,6 +74,7 @@ export function planSource(settings, targets, cursor, ts = now(), deadLists = {}
 
 const NEVER = async () => false;
 const ABORTED = { ok: false, aborted: true };
+const ABORTED_LOADED = { ok: false, aborted: true, loaded: true }; // stopped after X had loaded the page
 
 // shouldStop() (Pause/Stop pressed) is checked before every navigation and every scroll.
 async function scrollAFew(tabId, n, stopped = NEVER) {
@@ -99,9 +100,9 @@ async function readPage(tabId, url, settings, stopped = NEVER) {
   if (v && v.stop) return { ok: false, stop: v.stop, detail: v.detail };
   if (v && v.notFound) return { ok: true, posts: [], notFound: true, detail: v.detail, page: w.page };
   await sleep(humanDelay(1500, 3500)); // glance at the page like a person would
-  if (!(await scrollAFew(tabId, settings.watch.scrolls, stopped))) return ABORTED;
+  if (!(await scrollAFew(tabId, settings.watch.scrolls, stopped))) return ABORTED_LOADED;
   if (w.ok && w.key === "emptyState") return { ok: true, posts: [], articleCount: 0, unparsed: 0, emptyResult: true, page: w.page };
-  if (await stopped()) return ABORTED;
+  if (await stopped()) return ABORTED_LOADED;
   const r = await send(tabId, CMD.SCRAPE_TWEETS, { limit: 50 }, 20000);
   const v2 = pageVerdict(r.page, settings);
   if (v2 && v2.stop) return { ok: false, stop: v2.stop, detail: v2.detail };
@@ -120,8 +121,8 @@ async function readProfile(tabId, handle, settings, stopped = NEVER, purpose) {
   if (v && v.stop) return { ok: false, stop: v.stop, detail: v.detail };
   if (v && v.notFound) return { ok: true, notFound: true, posts: [] };
   await sleep(humanDelay(1200, 3000));
-  if (settings.watch.scrolls && !(await scrollAFew(tabId, 1, stopped))) return ABORTED;
-  if (await stopped()) return ABORTED;
+  if (settings.watch.scrolls && !(await scrollAFew(tabId, 1, stopped))) return ABORTED_LOADED;
+  if (await stopped()) return ABORTED_LOADED;
   const r = await send(tabId, CMD.SCRAPE_PROFILE, {}, 20000);
   const v2 = pageVerdict(r.page, settings);
   if (v2 && v2.stop) return { ok: false, stop: v2.stop, detail: v2.detail };
@@ -155,7 +156,8 @@ const engineStopped = async () => (await getState()).status !== STATUS.RUNNING;
  * One watch check. Returns { ok, posts (fresh candidates, newest first), waiting (too fresh, retry soon),
  * scanned, source, page (last page report), stop?, soft?, hiddenEmpty?, visibleEmpty?, aborted? }
  * opts.shouldStop(): Pause/Stop pressed (default: the engine is no longer running). It is checked before every
- * navigation and scroll; an aborted check returns { ok:true, aborted:true, posts:[] } and touches no state.
+ * navigation and scroll; an aborted check returns { ok:true, aborted:true, posts:[] } (loaded:true when X had already
+ * loaded a watch page: it still counts toward the hard minimum interval) and touches no other state.
  * A watched X List that does not exist returns { ok:false, soft:"list_not_found" } (and is skipped for a while).
  * Rotation: every visited target moves to the back of the rotation; one X says does not exist is turned off.
  */
@@ -165,8 +167,10 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
   const targets = Object.values(targetsMap);
   const plan = planSource(settings, targets, st.watchCursor || 0, ts, st.deadLists);
   if (!plan) return { ok: true, posts: [], waiting: [], scanned: 0, source: null, idle: "no_active_targets" };
-  const aborted = { ok: true, aborted: true, posts: [], waiting: [], scanned: 0, source: plan.label };
-  if (await stopped()) return aborted;
+  const abortedBase = { ok: true, aborted: true, posts: [], waiting: [], scanned: 0, source: plan.label };
+  let loaded = false; // a watch page was loaded in this check
+  const aborted = (more = false) => (loaded || more ? { ...abortedBase, loaded: true } : abortedBase);
+  if (await stopped()) return aborted();
   await patchState({ watchCursor: plan.next });
 
   let posts = [];
@@ -178,7 +182,8 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
   if (plan.kind === "rotation") {
     for (const h of plan.handles) {
       const r = await readProfile(tabId, h, settings, stopped, "watch");
-      if (r.aborted) return aborted;
+      if (r.aborted) return aborted(r.loaded);
+      loaded = true;
       if (r.stop) return { ok: false, stop: r.stop, detail: r.detail, source: plan.label };
       if (r.budget) return { ok: false, soft: r.soft, budget: true, until: r.until, source: plan.label };
       if (r.page) lastPage = r.page;
@@ -194,7 +199,8 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
     }
   } else {
     const r = await readPage(tabId, plan.url, settings, stopped);
-    if (r.aborted) return aborted;
+    if (r.aborted) return aborted(r.loaded);
+    loaded = true;
     if (r.stop) return { ok: false, stop: r.stop, detail: r.detail, source: plan.label };
     if (plan.kind === "list" && r.notFound) {
       await markListMissing(plan.url, r.detail);
@@ -205,7 +211,7 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
     pageInfo = r;
     lastPage = r.page || null;
   }
-  if (await stopped()) return aborted;
+  if (await stopped()) return aborted();
 
   // Structural sanity: articles rendered but none could be parsed -> selectors are outdated (rotation: over all the
   // profile pages of this check).
@@ -225,7 +231,10 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
       hiddenEmpty = !!(lastPage && lastPage.hidden);
       visibleEmpty = !hiddenEmpty;
     } else {
-      failed = { soft: rot.failed.every((r) => r.soft === "error_page") ? "error_page" : rot.failed[0].soft, detail: rot.failed[0].detail };
+      // "Something went wrong" only when every visit showed it (that alone counts toward the rate-limit stop); a mix is
+      // labelled by a failure of another kind, whatever the visit order.
+      const other = rot.failed.find((r) => r.soft !== "error_page");
+      failed = other ? { soft: other.soft, detail: other.detail } : { soft: "error_page", detail: rot.failed[0].detail };
     }
   }
 

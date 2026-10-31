@@ -16,7 +16,7 @@ import { dayKey, num, DAY, HOUR, MIN } from "../../lib/util.js";
 import {
   h, clear, btn, busy, toast, icon, statusInfo, isSafetyStop, segmented, switchMode, figure, ledger, delta, tierBadge, xLink, expiryChip,
   followDay, primaryProvider, setPrimaryProvider, enabledProviders, providerName, historyDelta, menuButton, safetyBanner, maskKey,
-  fmtUsd, fmtTime, fmtDay, fmtDateTime, fmtAgo, fmtIn, fmtPct, fmtNum, truncate, debounce, add, fill,
+  fmtUsd, fmtTime, fmtDay, fmtDateTime, fmtAgo, fmtIn, fmtPct, fmtNum, truncate, debounce, add, fill, approvedSummary,
 } from "../components.js";
 import { responsive, rhythm, rhythmFrom, spark, stepLine, miniBars, vizClass } from "../charts.js";
 
@@ -452,13 +452,9 @@ export default {
         if (r) { toast(action === "approve" ? "Approved - it posts in its own slot" : "Skipped", { type: "success" }); await loadPending(); ctx.refreshCounts(); }
       });
     }
-    // Approved replies the engine drops instead of posting: the account follows you now or is no longer a target.
-    const dropsOf = (rec) => { const t = ctx.targets[rec.target]; const fs = t ? followStatus(t) : null; return !t || fs === FS.FOLLOWS || fs === FS.FOLLOWED_BACK; };
-    function waitingText() {
-      const dropped = approved.filter(dropsOf).length, queued = approved.length - dropped, state = ctx.state;
-      const when = state.status === STATUS.RUNNING ? "waiting for their posting slot" : `posting after you ${state.status === STATUS.PAUSED || isSafetyStop(state) ? "resume" : "press Start"}`;
-      return [queued ? `${queued} approved, ${when}.` : "", dropped ? `${dropped} approved will not post (the account follows you now or is no longer a target).` : ""].filter(Boolean).join(" ");
-    }
+    // Approved replies the engine drops instead of posting (target removed, turned off, follows you, status unknown)
+    // are not counted as waiting for a slot.
+    const waitingText = () => approvedSummary(approved, ctx.targets, ctx.settings, ctx.state);
     function drawPreview() {
       const maxAge = ctx.settings.review.pendingMaxAgeMin;
       pendingCount.textContent = String(pending.length);

@@ -12,14 +12,19 @@
 //   (row click, #targets?h=, J/K, Esc)
 // - Discover (sources, smart-follower blocks from sx.scoreboard.smart, candidates with score-site columns) and
 //   Scores (score cells, deltas, history chart, coverage; enabling a site asks Chrome first: the prompt cannot be
-//   clicked in a test, so chrome.permissions.request is stubbed and both answers are checked)
-// - Review keyboard (J/K/A/S/Z, ?), the held approve with Undo and the Approve-all-with-edits dialog
+//   clicked in a test, so chrome.permissions.request is stubbed and both answers are checked; the next own-score
+//   refresh after a site refused is promised 20 h later)
+// - Review keyboard (J/K/A/S/Z, ?), the held approve with Undo and the Approve-all-with-edits dialog; Regenerate stays
+//   busy across redraws and visits, an edit is dropped once its reply is approved elsewhere, an approved reply to a
+//   turned-off target says it will not post
 // - Results (funnel, daily bars, heatmap, views, Comments table + filters + drawer), Tone (prompt, Try it, learn
 //   from edits), Safety (clamping, risk report, page loads, reach monitor), Settings (Diagnostics quick check +
-//   the saved live test, mode select confirm), Models (masked key, estimator, preset per tier), theme menu
+//   the saved live test, a live test stopped by Pause/Stop is not kept, mode select confirm), Models (masked key,
+//   estimator, preset per tier), theme menu
 // - the safety stop: "Review stop…" (no one-click resume, also in the setup stepper), a confirm that needs its
 //   checkbox, Discover's X-tab sources wait for the reviewed stop
-// - a screen left mid-render registers nothing in the next one; narrow tables keep their key columns in view
+// - a screen left mid-render registers nothing in the next one and never acts on its ?h=; narrow tables keep their
+//   key columns in view
 // - collapsed Advanced sections (remembered), and the popup (status, one primary, review next, quota strip,
 //   replies line, risk, the This-profile card hidden when the active tab is not x.com)
 //
@@ -408,6 +413,25 @@ try {
     await page.waitForTimeout(1200);
     await page.click("#healthLink");
     check(await waitFor(page, () => !!document.querySelector("#allSettingsLink"), null, 5000), "Results left mid-render: the rail's Health link still opens Settings › Diagnostics");
+    // A screen left mid-render never acts on the next screen's params: Scores still loading (a waking worker, held
+    // 700 ms here), then #targets?h=... opens the drawer and sends no score check (scoreCheck answered by a stub).
+    await openTab(page, base, "overview");
+    await page.evaluate(() => {
+      const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+      window.__sent = [];
+      chrome.runtime.sendMessage = (m, ...r) => {
+        if (m && m.sx && m.sx !== "getStatus") window.__sent.push(m.sx + (m.handle ? ":" + m.handle : ""));
+        if (m && m.sx === "scoreCheck") return Promise.resolve({ ok: true, handle: m.handle, results: {} });
+        if (m && m.sx === "scoresState") return new Promise((res) => setTimeout(() => res(orig(m, ...r)), 700));
+        return orig(m, ...r);
+      };
+    });
+    await hop("scores", "targets?h=dwarkesh_sp");
+    await page.waitForSelector('#view[data-ready="targets"]');
+    await page.waitForTimeout(1500);
+    const sent2 = await page.evaluate(() => window.__sent.slice());
+    check(!sent2.some((x) => /^(scoreCheck|smartFollowers)/.test(x)), "Scores left mid-render does not act on the next screen's ?h= (sent: " + (sent2.join(", ") || "nothing") + ")");
+    await page.keyboard.press("Escape");
   });
 
   // ---------------------------------------------------------------- shell + rail
@@ -751,6 +775,39 @@ try {
     const off = await waitSetting(page, (x) => x.providers.ethos && x.providers.ethos.enabled === false);
     check(off && off.providers.ethos.enabled === false, "turning Ethos off saves providers.ethos.enabled = false");
     await page.evaluate(() => { localStorage.removeItem("sx.test.perm"); const d = document.getElementById("providersSetup"); if (d) d.open = false; });
+    // After a site refused (bot check) your score is asked again 20 h later: the header does not promise the next
+    // 4-hourly alarm, which the worker skips. Chrome's host grant is stubbed on the scoresState answer; the board is
+    // put back afterwards.
+    const board0 = await storageKey(page, "sx.scoreboard");
+    const errorAt = Date.now() - 36e5;
+    await page.evaluate(async (errorAt) => {
+      const b = (await chrome.storage.local.get("sx.scoreboard"))["sx.scoreboard"];
+      for (const id of Object.keys(b.own || {})) b.own[id] = { ...b.own[id], at: Date.now() - 3 * 864e5, error: "Blocked by the site's bot check", errorCode: "blocked", errorAt };
+      await chrome.storage.local.set({ "sx.scoreboard": b });
+    }, errorAt);
+    await openTab(page, base, "overview");
+    await page.evaluate(() => {
+      const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = async (m, ...r) => {
+        const res = await orig(m, ...r);
+        if (m && m.sx === "scoresState" && res && Array.isArray(res.providers)) for (const p of res.providers) if (p.enabled) p.granted = true;
+        return res;
+      };
+      location.hash = "#scores";
+    });
+    await page.waitForSelector('#view[data-ready="scores"]');
+    await waitFor(page, () => /next /.test(document.getElementById("scoresRefreshInfo")?.textContent || ""), null, 8000);
+    const nx = await page.evaluate(async (errorAt) => {
+      const C = await import(chrome.runtime.getURL("ui/components.js"));
+      const info = document.getElementById("scoresRefreshInfo")?.textContent || "";
+      const a = await chrome.alarms.get("sx.scores");
+      let t = errorAt + 20 * 36e5;
+      if (a && a.scheduledTime) { let x = a.scheduledTime; const period = (a.periodInMinutes || 240) * 60000; while (x < t && period > 0) x += period; t = x; }
+      const fmt = (x) => (x - Date.now() < 20 * 36e5 ? C.fmtTime(x) : C.fmtDay(x) + " " + C.fmtTime(x));
+      return { info, want: fmt(t), skipped: a && a.scheduledTime ? fmt(a.scheduledTime) : null };
+    }, errorAt);
+    check(nx.info.includes(`(next ${nx.want})`) && (!nx.skipped || nx.skipped === nx.want || !nx.info.includes(`(next ${nx.skipped})`)), `after a site refused, the next own-score refresh is promised 20 h later (want ${nx.want}): ${nx.info.trim()}`);
+    await page.evaluate(async (b) => { await chrome.storage.local.set({ "sx.scoreboard": b }); }, board0);
   });
 
   // ---------------------------------------------------------------- Review
@@ -762,6 +819,14 @@ try {
     const wl = await page.locator("#waitingList").innerText();
     check(/Posts after you resume/.test(wl) && !/Posts around/.test(wl), "while paused, approved replies say they post after you resume (no posting time is promised)");
     check(/follows you now, so this reply will be dropped/.test(wl) && /Will not post/.test(wl), "an approved reply to an account that follows you now says it will be dropped");
+    // ...and so does one to a target you turn off in Targets (the engine skips it too); its card is redrawn at once.
+    const setEnabled = (hd, on) => page.evaluate(async ([hd, on]) => { const t = (await chrome.storage.local.get("sx.targets"))["sx.targets"]; t[hd].enabled = on; await chrome.storage.local.set({ "sx.targets": t }); }, [hd, on]);
+    const cardSays = (re) => waitFor(page, (src) => { const c = [...document.querySelectorAll("#waitingList .review-card")].find((e) => /@balajis/.test(e.textContent)); return !!c && new RegExp(src).test(c.textContent); }, re.source, 6000);
+    await setEnabled("balajis", false);
+    check(await cardSays(/Will not post[\s\S]*turned off in Targets, so this reply will be dropped|turned off in Targets, so this reply will be dropped[\s\S]*Will not post/), "an approved reply to a target you turned off says it will not post");
+    await setEnabled("balajis", true);
+    check(await cardSays(/^(?![\s\S]*Will not post)/), "turned on again, the reply waits for its slot again");
+    await page.waitForTimeout(500); // let the redraws of these target changes settle before the keyboard checks
     const metas = await page.locator("#pendingList .rc-foot-meta").allInnerTexts();
     check(metas.some((m) => /effort \w+/.test(m) && /(High quality|Balanced|Cheap) preset/.test(m)), "card meta names the reasoning effort and the preset: " + (metas[0] || "").replace(/\s+/g, " "));
     check((await page.locator("#pendingList .review-card.is-focus").count()) === 1 && (await page.locator("#pendingList .expiry").count()) === 3, "one focused card; every card shows when it expires");
@@ -801,14 +866,14 @@ try {
     check(await waitFor(page, () => !!document.querySelector("#pendingList .review-undo.is-skip"), null, 3000), "S skips the focused card (held with Undo)");
     await page.keyboard.press("z");
     check(await waitFor(page, () => document.querySelectorAll("#pendingList .review-card").length === 3, null, 3000), "Z undoes the skip");
-    // Regenerate (a paid call) stays busy when a live update rebuilds its card: a second press sends nothing.
-    // The worker's answer is held 2 s by a stub (the sandbox has no OpenAI access).
+    // Regenerate (a paid call) stays busy when a live update rebuilds its card, and when you leave Review and come
+    // back: a second press sends nothing. The worker's answer is held 6 s by a stub (the sandbox has no OpenAI access).
     await page.evaluate(() => {
       const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
       window.__regenN = 0;
       window.__restoreSend = () => { chrome.runtime.sendMessage = orig; };
       chrome.runtime.sendMessage = (m, ...r) => (m && m.sx === "reviewAction" && m.action === "regenerate"
-        ? (window.__regenN++, new Promise((res) => setTimeout(() => res({ ok: false, error: "held by the test" }), 2000)))
+        ? (window.__regenN++, new Promise((res) => setTimeout(() => res({ ok: false, error: "held by the test" }), 6000)))
         : orig(m, ...r));
     });
     const rsel = `#pendingList .review-card[data-id="${ids[1]}"]`;
@@ -822,7 +887,15 @@ try {
     await page.locator(rsel).focus();
     await page.keyboard.press("r");
     check(stillBusy && (await page.evaluate(() => window.__regenN)) === 1, "Regenerate stays busy across a live redraw of its card; pressing R again sends nothing");
-    check(await waitFor(page, (sel) => !document.querySelector(sel + ".is-regenerating") && !document.querySelector(sel + ' [data-ctl="regen"]').disabled, rsel, 5000), "Regenerate is available again once the answer is in");
+    await page.click('#nav .tab[data-tab="targets"]');
+    await page.waitForSelector('#view[data-ready="targets"]');
+    await page.click('#nav .tab[data-tab="review"]');
+    await page.waitForSelector(`#view[data-ready="review"] ${rsel}`);
+    const busyBack = (await page.locator(`${rsel} [data-ctl="regen"]`).isDisabled()) && (await page.locator(`${rsel}.is-regenerating`).count()) === 1;
+    await page.locator(rsel).focus();
+    await page.keyboard.press("r");
+    check(busyBack && (await page.evaluate(() => window.__regenN)) === 1, "Regenerate stays busy after leaving Review and coming back; pressing R again sends nothing");
+    check(await waitFor(page, (sel) => !document.querySelector(sel + ".is-regenerating") && !document.querySelector(sel + ' [data-ctl="regen"]').disabled, rsel, 9000), "Regenerate is available again once the answer is in");
     await page.evaluate(() => window.__restoreSend());
     await setComments(comments0);
     await page.waitForTimeout(500);
@@ -838,6 +911,30 @@ try {
     check(stored[0] === "approved" && stored[1] === "Short edit.", "the edited card is approved with the edited text (" + stored.join(" / ") + ")");
     check(await waitFor(page, () => document.querySelectorAll("#waitingList .review-card").length === 4, null, 8000), "approved cards move to Approved, waiting to post (4)");
     check((await page.locator("#waitingList .comment-input").evaluateAll((els) => els.map((e) => e.value))).includes("Short edit.") && /Posts (around \d\d:\d\d|in the next free slot|after you resume|after you press Start)/.test(await page.locator("#waitingList").innerText()), "waiting cards keep the edited text and say when they post");
+    // An unsaved edit of a reply that is then approved elsewhere as written (Today's preview) is not shown on its
+    // approved card: the card shows the text that will be posted. The extra record is removed afterwards.
+    await page.evaluate(async () => {
+      const hist = await import(chrome.runtime.getURL("lib/history.js"));
+      const now = Date.now();
+      const rec = hist.newRecord({ target: "naval", targetName: "Naval", tier: 1, postId: "1850000000000000777", postUrl: "https://x.com/naval/status/1850000000000000777", postText: "Read history, not business books.", postCreatedAt: now - 5 * 60e3, comment: "History gives you the base rates.", originalComment: "History gives you the base rates.", status: "pending_review", mode: "review", preset: "balanced", calls: [] });
+      rec.id = "rec_smoke_draft";
+      await hist.put(rec);
+    });
+    const dsel = '.review-card[data-id="rec_smoke_draft"]';
+    await page.click('#nav .tab[data-tab="overview"]');
+    await page.waitForSelector('#view[data-ready="overview"]');
+    await page.click('#nav .tab[data-tab="review"]');
+    await page.waitForSelector(`#view[data-ready="review"] #pendingList ${dsel}`);
+    await page.locator(`#pendingList ${dsel} textarea`).fill("History gives you the base rates. Especially for crypto.");
+    await page.click('#nav .tab[data-tab="overview"]');
+    await page.waitForSelector('#view[data-ready="overview"] #reviewPreview .pv[data-id="rec_smoke_draft"]');
+    await page.click('#reviewPreview .pv[data-id="rec_smoke_draft"] .li-actions button');
+    const apr = await waitFor(page, async () => (await (await import(chrome.runtime.getURL("lib/history.js"))).get("rec_smoke_draft")).status === "approved", null, 8000);
+    await page.click('#nav .tab[data-tab="review"]');
+    await page.waitForSelector(`#view[data-ready="review"] #waitingList ${dsel}`);
+    const shownDraft = await page.locator(`#waitingList ${dsel} textarea`).inputValue();
+    check(apr && shownDraft === "History gives you the base rates.", `a reply approved in Today as written shows that text on its approved card, not the unsaved Review edit (card: "${shownDraft}")`);
+    await page.evaluate(async () => (await import(chrome.runtime.getURL("lib/history.js"))).remove("rec_smoke_draft"));
   });
 
   // ---------------------------------------------------------------- Results
@@ -975,6 +1072,23 @@ try {
     check(/of 10 MB/.test(await page.locator('#diagList [data-check="storage"]').innerText()), "storage used vs 10 MB");
     check((await page.locator("#diagLive .dg").count()) === 4 && (await page.locator("#diagLive .dg .st-fail").count()) === 1 && (await page.locator("#diagLive .dg .st-pass").count()) === 3, "the last live X test (state.lastSelfTest) is listed with status squares");
     await shot(page, "light-diagnostics.png");
+    // A live test stopped by Pause/Stop is not kept as the last live test: the last complete one stays shown, also
+    // after a reload. The worker's answer is stubbed with the shape runSelfTest returns on a stop; the X handle the
+    // test needs is set for this check and put back afterwards.
+    const handle0 = ((await savedSettings(page)).account || {}).handle || "";
+    const setHandle = (hd) => page.evaluate(async (hd) => { const store = await import(chrome.runtime.getURL("lib/store.js")); const s = await store.getSettings(); await store.saveSettings({ ...s, account: { ...s.account, handle: hd } }); }, hd);
+    await setHandle("0x_nation");
+    await openTab(page, base, "diagnostics");
+    await page.evaluate(() => {
+      const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = (m, ...r) => (m && m.sx === "selfTest" ? Promise.resolve({ ok: false, aborted: true, error: "Stopped by Pause/Stop before the test finished", checks: [], at: Date.now() }) : orig(m, ...r));
+    });
+    await page.click("#diagLiveBtn");
+    check(await waitFor(page, () => [...document.querySelectorAll(".toast")].some((t) => /stopped by Pause\/Stop/i.test(t.textContent)), null, 5000), "a live X test stopped by Pause/Stop says so");
+    await openTab(page, base, "diagnostics");
+    const liveRows = await page.locator("#diagLive .dg").allInnerTexts();
+    check(liveRows.length === 4 && !liveRows.some((x) => /Stopped by Pause/.test(x)), `after a reload the last complete live test is still shown, not the stopped run (${liveRows.length} rows)`);
+    await setHandle(handle0);
   });
 
   // ---------------------------------------------------------------- Models

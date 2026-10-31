@@ -24,7 +24,7 @@ const FAIL_STREAK = 3; // a target-score run stops after this many failures in a
 const FATAL = ["auth", "rate", "cap", "disabled", "permission", "no_mode", "blocked", "unsupported", "unknown", "login"];
 // Your own score after one of these answers is asked again the next day, as after a success (a bot check, a refused
 // key or quota, a login wall, no data, a changed page); network errors and setup problems retry at the next refresh.
-const OWN_NEXT_DAY = ["blocked", "auth", "rate", "login", "parse", "not_found"];
+export const OWN_NEXT_DAY = ["blocked", "auth", "rate", "login", "parse", "not_found"];
 const lastCall = new Map(); // providerId -> ts (pacing inside one worker instance)
 // Reset everything (lib/backup.js) since this operation started: it sends nothing more and writes nothing back.
 const RESET = { ok: false, error: "reset", message: "Stopped: ScoreX was reset" };

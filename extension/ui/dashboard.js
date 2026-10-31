@@ -187,10 +187,14 @@ const ctx = {
 
 // Each render gets its own ctx whose on / interval / timeout / onDispose / addRefresher / field / setParams / setTitle
 // are bound to that render's scope. A screen still awaiting when the user moves on cannot register anything into the
-// next screen: its late registrations are dropped (a late onDispose runs at once).
+// next screen: its late registrations are dropped (a late onDispose runs at once). Its params are the live route
+// params only while it is on screen; once left it sees none, so it never acts on the next screen's ?h= (a score check,
+// a smart-follower lookup).
+const NO_PARAMS = Object.freeze({});
 function screenCtx(sc) {
   const c = Object.create(ctx);
   const live = () => !sc.dead;
+  Object.defineProperty(c, "params", { get: () => (live() ? ctx.params : NO_PARAMS), enumerable: true });
   c.on = (evt, fn) => (live() ? addListener(sc.listeners, evt, fn) : () => false);
   c.interval = (fn, ms) => { if (!live()) return null; const t = setInterval(fn, ms); sc.timers.push(t); return t; };
   c.timeout = (fn, ms) => { if (!live()) return null; const t = setTimeout(fn, ms); sc.timers.push(t); return t; };

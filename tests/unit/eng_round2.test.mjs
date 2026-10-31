@@ -164,7 +164,8 @@ describe("engine fixes (review round 2)", () => {
       if (msg.sx === "scrapeTweets") return errorPage ? { ok: true, tweets: [], articleCount: 0, page } : { ok: false, noAnswer: true, error: "timeout", page };
       return { ok: true, page };
     };
-    const check = async () => { await patchState({ lastWatchAt: 0 }); await engine.tick("alarm"); return getState(); };
+    // Each check is the scheduled one after the soft-error back-off (watchRetryAt) has run out.
+    const check = async () => { await patchState({ lastWatchAt: 0, watchRetryAt: 0 }); await engine.tick("alarm"); return getState(); };
     for (let i = 1; i <= 2; i++) assert.equal((await check()).softErrors, i);
     errorPage = true;
     let st = await check();
