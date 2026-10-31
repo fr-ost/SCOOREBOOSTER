@@ -7,8 +7,9 @@
 import { K, MODE, HARD, STATUS, STOP_LABEL } from "../../lib/constants.js";
 import { PROVIDER_DEFS } from "../../lib/providerdefs.js";
 import * as history from "../../lib/history.js";
+import { sanitizeSettings } from "../../lib/store.js";
 import { num } from "../../lib/util.js";
-import { h, clear, fill, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, modal, download, readFileText, stamp, toggleEl, xLink, badge, fmtCount, uidShort, renderTable, add, diagSquare, fmtAgo, fmtTime, fmtUsd, fmtDateTime, announce } from "../components.js";
+import { h, clear, fill, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, confirmFullAuto, hasOpenaiKey, modal, download, readFileText, stamp, toggleEl, xLink, badge, fmtCount, uidShort, renderTable, add, diagSquare, fmtAgo, fmtTime, fmtUsd, fmtDateTime, announce } from "../components.js";
 import { timeZones } from "./safety.js";
 
 const DATA_PARTS = [
@@ -93,7 +94,9 @@ async function quickCheck(ctx) {
   groups.push({ title: "Permissions", rows: perm });
 
   const ai = [];
-  const hasOpenai = typeof status.hasApiKey === "boolean" ? status.hasApiKey : has.openaiKey != null ? !!has.openaiKey : typeof rev.hasOpenai === "boolean" ? rev.hasOpenai : null;
+  // sx.secretsRev changes the moment a key is saved or removed (the status poll lags); without it the stored secrets
+  // are asked (presence only).
+  const hasOpenai = (await hasOpenaiKey(ctx.data[K.secretsRev])) ?? (typeof status.hasApiKey === "boolean" ? status.hasApiKey : null);
   ai.push(hasOpenai === false ? R("openai", "OpenAI key", "fail", "Missing: ScoreX cannot write replies.", ["Add key", "#models"]) : hasOpenai ? R("openai", "OpenAI key", "pass", "Saved (the key itself never leaves this browser except to OpenAI)") : R("openai", "OpenAI key", "skip", "Unknown"));
   for (const [id, def] of Object.entries(PROVIDER_DEFS)) {
     const cfg = (s.providers || {})[id];
@@ -199,7 +202,9 @@ function diagnosticsSection(ctx, { full = false } = {}) {
     if (!full && !failed) { fill(liveHost, []); return; }
     fill(liveHost, h("h3", { class: "dg-group" }, `Live X test · ${live.at ? fmtDateTime(live.at) : ""}`), (full ? rows : rows.filter((r) => r.status === "fail")).map(dgRow));
   }
+  let quickHadStatus = false;
   async function runQuick() {
+    quickHadStatus = !!ctx.status;
     try { quick = await quickCheck(ctx); } catch (e) { console.error("[ScoreX UI] quick check", e); quick = { at: Date.now(), groups: [{ title: "Quick check", rows: [{ id: "error", label: "Quick check", status: "fail", detail: String((e && e.message) || e) }] }] }; }
     drawHead(); drawRows();
   }
@@ -242,6 +247,8 @@ function diagnosticsSection(ctx, { full = false } = {}) {
   sec.runQuick = runQuick;
   ctx.on(K.state, () => { if (quick) drawHead(); });
   ctx.on("tick", () => { drawHead(); });
+  ctx.on("status", () => { if (quick && !quickHadStatus && ctx.status) runQuick(); }); // first status: key, budget use
+  ctx.on("secrets", () => { if (quick) runQuick(); });
   return sec;
 }
 
@@ -463,8 +470,31 @@ export default {
       try { data = JSON.parse(await readFileText(file)); } catch (e) { toast("That file is not valid JSON: " + e.message, { type: "error" }); return; }
       const sel = parts();
       if (!sel.length) { toast("Pick at least one part to import.", { type: "warn" }); return; }
-      if (!(await confirmDialog(`Import ${sel.join(", ")} from ${file.name}? Existing data of those parts is replaced or merged by the worker. API keys are never imported.`, { title: "Import data", okLabel: "Import" }))) return;
-      const r = await ctx.send("importData", { data, parts: sel }, { label: "Import" });
+      // A backup never switches on Full auto or cleanup (unfollows) by itself: each asks its own confirm first, and
+      // Cancel imports the rest with your current choice.
+      const cur = ctx.settings;
+      const inc = sel.includes("settings") && data && data.settings && typeof data.settings === "object" ? sanitizeSettings(data.settings) : null;
+      const toAuto = !!inc && inc.mode === MODE.AUTO && cur.mode !== MODE.AUTO;
+      const toReview = !!inc && inc.mode !== MODE.AUTO && cur.mode === MODE.AUTO;
+      const cleanupOn = !!inc && !!inc.cleanup.enabled && !cur.cleanup.enabled;
+      const cleanupOff = !!inc && !inc.cleanup.enabled && !!cur.cleanup.enabled;
+      const changes = [
+        toAuto && "switch to Full auto (you confirm that next; Cancel keeps Review)",
+        toReview && "switch to Review mode",
+        cleanupOn && "turn on cleanup, which unfollows accounts (you confirm that next; Cancel keeps it off)",
+        cleanupOff && "turn cleanup off",
+      ].filter(Boolean);
+      const msg = `Import ${sel.join(", ")} from ${file.name}? Existing data of those parts is replaced or merged by the worker. API keys are never imported.${changes.length ? ` The backup's settings would ${changes.join(" and ")}.` : ""}`;
+      if (!(await confirmDialog(msg, { title: "Import data", okLabel: "Import" }))) return;
+      let payload = data;
+      if (toAuto || cleanupOn) {
+        const next = { ...data.settings };
+        if (toAuto && !(await confirmFullAuto({ settings: inc, state: ctx.state }))) next.mode = cur.mode;
+        if (cleanupOn && !(await confirmDialog(`ScoreX will unfollow accounts you followed more than ${inc.cleanup.afterDays} days ago that still don't follow you back (max ${inc.cleanup.dailyLimit} per day, whitelist respected). Turn it on?`, { title: "Turn on cleanup", okLabel: "Turn on", cancelLabel: "Keep it off" }))) next.cleanup = { ...(next.cleanup || {}), enabled: false };
+        payload = { ...data, settings: next };
+      }
+      const r = await ctx.send("importData", { data: payload, parts: sel }, { label: "Import" });
+      if (r) ctx.refreshStatus();
       if (r) toast("Imported: " + (typeof r.imported === "object" && r.imported ? Object.entries(r.imported).map(([k, v]) => (v === true ? k : `${k} (${v})`)).join(", ") || "nothing" : String(r.imported != null ? r.imported : "done")), { type: "success" });
     });
     const dataSec = section({ title: "Backup", hint: "Backups never include your API keys." },

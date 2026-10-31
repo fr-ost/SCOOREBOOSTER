@@ -8,13 +8,13 @@
 .tg-head { gap: 8px 10px; margin-bottom: 12px; }
 .tg-head > .btn { flex: none; }
 .tg-status .ct.summary-num { font: 600 11px/1 var(--mono); color: inherit; }
-.tg-bl-btn .ct { font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
+.tg-bl-btn .ct { font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums; }
 
 /* toolbar: search, tier switch, High value, Columns */
 .tg-tools { gap: 8px 10px; margin-bottom: 12px; }
 .tg-tools .search { flex: 1 1 220px; max-width: 320px; }
 .tg-chip { gap: 6px; }
-.tg-chip .ct { font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums; opacity: 0.75; }
+.tg-chip .ct { font: 600 11px/1 var(--mono); font-variant-numeric: tabular-nums; }
 .tg-chip .ct:empty { display: none; }
 .tg-chip[aria-pressed="true"], .tg-chip[aria-pressed="true"]:hover { background: var(--invert-bg); color: var(--invert-text); border-color: var(--invert-bg); }
 .tg-tip { white-space: nowrap; }
@@ -29,6 +29,10 @@
 .tg-value.is-high { font-weight: 700; color: var(--text); }
 .tg-value.is-high::before { content: ""; display: inline-block; width: 6px; height: 6px; margin-right: 6px; vertical-align: 1px; border-radius: 1px; background: var(--lime); box-shadow: inset 0 0 0 1px var(--mark-edge); }
 #targetsTable .col-follow { min-width: 150px; }
+/* Narrow windows keep Follow status and Follows back? in view: ScoreX rank and Followers (in the drawer) step aside. */
+@media (max-width: 900px) {
+  #targetsTable [data-col="own"], #targetsTable [data-col="followers"] { display: none; }
+}
 
 /* sticky bulk bar under the table */
 .tg-bulk { position: sticky; bottom: 0; z-index: 6; margin-top: 8px; gap: 6px 8px; }
@@ -89,7 +93,7 @@
 .tg-back { padding-left: 6px; }
 .tg-bl-head { gap: 6px 12px; margin-bottom: 4px; }
 .tg-bl-head .sec-title:focus { outline: none; }
-.tg-bl-head .sec-title:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; }
+.tg-bl-head .sec-title:focus-visible { outline: 3px solid var(--focus-ring); outline-offset: 2px; box-shadow: 0 0 0 2px var(--focus-edge); }
 .tg-bl > p { margin: 0 0 14px; }
 .tg-bl-add { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; max-width: 720px; }
 .tg-bl-add-row { display: flex; gap: 8px; align-items: flex-start; }

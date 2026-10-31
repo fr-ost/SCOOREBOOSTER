@@ -22,8 +22,8 @@
 
 .p-alert { margin: 6px 16px 0; padding: 9px 12px; background: var(--red-fill); color: #fff; border-radius: var(--r-sm); font-size: var(--fs-s); display: flex; flex-direction: column; gap: 2px; }
 .p-alert strong { font-size: 13px; }
-.p-alert-detail { overflow-wrap: anywhere; opacity: 0.95; }
-.p-alert-time { opacity: 0.9; font-size: 12px; }
+.p-alert-detail { overflow-wrap: anywhere; }
+.p-alert-time { font-size: 12px; } /* full white on --red-fill (opacity drops it below 4.5:1) */
 
 .p-controls { display: flex; gap: 8px; padding: 10px 16px 14px; border-bottom: 1px solid var(--border); }
 .p-controls .btn-primary { flex: 1; height: 34px; font-size: var(--fs-m); }

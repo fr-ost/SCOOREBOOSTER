@@ -3,7 +3,7 @@
 // Approve and skip are held on the page for 5 s (Z undoes) and sent when the timer ends, on pagehide / when the tab
 // is hidden, or when you leave the screen. Cards are kept by id across redraws, so focus, caret and edits survive.
 
-import { K, HS, HARD, MODE } from "../../lib/constants.js";
+import { K, HS, HARD, MODE, STATUS } from "../../lib/constants.js";
 import { weightedLength } from "../../lib/quality.js";
 import * as history from "../../lib/history.js";
 import { followStatus, FS } from "../../lib/targets.js";
@@ -11,9 +11,10 @@ import { num } from "../../lib/util.js";
 import {
   h, clear, section, btn, busy, toast, icon, tierBadge, followBadge, statusBadge, badge, xLink, link, confirmDialog, modal, emptyState,
   fmtUsd, fmtCount, fmtNum, fmtAgo, fmtTime, fmtIn, fmtDateTime, truncate, debounce, uidShort, add, isTyping, hasOverlay, announce,
-  kbd, keyLegend, helpSheet, expiryChip, followDay, dayMeter, primaryProvider, providerName, providerKey, segmented,
+  kbd, keyLegend, helpSheet, expiryChip, followDay, dayMeter, primaryProvider, providerName, providerKey, segmented, isSafetyStop,
 } from "../components.js";
 import { toneLabel } from "./targets.js";
+import { PRESET_LABEL } from "./models.js";
 
 const UNDO_MS = 5000;
 const SORT_KEY = "sx.review.sort";
@@ -21,14 +22,17 @@ const MOD = /Mac|iPhone|iPad/i.test((navigator.userAgentData && navigator.userAg
 const readLS = (k) => { try { return window.localStorage.getItem(k); } catch (_) { return null; } };
 const writeLS = (k, v) => { try { window.localStorage.setItem(k, v); } catch (_) { /* storage blocked */ } };
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many || one + "s"}`;
+// Unsaved edits (id -> { text, base }) live outside the screen, so leaving Review (rail, a link, the popup opening
+// another screen in this tab) and coming back keeps them. They last until this dashboard tab is closed or reloaded.
+const drafts = new Map();
 
 export default {
   id: "review",
   title: "Review",
   async render(root, ctx) {
-    const drafts = new Map(); // id -> { text, base } unsaved edits
     const cards = new Map(); // id -> { el, ta, kind, rec, sig, followsNow, refs }
     const ops = new Map(); // id -> held approve / skip { id, rec, action, text, kind, until, timer, tick, el, sending }
+    const regenerating = new Set(); // ids with a Regenerate request running (a card rebuilt meanwhile stays busy)
     let opOrder = [];
     let pending = [], waiting = [];
     let lastSig = null;
@@ -81,8 +85,8 @@ export default {
       section({ wide: true, className: "review-sec", title: h("span", null, "Approved, waiting to post ", waitingCount), hint: "Posted one at a time with random gaps, only inside active hours." }, waitingHost));
 
     function drawNote() {
-      const s = ctx.settings, st = ctx.status;
-      const eff = (st && st.effectiveMode) || (s.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW);
+      const s = ctx.settings;
+      const eff = s.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW; // the saved settings (the status poll lags a save)
       note.textContent = eff === MODE.AUTO
         ? "Full auto is on: new replies go straight to the posting queue. Items here came from Review mode or need attention."
         : `Nothing posts until you approve it. Replies expire ${s.review.pendingMaxAgeMin} min after they are written; at most ${s.review.maxPending} wait at once.`;
@@ -120,8 +124,17 @@ export default {
     }
 
     // ------------------------------------------------ cards
+    // Why an approved reply will not post (the engine drops it), or "".
+    const dropReason = (rec) => {
+      if (rec.status === HS.POSTING) return "";
+      if (!targetOf(rec)) return `@${rec.target} is no longer one of your targets, so this reply will be dropped instead of posted.`;
+      return followsNowOf(rec) ? `@${rec.target} follows you now, so this reply will be dropped instead of posted.` : "";
+    };
     function slotNode(rec) {
       if (rec.status === HS.POSTING) return [h("span", { class: "spinner" }), " Posting now…"];
+      if (dropReason(rec)) return [icon("alert"), "Will not post"];
+      const st = ctx.state;
+      if (st.status !== STATUS.RUNNING) return [icon("history"), st.status === STATUS.PAUSED || isSafetyStop(st) ? "Posts after you resume" : "Posts after you press Start"];
       if (rec.scheduledFor && rec.scheduledFor > Date.now() + 30000) return [icon("history"), `Posts around ${fmtTime(rec.scheduledFor)} (${fmtIn(rec.scheduledFor)})`];
       return [icon("history"), "Posts in the next free slot"];
     }
@@ -130,6 +143,7 @@ export default {
       const s = ctx.settings;
       const t = targetOf(rec);
       const followsNow = kind === "pending" && followsNowOf(rec);
+      const dropNote = kind === "waiting" ? dropReason(rec) : "";
       const base = rec.comment || "";
       const d = drafts.get(rec.id);
       if (d && d.base !== base) drafts.delete(rec.id);
@@ -141,7 +155,7 @@ export default {
       ta.value = text;
       const counter = h("span", { class: "char-count", title: "X counts CJK characters and emoji as two" });
       let saveBtn = null;
-      const el = h("article", { class: ["review-card", kind === "waiting" && "is-waiting", followsNow && "is-follows"], dataset: { id: rec.id }, tabindex: "-1", "aria-label": `Reply to @${rec.target}` });
+      const el = h("article", { class: ["review-card", kind === "waiting" && "is-waiting", (followsNow || dropNote) && "is-follows", regenerating.has(rec.id) && "is-regenerating"], dataset: { id: rec.id }, tabindex: "-1", "aria-label": `Reply to @${rec.target}` });
       const updateCount = () => {
         const n = weightedLength(ta.value);
         counter.textContent = `${n} / ${HARD.maxCommentChars}`;
@@ -208,8 +222,9 @@ export default {
         approveBtn.dataset.ctl = "approve";
         saveBtn = btn("Save", (e) => save(rec, e.currentTarget), { size: "sm", title: "Save your edit without approving" });
         saveBtn.dataset.ctl = "save";
-        const regen = btn("Regenerate", (e) => regenerate(rec, e.currentTarget), { size: "sm", iconName: "refresh", title: "Write a new reply with the same model (R). This calls OpenAI and costs money." });
+        const regen = btn("Regenerate", () => regenerate(rec), { size: "sm", iconName: "refresh", title: "Write a new reply with the same model (R). This calls OpenAI and costs money.", disabled: regenerating.has(rec.id) });
         regen.dataset.ctl = "regen";
+        if (regenerating.has(rec.id)) regen.classList.add("is-busy");
         const skip = btn("Skip", () => skip(rec), { size: "sm", kind: "ghost", title: "Do not reply to this post (S)" });
         skip.dataset.ctl = "skip";
         add(actions, skip, regen, saveBtn, approveBtn);
@@ -223,9 +238,9 @@ export default {
       if (saveBtn) saveBtn.hidden = true;
       const metaBits = [
         h("span", null, rec.modelName || rec.modelId || "model?"),
-        rec.effort ? h("span", null, rec.effort) : null,
+        rec.effort ? h("span", { title: "Reasoning effort" }, "effort " + rec.effort) : null,
         rec.tone ? h("span", null, "tone " + toneLabel(rec.tone, s)) : null,
-        rec.preset ? h("span", null, rec.preset) : null,
+        rec.preset ? h("span", { title: "Model preset" }, `${PRESET_LABEL[rec.preset] || rec.preset} preset`) : null,
         h("span", { title: "Real OpenAI cost of this reply so far" }, fmtUsd(rec.cost)),
         rec.attempts > 1 ? h("span", null, `${rec.attempts} attempts`) : null,
         rec.edited ? h("span", null, "edited") : null,
@@ -240,6 +255,7 @@ export default {
         ta,
         notes.length ? h("ul", { class: "quality-notes" }, notes.map((n) => h("li", null, n))) : null,
         followsNow ? h("p", { class: "rc-note" }, `@${rec.target} follows you now, so this reply would be dropped. Approve is off; skip it.`) : null,
+        dropNote ? h("p", { class: "rc-note" }, dropNote) : null,
         h("div", { class: "review-foot" },
           h("div", { class: "rc-foot-meta" }, metaBits),
           refs.slot,
@@ -347,6 +363,8 @@ export default {
       const sig = [...p, ...po, ...a, ...q].map((r) => `${r.id}:${r.status}:${r.updatedAt}`).sort().join("|");
       pending = p;
       waiting = [...po, ...a, ...q];
+      const open = new Set([...pending, ...waiting].map((r) => r.id));
+      for (const id of [...drafts.keys()]) if (!open.has(id)) drafts.delete(id); // posted, skipped or expired meanwhile
       // ops whose record is no longer where it was (handled elsewhere): drop them
       for (const [id, op] of ops) if (!op.sending && ![...pending, ...waiting].some((r) => r.id === id)) { clearTimeout(op.timer); clearInterval(op.tick); ops.delete(id); }
       if (!force && sig === lastSig) { refreshClocks(); return; }
@@ -475,25 +493,34 @@ export default {
         if (r) { drafts.delete(rec.id); toast("Edit saved", { type: "success" }); await reload(); }
       });
     }
-    function regenerate(rec, button) {
+    // The busy state lives in `regenerating`, not on the button: a live redraw can rebuild the card while the model
+    // writes, and the new card must not offer a second (paid) Regenerate.
+    function setRegenBusy(id, on) {
+      const c = cards.get(id);
+      if (!c) return;
+      c.el.classList.toggle("is-regenerating", on);
+      const b = c.el.querySelector('[data-ctl="regen"]');
+      if (b) { b.disabled = on; b.classList.toggle("is-busy", on); }
+    }
+    async function regenerate(rec) {
       const c = cards.get(rec.id);
-      if (!c || ops.has(rec.id)) return;
-      const b = button || c.el.querySelector('[data-ctl="regen"]');
-      if (b && b.disabled) return;
-      return busy(b, async () => {
-        c.el.classList.add("is-regenerating");
-        announce(`Writing a new reply for @${rec.target}…`);
-        try {
-          const r = await ctx.send("reviewAction", { id: rec.id, action: "regenerate", text: c.ta.value.trim() }, { label: "Regenerate" });
-          if (r) {
-            drafts.delete(rec.id);
-            const extra = r.record && r.record.cost != null ? Math.max(0, num(r.record.cost) - num(rec.cost)) : null;
-            toast(`New reply written${extra ? ` · cost ${fmtUsd(extra)}` : ""}`, { type: "success" });
-            announce(`New reply for @${rec.target} is ready.`);
-            await reload();
-          }
-        } finally { c.el.classList.remove("is-regenerating"); }
-      });
+      if (!c || c.kind !== "pending" || ops.has(rec.id) || regenerating.has(rec.id)) return;
+      regenerating.add(rec.id);
+      setRegenBusy(rec.id, true);
+      announce(`Writing a new reply for @${rec.target}…`);
+      try {
+        const r = await ctx.send("reviewAction", { id: rec.id, action: "regenerate", text: c.ta.value.trim() }, { label: "Regenerate" });
+        if (r) {
+          drafts.delete(rec.id);
+          const extra = r.record && r.record.cost != null ? Math.max(0, num(r.record.cost) - num(rec.cost)) : null;
+          toast(`New reply written${extra ? ` · cost ${fmtUsd(extra)}` : ""}`, { type: "success" });
+          announce(`New reply for @${rec.target} is ready.`);
+        }
+      } finally {
+        regenerating.delete(rec.id);
+        setRegenBusy(rec.id, false);
+      }
+      if (root.isConnected) await reload();
     }
     function openPost(rec) {
       if (!rec.postUrl) { toast("This post has no link.", { type: "warn" }); return; }

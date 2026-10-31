@@ -5,7 +5,8 @@
 // Storage rules: the UI reads everything, but writes only settings (sanitized), secrets and selector/provider
 // overrides. Everything else goes through messages.
 //
-// ctx (passed to every tab's render(root, ctx)):
+// ctx (passed to every tab's render(root, ctx); each render gets its own, inheriting from the shared ctx, whose
+// registrations below end with that render - see screenCtx):
 //   settings, data[K.x] (watched storage), status (getStatus), counts { pending, queued }, state, targets, targetList()
 //   on(evt, fn) (tab-scoped; events: status, counts, settings, tick, secrets, health, params, and each watched key)
 //   send(name, payload, opts), field(spec), save(mutator), addRefresher(fn), onDispose(fn), interval/timeout(fn, ms)
@@ -64,13 +65,15 @@ const WATCH = [K.state, K.targets, K.candidates, K.blacklist, K.discovery, K.log
 // ---------------------------------------------------------------- event bus + scopes
 
 const globalListeners = new Map();
-let scope = null; // per-tab listeners/timers, disposed on navigation
-const newScope = () => ({ listeners: new Map(), timers: [], disposers: [] });
+let scope = null; // the current screen's listeners/timers/disposers/refreshers, disposed on navigation
+const newScope = () => ({ listeners: new Map(), timers: [], disposers: [], dead: false });
 function disposeScope() {
   if (!scope) return;
-  for (const t of scope.timers) { clearInterval(t); clearTimeout(t); }
-  for (const d of scope.disposers) { try { d(); } catch (_) {} }
+  const sc = scope;
   scope = null;
+  sc.dead = true;
+  for (const t of sc.timers) { clearInterval(t); clearTimeout(t); }
+  for (const d of sc.disposers) { try { d(); } catch (_) {} }
 }
 function addListener(map, evt, fn) {
   if (!map.has(evt)) map.set(evt, new Set());
@@ -181,6 +184,23 @@ const ctx = {
     return saveChain;
   },
 };
+
+// Each render gets its own ctx whose on / interval / timeout / onDispose / addRefresher / field / setParams / setTitle
+// are bound to that render's scope. A screen still awaiting when the user moves on cannot register anything into the
+// next screen: its late registrations are dropped (a late onDispose runs at once).
+function screenCtx(sc) {
+  const c = Object.create(ctx);
+  const live = () => !sc.dead;
+  c.on = (evt, fn) => (live() ? addListener(sc.listeners, evt, fn) : () => false);
+  c.interval = (fn, ms) => { if (!live()) return null; const t = setInterval(fn, ms); sc.timers.push(t); return t; };
+  c.timeout = (fn, ms) => { if (!live()) return null; const t = setTimeout(fn, ms); sc.timers.push(t); return t; };
+  c.onDispose = (fn) => { if (live()) sc.disposers.push(fn); else { try { fn(); } catch (_) { /* ignore */ } } };
+  c.addRefresher = (fn) => { if (!live()) return; refreshers.add(fn); sc.disposers.push(() => refreshers.delete(fn)); };
+  c.field = (spec) => boundField(c, spec);
+  c.setParams = (patch, opts) => { if (live()) ctx.setParams(patch, opts); };
+  c.setTitle = (text) => { if (live()) ctx.setTitle(text); };
+  return c;
+}
 
 // ---------------------------------------------------------------- status, counts, health
 
@@ -382,7 +402,9 @@ function updateHeader(force) {
   renderAlert();
   if (!ctx.settings) return;
   const [why, whyLong] = engineWhy(state, st);
-  const mode = st.effectiveMode || (ctx.settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW);
+  // The mode comes from the settings this page just saved (lib/safety.js effectiveMode is settings.mode); the status
+  // poll can lag a save or an import by up to 5 s.
+  const mode = ctx.settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW;
   const risk = st.risk && st.risk.level ? st.risk : null;
   const sig = JSON.stringify([state.status, state.stopReason, state.stopDetail, !!state.alert, why, whyLong.replace(/\d+ ?(min|s|h)\b/g, ""), mode, risk, ctx.settings.account && ctx.settings.account.handle, state.me]);
   const box = document.getElementById("engineBox");
@@ -485,7 +507,8 @@ async function route() {
   const seq = ++renderSeq;
   if (current.id !== tab.id) resetTableStates();
   disposeScope();
-  scope = newScope();
+  const sc = newScope();
+  scope = sc;
   current = { id: tab.id, params };
   ctx.route = tab.id;
   ctx.params = params;
@@ -504,7 +527,7 @@ async function route() {
   view.appendChild(host);
   if (tab.hint) host.appendChild(h("p", { class: "page-hint" }, tab.hint));
   try {
-    await tab.render(host, ctx);
+    await tab.render(host, screenCtx(sc));
   } catch (e) {
     console.error("[ScoreX UI] tab render failed", tab.id, e);
     host.appendChild(h("div", { class: "banner banner-danger" }, h("strong", null, "This tab failed to render. "), String((e && e.message) || e)));

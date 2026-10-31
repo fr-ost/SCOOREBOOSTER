@@ -44,5 +44,7 @@
 }
 @media (max-width: 720px) {
   .res-bar .spacer { display: none; }
-  #historyTable .col-text { min-width: 220px; }
+  /* Date, Target, Comment and Status stay in view (the tier is in the drawer); Results scrolls in. */
+  #historyTable .col-text { min-width: 150px; }
+  #historyTable td[data-col="target"] .badge { display: none; }
 }

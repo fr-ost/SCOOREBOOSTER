@@ -3,10 +3,11 @@
    custom properties: --text*, --border*, --lime, --mark-edge, --accent-text, --amber*, --red*, --viz-1..6, --fs-*, --s1..s7). */
 
 [data-tab="overview"] .tab-host { gap: 22px; }
+#reachAlertHost:empty, #setupHost:empty { display: none; } /* an empty host would still take a 22 px gap */
 
 /* reach alert banner */
 .reach-banner .mono-nums { font-family: var(--mono); font-size: var(--fs-s); font-variant-numeric: tabular-nums; }
-.reach-banner .reach-caveat { font-size: var(--fs-s); opacity: 0.92; font-style: italic; }
+.reach-banner .reach-caveat { font-size: var(--fs-s); font-style: italic; }
 
 /* row 1: engine cell + day rhythm */
 .today-engine .engine-cell { flex: 1 1 300px; gap: 6px; }

@@ -213,10 +213,12 @@ export function scoreHistory(series, events = [], { w = 1180, h = 250, labels = 
 
 // ---------------------------------------------------------------- daily bars (+ follow-back squares)
 
-// rows: [{ label, posted, fb }] oldest first. Gridlines at half and full height, labelled on the right.
+// rows: [{ label, posted, fb }] oldest first. Gridlines at half and full height, labelled on the right (whole numbers
+// only); with nothing posted and no follow-back the chart says so instead of drawing an axis.
 export function dailyBars(rows, { w = 720, h = 150, label = "" } = {}) {
   const list = rows || [];
-  const n = Math.max(1, list.length), gap = n > 45 ? 1 : 3, bw = Math.max(1, (w - gap * (n - 1)) / n), top = 8, axisH = 16;
+  const n = Math.max(1, list.length), gap = n > 45 ? 1 : 3, bw = Math.max(1, (w - gap * (n - 1)) / n), top = 14, axisH = 16;
+  const empty = !list.some((r) => (Number(r.posted) || 0) > 0 || (Number(r.fb) || 0) > 0);
   const maxP = Math.max(1, ...list.map((r) => Number(r.posted) || 0)), sq = Math.max(2, Math.min(6, bw - 1));
   const maxStack = Math.min(8, Math.max(0, ...list.map((r) => Number(r.fb) || 0))) * (sq + 1);
   const chartH = Math.max(20, h - top - axisH - maxStack);
@@ -225,8 +227,9 @@ export function dailyBars(rows, { w = 720, h = 150, label = "" } = {}) {
   [0.5, 1].forEach((k) => {
     const y = base - chartH * k;
     svg.appendChild(s("line", { x1: 0, y1: f1(y), x2: w, y2: f1(y), class: "grid-line" }));
-    svg.appendChild(s("text", { x: w, y: f1(y - 3), class: "axis", "text-anchor": "end" }, String(Math.round(maxP * k))));
+    if (!empty && Number.isInteger(maxP * k)) svg.appendChild(s("text", { x: w, y: f1(y - 3), class: "axis", "text-anchor": "end" }, String(maxP * k)));
   });
+  if (empty) svg.appendChild(s("text", { x: f1(w / 2), y: f1(base - chartH / 2), class: "axis", "text-anchor": "middle" }, "No comments posted in this range"));
   list.forEach((r, i) => {
     const posted = Number(r.posted) || 0, fb = Number(r.fb) || 0;
     const x = i * (bw + gap), bh = (posted / maxP) * chartH;

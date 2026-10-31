@@ -14,7 +14,7 @@ import { followStatus, FS } from "../../lib/targets.js";
 import * as history from "../../lib/history.js";
 import { dayKey, num, DAY, HOUR, MIN } from "../../lib/util.js";
 import {
-  h, clear, btn, busy, toast, icon, statusInfo, segmented, switchMode, figure, ledger, delta, tierBadge, xLink, expiryChip,
+  h, clear, btn, busy, toast, icon, statusInfo, isSafetyStop, segmented, switchMode, figure, ledger, delta, tierBadge, xLink, expiryChip,
   followDay, primaryProvider, setPrimaryProvider, enabledProviders, providerName, historyDelta, menuButton, safetyBanner, maskKey,
   fmtUsd, fmtTime, fmtDay, fmtDateTime, fmtAgo, fmtIn, fmtPct, fmtNum, truncate, debounce, add, fill,
 } from "../components.js";
@@ -64,6 +64,7 @@ export default {
 
     let records = []; // history of the last 31 days (rhythm, weekly cost, author replies)
     let pending = []; // pending review, expiring first
+    let approved = []; // approved + queued (waiting for a posting slot)
     const now = () => Date.now();
     const sigs = new Map();
     // Redraw a region only when its content signature changed (keeps focus and avoids flicker on 5 s status polls).
@@ -257,7 +258,7 @@ export default {
         { key: "key", label: "API key", title: "Add your OpenAI API key", hint: "Stored only in this browser. Never exported or logged.", done: hasKey, info: maskedKey },
         { key: "handle", label: "Handle", title: "Confirm your X handle", hint: "ScoreX stops if a different account is logged in.", done: !!handle && lsGet(LS_HANDLE) === handle, info: handle },
         { key: "targets", label: "Targets", title: "Add target accounts", hint: "The accounts ScoreX writes replies for.", done: list.length > 0, info: `${list.length} targets · ${list.filter((x) => x.enabled !== false).length} on` },
-        { key: "start", label: "Start", title: "Press Start", hint: s.mode === MODE.AUTO ? "Full auto posts on its own within your limits." : "In Review mode nothing posts until you approve it.", done: !!state.firstStartedAt || state.status !== STATUS.STOPPED, info: state.firstStartedAt ? `first start ${fmtDateTime(state.firstStartedAt)}` : "running" },
+        { key: "start", label: "Start", title: "Press Start", hint: isSafetyStop(state) ? "ScoreX stopped for safety. Check your X account, then review the stop to start." : s.mode === MODE.AUTO ? "Full auto posts on its own within your limits." : "In Review mode nothing posts until you approve it.", done: !!state.firstStartedAt || state.status !== STATUS.STOPPED, info: state.firstStartedAt ? `first start ${fmtDateTime(state.firstStartedAt)}` : "running" },
         { key: "tone", label: "Tone", optional: true, title: "Write your Tone prompt", hint: "Describe how your replies should sound. The default works; your own voice works better.", done: customTone, info: customTone ? "Custom" : "Default" },
         { key: "budget", label: "Budget", optional: true, title: "Set a monthly budget", hint: "ScoreX stops generating when the month's real OpenAI spend reaches it.", done: num(s.budget && s.budget.monthlyUsd) > 0, info: num(s.budget && s.budget.monthlyUsd) > 0 ? fmtUsd(s.budget.monthlyUsd, 0) + " a month" : "no limit" },
         { key: "score", label: "Score site", optional: true, title: "Connect a score site", hint: "Track your Sorsa, TwitterScore, Ethos or Moni score next to your follow-backs.", done: providers.length > 0, info: providers.map(providerName).join(", ") },
@@ -305,10 +306,14 @@ export default {
       }
       return [];
     }
-    const startButton = () => btn("Start", (e) => {
-      const b = e.currentTarget;
-      busy(b, async () => { const r = await ctx.send("start", {}, { label: "Start" }); if (r) { toast("Started", { type: "success" }); ctx.refreshStatus(); } });
-    }, { kind: "primary", size: "sm", iconName: "play" });
+    // During a safety stop (e.g. a captcha in the live X test before the first start) the step never offers a one-click
+    // Start: like the engine bar, it opens the "Review stop…" dialog (checkbox, then Resume).
+    const startButton = () => (isSafetyStop(ctx.state)
+      ? btn("Review stop…", () => ctx.openReviewStop(), { kind: "primary", size: "sm", iconName: "alert", title: "See why ScoreX stopped, check your account, then resume" })
+      : btn("Start", (e) => {
+        const b = e.currentTarget;
+        busy(b, async () => { const r = await ctx.send("start", {}, { label: "Start" }); if (r) { toast("Started", { type: "success" }); ctx.refreshStatus(); } });
+      }, { kind: "primary", size: "sm", iconName: "play" }));
     // The one action button: the next open step (required first).
     function nextAction(list) {
       const next = list.find((x) => !x.done && !x.optional) || list.find((x) => !x.done);
@@ -327,7 +332,7 @@ export default {
       const reqLeft = list.filter((x) => !x.done && !x.optional);
       if (openStep == null && reqLeft.length && (reqLeft[0].key === "key" || reqLeft[0].key === "handle")) openStep = reqLeft[0].key;
       const show = !isHidden() && done < list.length;
-      const sig = JSON.stringify([show, openStep, list.map((x) => [x.done, x.info])]);
+      const sig = JSON.stringify([show, openStep, list.map((x) => [x.done, x.info]), isSafetyStop(ctx.state)]);
       if (!force && sig === sigs.get(setupHost)) return;
       if (!force && setupHost.contains(document.activeElement)) {
         if (!setupDeferred) { setupDeferred = true; setupHost.addEventListener("focusout", () => { setupDeferred = false; setTimeout(() => drawSetup(), 60); }, { once: true }); }
@@ -447,11 +452,18 @@ export default {
         if (r) { toast(action === "approve" ? "Approved - it posts in its own slot" : "Skipped", { type: "success" }); await loadPending(); ctx.refreshCounts(); }
       });
     }
+    // Approved replies the engine drops instead of posting: the account follows you now or is no longer a target.
+    const dropsOf = (rec) => { const t = ctx.targets[rec.target]; const fs = t ? followStatus(t) : null; return !t || fs === FS.FOLLOWS || fs === FS.FOLLOWED_BACK; };
+    function waitingText() {
+      const dropped = approved.filter(dropsOf).length, queued = approved.length - dropped, state = ctx.state;
+      const when = state.status === STATUS.RUNNING ? "waiting for their posting slot" : `posting after you ${state.status === STATUS.PAUSED || isSafetyStop(state) ? "resume" : "press Start"}`;
+      return [queued ? `${queued} approved, ${when}.` : "", dropped ? `${dropped} approved will not post (the account follows you now or is no longer a target).` : ""].filter(Boolean).join(" ");
+    }
     function drawPreview() {
       const maxAge = ctx.settings.review.pendingMaxAgeMin;
       pendingCount.textContent = String(pending.length);
-      const queued = ctx.counts.queued || 0;
-      const sig = JSON.stringify([pending.map((r) => [r.id, r.updatedAt, r.comment]), maxAge, queued, ctx.state.status, Math.floor(now() / 30000),
+      const waitTxt = waitingText();
+      const sig = JSON.stringify([pending.map((r) => [r.id, r.updatedAt, r.comment]), maxAge, waitTxt, ctx.state.status, Math.floor(now() / 30000),
         pending.slice(0, 3).map((r) => followStatus(ctx.targets[r.target] || {}))]);
       if (sigs.get(pvHost) === sig) return;
       if (pvHost.contains(document.activeElement) && document.activeElement.classList.contains("is-busy")) return;
@@ -481,7 +493,7 @@ export default {
               h("a", { href: "#review", class: "small" }, "Edit")))));
       }
       const more = pending.length - 3;
-      pvFoot.textContent = [more > 0 ? `${more} more in the queue.` : "", queued ? `${queued} approved, waiting for their posting slot.` : ""].filter(Boolean).join(" ");
+      pvFoot.textContent = [more > 0 ? `${more} more in the queue.` : "", waitTxt].filter(Boolean).join(" ");
       pvFoot.hidden = !pvFoot.textContent;
     }
 
@@ -570,7 +582,7 @@ export default {
       }
       // Health warnings (rail footer square).
       const issues = ((ctx.health && ctx.health.issues) || []).filter((x) => x && (x.level === "warn" || x.level === "fail")
-        && !(/api key/i.test(x.text) && rows.some((r) => r.key === "setup")) && !(ctx.state.reachAlert && /reaching/i.test(x.text)));
+        && !(/api key/i.test(x.text) && (setupShown || rows.some((r) => r.key === "setup"))) && !(ctx.state.reachAlert && /reaching/i.test(x.text)));
       for (const is of issues.slice(0, issues.length > 3 ? 2 : 3)) {
         rows.push({ key: "health:" + is.text, ico: "health", kind: is.level === "fail" ? "bad" : "warn", title: is.text, text: "", actions: is.href ? [go(is.href, "Open")] : [] });
       }
@@ -618,13 +630,16 @@ export default {
       drawNeeds();
     }
     async function loadPending() {
-      try { pending = (await history.byStatus(HS.PENDING_REVIEW)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); }
-      catch (_) { pending = []; }
+      try {
+        const [p, a, q] = await Promise.all([HS.PENDING_REVIEW, HS.APPROVED, HS.QUEUED].map((x) => history.byStatus(x)));
+        pending = p.sort((x, y) => (x.createdAt || 0) - (y.createdAt || 0));
+        approved = [...a, ...q];
+      } catch (_) { pending = []; approved = []; }
       drawPreview();
     }
     const reloadSoon = debounce(() => { loadHistory(); loadPending(); }, 1500);
 
-    const drawLive = () => { drawReach(); drawEngine(); drawRhythm(); drawFollowLine(); drawSetup(); drawNeeds(); };
+    const drawLive = () => { drawReach(); drawEngine(); drawRhythm(); drawFollowLine(); drawSetup(); drawPreview(); drawNeeds(); };
     drawReach(); drawEngine(true); drawRhythm(); drawSetup(true); drawWeek(); drawLogs(true);
     await Promise.all([loadHistory(), loadPending()]);
 

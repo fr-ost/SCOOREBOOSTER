@@ -11,7 +11,7 @@ import { K, HS } from "../../lib/constants.js";
 import * as history from "../../lib/history.js";
 import { aggregate, performance, budgetStatus } from "../../lib/costs.js";
 import { funnel as funnelOf, daysToFollowBack, conversionBy, dailySeries, topResponders, authorReplies } from "../../lib/analytics.js";
-import { MAIN_TONE } from "../../lib/targets.js";
+import { MAIN_TONE, followStatus, FS } from "../../lib/targets.js";
 import { num, zonedTime, dayKey, DAY } from "../../lib/util.js";
 import {
   h, clear, section, advanced, btn, toast, icon, renderTable, selectEl, labeled, confirmDialog, download, stamp, tierBadge, statusBadge,
@@ -108,17 +108,28 @@ export default {
       const bl = p.tier ? {} : ctx.data[K.blacklist] || {};
       const f = funnelOf(T, recs, bl, { since });
       const giveUp = s.follow.giveUpDays || 14;
+      // lib/analytics.js counts every target with a comment as commented, also one that follows you without a recorded
+      // follow-back or is not checked yet. Those are outside "Don't follow you", so they are left out of "Commented"
+      // here: each stage is then part of the one before it.
+      const postedTo = new Set(recs.filter((r) => r.status === HS.POSTED && r.postedAt && (!since || r.postedAt >= since)).map((r) => r.target));
+      const outside = { follows: 0, checking: 0 };
+      for (const t of Object.values(T || {})) {
+        if (!t || !t.handle || (since && (t.addedAt || 0) < since && ((t.stats && t.stats.firstCommentAt) || 0) < since)) continue;
+        if (!((t.stats && t.stats.comments > 0) || postedTo.has(t.handle))) continue;
+        const fs = followStatus(t);
+        if (fs === FS.FOLLOWS) outside.follows++; else if (fs === FS.CHECKING) outside.checking++;
+      }
       const stages = [
         { label: "Added", value: f.added },
         { label: "Checked", value: Math.max(0, f.added - f.checking) },
         { label: "Don't follow you", value: Math.max(0, f.added - f.checking - f.follows) },
-        { label: "Commented", value: f.commented },
+        { label: "Commented", value: Math.max(0, f.commented - outside.follows - outside.checking) },
         { label: "Followed back", value: f.followedBack },
       ];
       const B = (v) => h("b", { class: "mono" }, fmtNum(v));
       const funnelSec = section({ wide: true, title: "Follow-back funnel", hint: (p.range === "all" ? "all accounts" : `accounts added in the last ${p.range} days`) + tierText(), id: "resFunnel" },
         f.added ? responsive((w) => funnel(stages, { w }), { initialWidth: 900 }) : h("p", { class: "muted small" }, "No accounts in this range yet. Add targets to start the funnel."),
-        h("div", { class: "fig-sub res-branches" }, "Side branches: ", B(f.follows), " already followed you (never commented) · ", B(f.gaveUp), ` removed after ${giveUp} days without a follow-back · `, B(f.checking), " still checking",
+        h("div", { class: "fig-sub res-branches" }, "Side branches: ", B(f.follows), outside.follows ? ` already followed you (${outside.follows} of them also got a comment) · ` : " already followed you (never commented) · ", B(f.gaveUp), ` removed after ${giveUp} days without a follow-back · `, B(f.checking), " still checking",
           f.decidedRate != null ? [" · follow-back rate ", h("b", { class: "mono" }, fmtPct(f.decidedRate * 100, 1)), " of decided accounts"] : null));
 
       // Every day + 12-week heatmap
@@ -415,7 +426,7 @@ export default {
         section({ wide: true, title: "Comments", hint: "Newest first. Click a row for the model, tokens, cost and quality notes." }, tableHost),
         totals, retention,
         advanced({ key: "history.clear", title: "Clear history", desc: "Delete old records (recent posts and the open queue are kept for the safety limits)" },
-          section({ title: "Danger zone", hint: "Also empties the review queue and resets the cost totals shown here. The monthly budget ledger is kept." }, clearBtn)));
+          section({ title: "Danger zone", hint: "The open review queue and comments posted in the last 8 days are kept; the cost totals shown here reset. The monthly budget ledger is kept." }, clearBtn)));
     }
 
     // ================================================ Spend

@@ -32,6 +32,16 @@ let health = null;
 
 const $ = (id) => document.getElementById(id);
 
+// Requests still running, by key. render() rebuilds every button on each storage change and every 5 s, so the busy
+// state lives here, not on the button: a rebuilt button stays disabled until its request has answered.
+const inflight = new Set();
+function track(key, button, fn) {
+  if (inflight.has(key)) return Promise.resolve();
+  inflight.add(key);
+  return busy(button, fn).finally(() => { inflight.delete(key); render(); });
+}
+const held = (key, button) => { if (inflight.has(key)) { button.disabled = true; button.classList.add("is-busy"); } return button; };
+
 // ---------------------------------------------------------------- dashboard tab
 
 async function openDashboard(hash) {
@@ -100,7 +110,7 @@ function render() {
 }
 
 function renderHead() {
-  const eff = (status && status.effectiveMode) || (settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW);
+  const eff = settings.mode === MODE.AUTO ? MODE.AUTO : MODE.REVIEW; // the saved settings (getStatus can lag a change)
   const modeEl = $("pMode");
   modeEl.textContent = eff === MODE.AUTO ? "Auto" : "Review";
   modeEl.classList.toggle("tag-solid", eff === MODE.AUTO);
@@ -157,10 +167,9 @@ function renderStatus() {
 }
 
 function renderControls() {
-  const act = (label, msg, iconName, kind, extra = {}) => btn(label, (e) => {
-    const bt = e.currentTarget;
-    busy(bt, async () => { const r = await send(msg, {}, { label }); if (r) { toast(`${label}: done`, { type: "success" }); refresh(); } });
-  }, { kind, iconName, id: "p-" + msg, ...extra });
+  const act = (label, msg, iconName, kind, extra = {}) => held("engine", btn(label, (e) => {
+    track("engine", e.currentTarget, async () => { const r = await send(msg, {}, { label }); if (r) { toast(`${label}: done`, { type: "success" }); refresh(); } });
+  }, { kind, iconName, id: "p-" + msg, ...extra }));
   const [label, msg, ic] = primaryAction(state);
   const primary = msg === "reviewStop"
     ? btn(label, () => openDashboard("overview?resume=1"), { kind: "primary", iconName: ic, id: "p-reviewStop", title: "Opens the dashboard: see why ScoreX stopped, check your account, then resume" })
@@ -255,7 +264,7 @@ function renderReview() {
     const t = data.targets[next.target];
     const fs = t ? followStatus(t) : null;
     const followsNow = fs === FS.FOLLOWS || fs === FS.FOLLOWED_BACK;
-    const quick = (action, button) => busy(button, async () => {
+    const quick = (action, button) => track("rv:" + next.id, button, async () => {
       const text = action === "approve" ? String(next.comment || "").trim() : "";
       if (action === "approve" && !text) { toast("This reply is empty. Edit it in the queue.", { type: "warn" }); return; }
       if (action === "approve" && weightedLength(text) > HARD.maxCommentChars) { toast(`Too long for X (${HARD.maxCommentChars} max). Edit it in the queue.`, { type: "warn" }); return; }
@@ -267,8 +276,8 @@ function renderReview() {
       h("div", { class: "p-rv-reply" }, next.comment || h("span", { class: "muted" }, "(empty)")),
       followsNow ? h("div", { class: "p-note" }, `@${next.target} follows you now, so this reply will be dropped.`) : null,
       h("div", { class: "p-rv-actions" },
-        btn("Approve", (e) => quick("approve", e.currentTarget), { kind: "primary", size: "xs", iconName: "check", id: "pApprove", disabled: followsNow, title: followsNow ? "Follows you now: replies are only for accounts that don't" : "Approve this text as is" }),
-        btn("Skip", (e) => quick("skip", e.currentTarget), { kind: "ghost", size: "xs", id: "pSkip", title: "Post nothing for this post" }),
+        held("rv:" + next.id, btn("Approve", (e) => quick("approve", e.currentTarget), { kind: "primary", size: "xs", iconName: "check", id: "pApprove", disabled: followsNow, title: followsNow ? "Follows you now: replies are only for accounts that don't" : "Approve this text as is" })),
+        held("rv:" + next.id, btn("Skip", (e) => quick("skip", e.currentTarget), { kind: "ghost", size: "xs", id: "pSkip", title: "Post nothing for this post" })),
         h("span", { class: "p-spacer" }),
         h("button", { type: "button", class: "linkish small", id: "pEditQueue", onClick: () => openDashboard("review") }, "Edit in queue")));
   }
@@ -302,16 +311,16 @@ function renderProfile() {
     : h("span", { class: "small muted" }, "Not a target");
   const actions = [];
   if (!isMe) {
-    actions.push(btn("Check scores", (e) => busy(e.currentTarget, async () => {
+    actions.push(held("check:" + hd, btn("Check scores", (e) => track("check:" + hd, e.currentTarget, async () => {
       const r = await send("scoreCheck", { handle: hd }, { label: "Check scores" });
-      if (r) { profileCheck = { handle: hd, results: r.results || {} }; renderProfile(); }
-    }), { size: "xs", iconName: "refresh", id: "pCheck", disabled: !enabled.length, title: enabled.length ? `Uses 1 request per connected site (${enabled.map(providerName).join(", ")})` : "Turn on a score site in Scores first" }));
+      if (r) profileCheck = { handle: hd, results: r.results || {} };
+    }), { size: "xs", iconName: "refresh", id: "pCheck", disabled: !enabled.length, title: enabled.length ? `Uses 1 request per connected site (${enabled.map(providerName).join(", ")})` : "Turn on a score site in Scores first" })));
     if (!t && !bl) {
       for (const tier of [1, 2]) {
-        actions.push(btn(`Add as Tier ${tier}`, (e) => busy(e.currentTarget, async () => {
+        actions.push(held("add:" + hd, btn(`Add as Tier ${tier}`, (e) => track("add:" + hd, e.currentTarget, async () => {
           const r = await send("targetsUpsert", { rows: [hd], defaults: { tier, source: "manual" } }, { label: "Add target" });
           if (r) toast(r.blacklisted ? `@${hd} is on your blacklist: skipped` : `Added @${hd} as Tier ${tier}`, { type: r.blacklisted ? "warn" : "success" });
-        }), { size: "xs", iconName: tier === 1 ? "plus" : null, id: "pAddT" + tier, kind: tier === 1 ? "primary" : "" }));
+        }), { size: "xs", iconName: tier === 1 ? "plus" : null, id: "pAddT" + tier, kind: tier === 1 ? "primary" : "" })));
       }
     }
     actions.push(btn("Smart followers", () => openDashboard("discover?h=" + encodeURIComponent(hd)), { size: "xs", iconName: "discover", id: "pSmart", title: "Open Discover with this account's smart followers" }));
@@ -319,8 +328,9 @@ function renderProfile() {
       actions.push(btn("Blacklist", async (e) => {
         const b = e.currentTarget;
         if (!(await confirmDialog(`ScoreX will never comment on @${hd} and never add it again${t ? " (it is removed from your targets)" : ""}.`, { title: `Blacklist @${hd}?`, okLabel: "Blacklist", danger: true }))) return;
-        busy(b, async () => { const r = await send("blacklistAdd", { handles: [hd] }, { label: "Blacklist" }); if (r) toast(`@${hd} is on your blacklist`, { type: "success" }); });
+        track("bl:" + hd, b, async () => { const r = await send("blacklistAdd", { handles: [hd] }, { label: "Blacklist" }); if (r) toast(`@${hd} is on your blacklist`, { type: "success" }); });
       }, { size: "xs", kind: "danger-soft", id: "pBlacklist" }));
+      held("bl:" + hd, actions[actions.length - 1]);
     }
   }
   fill(el,

@@ -17,7 +17,9 @@
 // - Results (funnel, daily bars, heatmap, views, Comments table + filters + drawer), Tone (prompt, Try it, learn
 //   from edits), Safety (clamping, risk report, page loads, reach monitor), Settings (Diagnostics quick check +
 //   the saved live test, mode select confirm), Models (masked key, estimator, preset per tier), theme menu
-// - the safety stop: "Review stop…" (no one-click resume) and a confirm that needs its checkbox
+// - the safety stop: "Review stop…" (no one-click resume, also in the setup stepper), a confirm that needs its
+//   checkbox, Discover's X-tab sources wait for the reviewed stop
+// - a screen left mid-render registers nothing in the next one; narrow tables keep their key columns in view
 // - collapsed Advanced sections (remembered), and the popup (status, one primary, review next, quota strip,
 //   replies line, risk, the This-profile card hidden when the active tab is not x.com)
 //
@@ -191,7 +193,7 @@ async function seedNew() {
   await store.saveSettings(settings);
   const fp = {};
   const hour = Math.floor(now / HR);
-  for (let i = 0; i < 24; i++) fp[hour - i] = { watch: 12, post: 3, profile: 2, check: 2 }; // 19 an hour = 456 in 24 h (91% of 500)
+  for (let i = 0; i < 24; i++) fp[hour - i] = { watch: 12, post: 3, profile: 2, check: 2 }; // 19 an hour = 456 in 24 h (91% of 500; 437 after the next full hour)
   const st = (await chrome.storage.local.get("sx.state"))["sx.state"];
   await chrome.storage.local.set({
     "sx.state": {
@@ -358,6 +360,56 @@ try {
     await setTheme(page, "light");
   });
 
+  // ---------------------------------------------------------------- narrow tables
+  await section("narrow tables: key columns stay in view, an ink edge marks hidden columns", async () => {
+    const headIn = (sel, col) => page.evaluate(([sel, col]) => {
+      const wr = document.querySelector(sel + " .table-wrap"), th = wr && wr.querySelector(`thead th[data-col="${col}"]`);
+      return !!th && th.getBoundingClientRect().right <= wr.getBoundingClientRect().right + 1;
+    }, [sel, col]);
+    await page.setViewportSize({ width: 800, height: 900 });
+    await openTab(page, base, "targets");
+    check(await headIn("#targetsTable", "follow") && await headIn("#targetsTable", "propensity"), "800px Targets: Follow status and Follows back? are fully in view");
+    const edges = await page.evaluate(() => { const cs = getComputedStyle(document.querySelector("#targetsTable .table-wrap")); return [cs.borderLeftColor, cs.borderRightColor]; });
+    check(edges[0] !== edges[1], "800px Targets: an ink edge marks the side with more columns (" + edges.join(" / ") + ")");
+    check(await page.evaluate(() => { const tr = document.querySelector("#targetsTable tr.is-disabled"); return !!tr && [...tr.cells].every((td) => getComputedStyle(td).opacity === "1") && [...tr.querySelectorAll(".tag")].some((x) => x.textContent === "Off"); }), "a turned-off target row is not dimmed below AA and is tagged Off");
+    check(await page.evaluate(() => [...document.querySelectorAll("#targetStatus .ct")].every((el) => getComputedStyle(el).opacity === "1")), "filter counts are drawn at full text colour");
+    await page.setViewportSize({ width: 560, height: 900 });
+    await openTab(page, base, "history?view=comments");
+    check(await headIn("#historyTable", "status"), "560px Results › Comments: the Status column is fully in view");
+    await page.setViewportSize({ width: 1360, height: 900 });
+  });
+
+  // ---------------------------------------------------------------- scopes
+  await section("navigation: a screen left mid-render registers nothing in the next one", async () => {
+    await openTab(page, base, "overview");
+    await page.evaluate(() => {
+      const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+      window.__sent = [];
+      chrome.runtime.sendMessage = (m, ...r) => { if (m && m.sx && m.sx !== "getStatus") window.__sent.push(m.sx); return orig(m, ...r); };
+    });
+    // Navigate on the moment the first screen starts rendering (its awaits finish while the next screen is shown).
+    const hop = (first, second) => page.evaluate(([first, second]) => new Promise((res) => {
+      const v = document.getElementById("view");
+      const mo = new MutationObserver(() => { if (v.dataset.tab === first) { mo.disconnect(); location.hash = "#" + second; res(); } });
+      mo.observe(v, { attributes: true, attributeFilter: ["data-tab"] });
+      location.hash = "#" + first;
+    }), [first, second]);
+    await hop("scores", "targets");
+    await page.waitForSelector('#view[data-ready="targets"]');
+    await page.waitForTimeout(1200);
+    await page.evaluate(() => { window.__sent.length = 0; location.hash = "#targets?h=dwarkesh_sp"; });
+    await waitFor(page, () => !!document.querySelector("#targetDrawer"), null, 5000);
+    await page.waitForTimeout(800);
+    const sent = await page.evaluate(() => window.__sent.slice());
+    check(!sent.includes("scoreCheck") && !sent.includes("smartFollowers"), "Scores left mid-render: opening a target drawer sends no score-site request (sent: " + (sent.join(", ") || "nothing") + ")");
+    await page.keyboard.press("Escape");
+    await hop("history", "settings");
+    await page.waitForSelector('#view[data-ready="settings"]');
+    await page.waitForTimeout(1200);
+    await page.click("#healthLink");
+    check(await waitFor(page, () => !!document.querySelector("#allSettingsLink"), null, 5000), "Results left mid-render: the rail's Health link still opens Settings › Diagnostics");
+  });
+
   // ---------------------------------------------------------------- shell + rail
   await section("shell: rail, engine bar, aliases, menu sheet", async () => {
     await openTab(page, base, "overview");
@@ -409,6 +461,7 @@ try {
   const stepDone = async (k) => ((await page.locator(`#setupChecklist [data-step="${k}"]`).getAttribute("class")) || "").includes("is-done");
   await section("today", async () => {
     await openTab(page, base, "overview");
+    check(await waitFor(page, () => /No OpenAI API key/.test(document.getElementById("healthLink")?.title || ""), null, 6000) && /problem/.test(await page.locator("#healthLink").innerText()), "rail health reports the missing OpenAI key (no \"Health: OK\" before a key is saved)");
     check(!(await page.locator('#modeSwitch [data-value="auto"]').isDisabled()), "Full auto is selectable right away");
     await page.click('#modeSwitch [data-value="auto"]');
     check(await waitFor(page, () => !!document.querySelector(".modal-fullauto #faConfirmBtn")), "Full auto opens the confirm dialog");
@@ -422,8 +475,10 @@ try {
     await page.click("#faConfirmBtn");
     const sa = await waitSetting(page, (x) => x.mode === "auto");
     check(sa && sa.mode === "auto" && await waitFor(page, () => document.querySelector('#modeSwitch [data-value="auto"]')?.getAttribute("aria-checked") === "true"), "confirming saves settings.mode = auto");
+    check(await waitFor(page, () => /auto/i.test(document.querySelector("#modeTag .mode-tag")?.textContent || ""), null, 1000), "the engine bar shows AUTO at once (it does not wait for the 5 s status poll)");
     await page.click('#modeSwitch [data-value="review"]');
     check((await waitSetting(page, (x) => x.mode === "review")).mode === "review", "switching back to Review saves settings.mode = review (no confirm)");
+    check(await waitFor(page, () => /review/i.test(document.querySelector("#modeTag .mode-tag")?.textContent || ""), null, 1000), "the engine bar shows REVIEW at once");
 
     check(await page.locator("#setupChecklist").isVisible(), "setup stepper is shown while setup is incomplete");
     const steps = await page.locator("#setupChecklist [data-step]").evaluateAll((els) => els.map((e) => e.dataset.step + (e.classList.contains("is-done") ? "+" : "-")));
@@ -439,6 +494,8 @@ try {
     check((await page.locator("#reviewPreview .pv").count()) === 3 && (await page.locator("#reviewPreview .pv .expiry").count()) === 3, "review preview lists 3 pending comments with expiry chips");
     const dis = await page.locator("#reviewPreview .pv").evaluateAll((els) => els.map((e) => [e.querySelector("button")?.disabled, !!e.querySelector(".pv-note")]));
     check(dis.some((d) => d[0] && d[1]) && dis.some((d) => !d[0] && !d[1]), "Approve is disabled with a note for the account that follows you now");
+    const pvFoot = await page.locator(".pv-foot").innerText();
+    check(/1 approved, posting after you resume/.test(pvFoot) && /1 approved will not post/.test(pvFoot), "while paused: approved replies post after you resume; the one to an account that follows you is counted apart: " + pvFoot);
     check((await page.locator("#activityLog .log").count()) === 6, "recent activity shows the last 6 lines");
     await page.click("#fullLogBtn");
     check((await page.locator("#activityLog .log").count()) > 6, "Full log shows the rest");
@@ -467,7 +524,7 @@ try {
     await page.click(".toast .toast-act");
     const undone = await waitStorage(page, "sx.conversations", (v) => (v.items.find((x) => x.id === "c1") || {}).done === false);
     check(undone && (undone.items.find((x) => x.id === "c1") || {}).done === false, "Undo sends conversationDone { done: false }");
-    check(await waitFor(page, () => !!document.querySelector('#needsList [data-need="footprint"]'), null, 6000) && /456 of 500/.test(await page.locator('#needsList [data-need="footprint"]').innerText()), "Needs you warns above 80% of the X page-load cap (456 of 500)");
+    check(await waitFor(page, () => !!document.querySelector('#needsList [data-need="footprint"]'), null, 6000) && /(456|437) of 500/.test(await page.locator('#needsList [data-need="footprint"]').innerText()), "Needs you warns above 80% of the X page-load cap (456 of 500)");
     check((await page.locator('#needsList [data-need^="near:"]').count()) >= 1, "a target near its give-up day is listed");
     await shot(page, "light-overview-needs.png");
   });
@@ -515,6 +572,7 @@ try {
     await page.waitForTimeout(300);
     const dtext = await page.locator("#targetDrawer").innerText();
     check(/PROFILE/i.test(dtext) && /SCORES/i.test(dtext) && /FOLLOW TIMELINE/i.test(dtext) && /day 6 of 14/.test(dtext) && /2,410/.test(dtext) && /Value\s*82/.test(dtext), "drawer: profile, scores (Sorsa 2,410, value 82), follow timeline, day 6 of 14");
+    check(/weights: reach 40 · engagement 25 · activity 20 · quality 15/.test(dtext), "drawer: the fixed rank numbers are labelled as weights");
     await shot(page, "light-targets-drawer.png", false);
     const order = await page.evaluate(() => [...document.querySelectorAll("#targetsTable tbody tr[data-key]")].map((tr) => tr.dataset.key));
     await page.locator("#targetDrawer .drawer-close").focus();
@@ -648,6 +706,14 @@ try {
     check((await page.locator("#candAddBtn").count()) === 1 && (await page.locator('#view button:has-text("Add to group")').count()) === 0, "one Add to targets button (no Add to group A/B)");
     await page.click('#discSource [data-value="followersOf"]');
     check(/followers of @karpathy: 64 accounts/.test(await page.locator("#discProgress").textContent()) && await page.locator("#discMax").isVisible(), "X sources: discovery progress from sx.discovery and the max-accounts field");
+    // Smart followers of one account: the tier picked for "Add N as Tier X" survives sx.scoreboard writes.
+    await openTab(page, base, "discover?h=cobie");
+    if (await waitFor(page, () => !!document.querySelector("#smartLookup .look-merged select"), null, 8000)) {
+      await page.locator("#smartLookup .look-merged select").selectOption("1");
+      await page.evaluate(async () => { const b = (await chrome.storage.local.get("sx.scoreboard"))["sx.scoreboard"]; await chrome.storage.local.set({ "sx.scoreboard": { ...b, touchedAt: Date.now() } }); });
+      await page.waitForTimeout(600);
+      check((await page.locator("#smartLookup .look-merged select").inputValue()) === "1", "Smart followers: the chosen tier survives a background sx.scoreboard write");
+    } else check(false, "Smart followers of @cobie: the merged list is shown");
   });
 
   // ---------------------------------------------------------------- Scores
@@ -693,6 +759,11 @@ try {
     await page.waitForSelector("#pendingList .review-card");
     check((await page.locator("#pendingList .review-card").count()) === 3, "review queue shows 3 pending cards");
     check((await page.locator("#waitingList .review-card").count()) === 2, "approved/queued section shows 2 cards");
+    const wl = await page.locator("#waitingList").innerText();
+    check(/Posts after you resume/.test(wl) && !/Posts around/.test(wl), "while paused, approved replies say they post after you resume (no posting time is promised)");
+    check(/follows you now, so this reply will be dropped/.test(wl) && /Will not post/.test(wl), "an approved reply to an account that follows you now says it will be dropped");
+    const metas = await page.locator("#pendingList .rc-foot-meta").allInnerTexts();
+    check(metas.some((m) => /effort \w+/.test(m) && /(High quality|Balanced|Cheap) preset/.test(m)), "card meta names the reasoning effort and the preset: " + (metas[0] || "").replace(/\s+/g, " "));
     check((await page.locator("#pendingList .review-card.is-focus").count()) === 1 && (await page.locator("#pendingList .expiry").count()) === 3, "one focused card; every card shows when it expires");
     const fol = page.locator("#pendingList .review-card.is-follows");
     check((await fol.count()) === 1 && (await fol.first().locator('[data-ctl="approve"]').isDisabled()) && /follows you now/.test(await fol.first().innerText()), "the reply to an account that follows you now has Approve disabled with a note");
@@ -720,11 +791,41 @@ try {
     await page.keyboard.press("z");
     check(await waitFor(page, () => document.querySelectorAll("#pendingList .review-card").length === 3 && !document.querySelector("#pendingList .review-undo"), null, 3000), "Z undoes the approve");
     check((await page.locator(`#pendingList .review-card[data-id="${ids[0]}"] textarea`).inputValue()) === "Short edit.", "the edit survives the undo");
+    await page.click('#nav .tab[data-tab="targets"]');
+    await page.waitForSelector('#view[data-ready="targets"]');
+    await page.click('#nav .tab[data-tab="review"]');
+    await page.waitForSelector(`#view[data-ready="review"] #pendingList .review-card[data-id="${ids[0]}"]`);
+    check((await page.locator(`#pendingList .review-card[data-id="${ids[0]}"] textarea`).inputValue()) === "Short edit." && (await page.locator(`#pendingList .review-card.is-dirty[data-id="${ids[0]}"]`).count()) === 1, "an unsaved edit survives leaving Review and coming back");
     await page.locator(`#pendingList .review-card[data-id="${ids[1]}"] .post-text`).click();
     await page.keyboard.press("s");
     check(await waitFor(page, () => !!document.querySelector("#pendingList .review-undo.is-skip"), null, 3000), "S skips the focused card (held with Undo)");
     await page.keyboard.press("z");
     check(await waitFor(page, () => document.querySelectorAll("#pendingList .review-card").length === 3, null, 3000), "Z undoes the skip");
+    // Regenerate (a paid call) stays busy when a live update rebuilds its card: a second press sends nothing.
+    // The worker's answer is held 2 s by a stub (the sandbox has no OpenAI access).
+    await page.evaluate(() => {
+      const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+      window.__regenN = 0;
+      window.__restoreSend = () => { chrome.runtime.sendMessage = orig; };
+      chrome.runtime.sendMessage = (m, ...r) => (m && m.sx === "reviewAction" && m.action === "regenerate"
+        ? (window.__regenN++, new Promise((res) => setTimeout(() => res({ ok: false, error: "held by the test" }), 2000)))
+        : orig(m, ...r));
+    });
+    const rsel = `#pendingList .review-card[data-id="${ids[1]}"]`;
+    const rtarget = await page.evaluate(async (id) => (await (await import("/lib/history.js")).get(id)).target, ids[1]);
+    const comments0 = await page.evaluate(async (hd) => ((((await chrome.storage.local.get("sx.targets"))["sx.targets"] || {})[hd] || {}).stats || {}).comments || 0, rtarget);
+    const setComments = (n) => page.evaluate(async ([hd, n]) => { const t = (await chrome.storage.local.get("sx.targets"))["sx.targets"]; t[hd].stats = { ...(t[hd].stats || {}), comments: n }; await chrome.storage.local.set({ "sx.targets": t }); }, [rtarget, n]);
+    await page.click(`${rsel} [data-ctl="regen"]`);
+    await setComments(comments0 + 1); // the engine updates the target meanwhile: the card is rebuilt
+    await page.waitForTimeout(900);
+    const stillBusy = (await page.locator(`${rsel} [data-ctl="regen"]`).isDisabled()) && (await page.locator(`${rsel}.is-regenerating`).count()) === 1;
+    await page.locator(rsel).focus();
+    await page.keyboard.press("r");
+    check(stillBusy && (await page.evaluate(() => window.__regenN)) === 1, "Regenerate stays busy across a live redraw of its card; pressing R again sends nothing");
+    check(await waitFor(page, (sel) => !document.querySelector(sel + ".is-regenerating") && !document.querySelector(sel + ' [data-ctl="regen"]').disabled, rsel, 5000), "Regenerate is available again once the answer is in");
+    await page.evaluate(() => window.__restoreSend());
+    await setComments(comments0);
+    await page.waitForTimeout(500);
     await page.click("#approveAllBtn");
     await page.waitForSelector("#approveEditsBtn");
     const btns = await page.locator(".modal-footer button").allInnerTexts();
@@ -736,7 +837,7 @@ try {
     const stored = await page.evaluate(async (id) => { const h = await import(chrome.runtime.getURL("lib/history.js")); const r = await h.get(id); return [r.status, r.comment]; }, ids[0]);
     check(stored[0] === "approved" && stored[1] === "Short edit.", "the edited card is approved with the edited text (" + stored.join(" / ") + ")");
     check(await waitFor(page, () => document.querySelectorAll("#waitingList .review-card").length === 4, null, 8000), "approved cards move to Approved, waiting to post (4)");
-    check((await page.locator("#waitingList .comment-input").evaluateAll((els) => els.map((e) => e.value))).includes("Short edit.") && /Posts (around \d\d:\d\d|in the next free slot)/.test(await page.locator("#waitingList").innerText()), "waiting cards keep the edited text and say when they post");
+    check((await page.locator("#waitingList .comment-input").evaluateAll((els) => els.map((e) => e.value))).includes("Short edit.") && /Posts (around \d\d:\d\d|in the next free slot|after you resume|after you press Start)/.test(await page.locator("#waitingList").innerText()), "waiting cards keep the edited text and say when they post");
   });
 
   // ---------------------------------------------------------------- Results
@@ -748,6 +849,11 @@ try {
     check((await page.locator("#resViews").count()) === 1 && /proxy/.test(await page.locator("#resViews").innerText()) && (await page.locator("#resViews svg").count()) >= 1, "Views per reply chart (results.views) with the caveat");
     const noAlt = await page.evaluate(() => [...document.querySelectorAll('#resultsOverview svg[role="img"]')].filter((s) => !s.getAttribute("aria-label")).length);
     check(noAlt === 0, "every chart on the Overview has a text alternative");
+    const fl = (await page.locator("#resFunnel svg.funnel").getAttribute("aria-label")) || "";
+    const fv = (fl.match(/: \d+/g) || []).map((x) => Number(x.slice(2)));
+    check(fv.length === 5 && fv.every((v, i) => !i || v <= fv[i - 1]), "the follow-back funnel narrows at every stage: " + fl);
+    const ax = (await page.locator("#resDaily svg.chart:not(.heatmap) text.axis").allTextContents()).filter((x) => /^\d+$/.test(x));
+    check(ax.length >= 1 && new Set(ax).size === ax.length, "Every day: the y-axis labels are distinct whole numbers (" + ax.join(", ") + ")");
     await page.click('#resultsView [data-value="comments"]');
     check(/view=comments/.test(page.url()) && await waitFor(page, () => document.getElementById("historyCount")?.textContent === "14"), "Comments lists the 14 records (view kept in the URL)");
     await page.selectOption("#hStatus", "posted");
@@ -762,6 +868,8 @@ try {
     await page.keyboard.press("Escape");
     check(await waitFor(page, () => !document.querySelector("#historyDrawer")), "Esc closes the details drawer");
     check(/posted comments are always kept/i.test(await page.locator("#retentionText").textContent()), "history retention sentence under Comments");
+    const clr = await page.locator('details[data-adv="history.clear"]').textContent();
+    check(!/empties the review queue/i.test(clr) && /open review queue/i.test(clr), "Clear history says the open review queue is kept (as the worker does)");
     await shot(page, "light-results-comments.png", false);
   });
 
@@ -824,7 +932,8 @@ try {
     await waitSaved(page);
     check((await page.getByLabel("Gap between comments minimum").inputValue()) === "2", "gap min 1 is clamped to the hard minimum 2");
     check(await waitFor(page, () => /\d/.test(document.getElementById("riskReport")?.textContent || ""), null, 6000) && /estimate, not a guarantee/i.test(await page.locator("#riskReport").innerText()), "risk report (status.risk) labelled as an estimate");
-    check(await waitFor(page, () => /456/.test(document.getElementById("footprint")?.textContent || ""), null, 6000) && (await page.locator("#footprint svg.minibars rect").count()) === 24, "X page loads (24 h): 456 from status.footprint with 24 hourly bars");
+    // 437 once the clock passes a full hour after seeding: the oldest seeded hour leaves the 24 h window.
+    check(await waitFor(page, () => /456|437/.test(document.getElementById("footprint")?.textContent || ""), null, 6000) && (await page.locator("#footprint svg.minibars rect").count()) === 24, "X page loads (24 h): 456 from status.footprint with 24 hourly bars");
     check((await page.locator("#maxPageLoads").inputValue()) === "500", "page-load cap field shows settings.safety.maxPageLoads24h (500)");
     check(/median 12 views \(week before: 85\)/.test(await page.locator("#reachStatus").innerText()), "reach monitor status from status.reach: " + (await page.locator("#reachStatus").innerText()).trim());
     await page.selectOption("#reachAction", "halve");
@@ -848,6 +957,17 @@ try {
     await page.waitForTimeout(300);
     check((await page.locator("#settingsMode").inputValue()) === "review" && (await savedSettings(page)).mode === "review", "Settings mode select: cancelling the Full-auto confirm keeps Review");
     await page.evaluate(() => { const d = document.querySelector('details[data-adv="settings.general"]'); if (d) d.open = false; });
+    // Import JSON: a backup made in Full auto names the switch and runs the Full-auto confirm; Cancel keeps Review.
+    const bk = path.join(os.tmpdir(), `scorex-import-${process.pid}.json`);
+    fs.writeFileSync(bk, JSON.stringify({ app: "ScoreX", kind: "settings", settings: { ...(await savedSettings(page)), mode: "auto" } }));
+    await page.setInputFiles("#importDataFile", bk);
+    await page.waitForSelector(".modal-overlay .modal");
+    check(/Full auto/.test(await page.locator(".modal-overlay .modal").innerText()), "Import JSON: the confirm says the backup would switch to Full auto");
+    await page.locator(".modal-overlay .modal .btn-primary").click();
+    check(await waitFor(page, () => !!document.querySelector(".modal-fullauto #faConfirmBtn"), null, 4000), "Import JSON: the Full-auto confirm runs before the import");
+    await page.keyboard.press("Escape");
+    check(await waitFor(page, () => [...document.querySelectorAll(".toast")].some((t) => /Imported/.test(t.textContent)), null, 6000) && (await savedSettings(page)).mode === "review" && /review/i.test(await page.locator("#modeTag").innerText()), "Import JSON: Cancel imports the rest and keeps Review");
+    fs.rmSync(bk, { force: true });
     await openTab(page, base, "diagnostics");
     await waitFor(page, () => !/Checking/.test(document.getElementById("diagSummary")?.textContent || "Checking"), null, 6000);
     const ids = await page.locator("#diagList .dg").evaluateAll((els) => els.map((e) => e.dataset.check));
@@ -870,6 +990,7 @@ try {
     check(sec && sec.openaiKey === FAKE_KEY, "key stored (extension IndexedDB)");
     const leaked = await page.evaluate(async () => JSON.stringify(await chrome.storage.local.get(null)));
     check(!leaked.includes(FAKE_KEY), "key is not in chrome.storage (content scripts on x.com cannot read it)");
+    check(await waitFor(page, () => !/No OpenAI API key/.test(document.getElementById("healthLink")?.title || "x"), null, 6000), "once a key is saved, the rail health no longer reports it missing");
     await page.reload();
     await page.waitForSelector('#view[data-ready="models"]');
     await page.waitForSelector("#openaiKeyField .masked-key", { timeout: 5000 });
@@ -925,6 +1046,21 @@ try {
     check((await page.locator("#btn-reviewStop.btn-primary").count()) === 1 && /Review stop/.test(await page.locator("#btn-reviewStop").innerText()) && (await page.locator("#btn-resume").count()) === 0, "the primary button is Review stop… (no one-click Resume)");
     check((await page.locator("#alertReviewBtn").count()) === 1 && /Review and resume/.test(await page.locator("#alertReviewBtn").innerText()) && (await page.locator("#alertDismissBtn").count()) === 1, "the banner offers Review and resume… and Dismiss");
     check((await page.locator('#nav [data-tab="overview"] .tab-alert:not([hidden])').count()) === 1, "the rail marks Today with an alert");
+    check(await page.evaluate(() => [...document.querySelectorAll("#safetyBanner .alert-time, #safetyBanner .alert-detail")].every((el) => getComputedStyle(el).opacity === "1")), "banner text over the red fill is full white (no opacity)");
+    // Never started yet (e.g. the live X test hit a captcha): the setup stepper offers Review stop…, not a one-click Start.
+    const firstStartedAt = (await storageKey(page, "sx.state")).firstStartedAt || null;
+    await setState(page, { firstStartedAt: null });
+    check(await waitFor(page, () => !!document.querySelector('#setupChecklist [data-step="start"]:not(.is-done)'), null, 5000), "setup stepper: the Start step is open again (never started)");
+    const stepBtns = (await page.locator("#setupChecklist button").allInnerTexts()).map((x) => x.trim());
+    check(!stepBtns.includes("Start") && stepBtns.some((x) => /Review stop/.test(x)), "setup stepper: Review stop…, no one-click Start, during a safety stop (" + stepBtns.filter((x) => !/\n/.test(x)).join(" | ") + ")");
+    await page.locator('#setupChecklist button:has-text("Review stop")').first().click();
+    check(await waitFor(page, () => !!document.querySelector(".modal-stop #rsResumeBtn[disabled]"), null, 3000), "the stepper's Review stop… opens the stop dialog (Resume needs the checkbox)");
+    await page.keyboard.press("Escape");
+    await setState(page, { firstStartedAt });
+    await openTab(page, base, "discover?s=followersOf");
+    check(await page.locator("#discStartBtn").isDisabled() && /safety/i.test((await page.locator("#discStartBtn").getAttribute("title")) || "") && (await page.locator("#discReviewStop").count()) === 1, "Discover: the X-tab sources wait for the reviewed stop (start disabled, Review stop… offered)");
+    await openTab(page, base, "overview");
+    await page.waitForSelector("#safetyBanner", { timeout: 5000 });
     await page.screenshot({ path: path.join(OUT, "light-overview-alert.png"), fullPage: false });
     await page.click("#btn-reviewStop");
     await page.waitForSelector(".modal-stop");
@@ -960,6 +1096,8 @@ try {
     check(await waitFor(page, () => /Running/.test(document.getElementById("heroStatus")?.textContent || ""), null, 5000), "Today shows Running");
     check((await page.locator("#engineBox .status-running").count()) === 1 && (await page.locator("#safetyBanner").count()) === 0, "Running shows the lime status and the alert clears");
     check((await page.locator("#btn-pause.btn-primary").count()) === 1 && !(await page.locator("#runNowBtn").isDisabled()), "while running the primary button is Pause and Run a check now is enabled");
+    const why = await page.evaluate(() => { const el = document.getElementById("engineWhy"); return { display: getComputedStyle(el).display, h: Math.round(el.getBoundingClientRect().height) }; });
+    check(why.display === "block" && why.h < 60, `the running engine sentence reads as one paragraph (display ${why.display}, ${why.h}px tall)`);
     await page.screenshot({ path: path.join(OUT, "light-overview-running.png"), fullPage: false });
     await setState(page, { status: "stopped", stopReason: "captcha", stopDetail: "Arkose challenge iframe detected on x.com/home", alert: { reason: "captcha", detail: "Arkose challenge iframe detected on x.com/home", at: Date.now() - 120000 } });
   });

@@ -11,7 +11,7 @@ import { parseHandleList, normalizeHandle, num } from "../../lib/util.js";
 import {
   h, clear, fill, add, section, advanced, btn, busy, toast, icon, segmented, segFilter, selectEl, toggleEl, renderTable,
   confirmDialog, link, xLink, tag, statusSquare, providerKey, providerName, progressBar, fmtAgo, fmtCount, fmtNum, debounce,
-  truncate,
+  truncate, isSafetyStop,
 } from "../components.js";
 import { barInCell, overlapDots, fmtShort } from "../charts.js";
 import { readiness, usageLeft, MODE_TAG } from "./scores.js";
@@ -88,6 +88,7 @@ export default {
     let showAllSwept = false;
     const candSelected = new Set();
     const lookSelected = new Set();
+    let lookTier = "2"; // tier for "Add N as Tier X" (kept across redraws: sx.scoreboard changes often)
     const candSort = { key: "overlap", dir: "desc" };
     const lookSort = { key: "listed", dir: "desc" };
     const cf = { q: "", view: "all" };
@@ -149,10 +150,11 @@ export default {
       if (isSmart) {
         if (!smartProviders().length) why = "Turn on a score site that lists smart followers first (Scores).";
         else if (parseHandleList(dHandles.value).length >= 2 && sj) why = "A score job is running - wait or cancel it.";
-      } else if (d && ACTIVE.includes(d.status)) why = "A discovery is running - one at a time.";
+      } else if (isSafetyStop(ctx.state)) why = "ScoreX stopped for safety. Review the stop first: these sources read X in the worker tab.";
+      else if (d && ACTIVE.includes(d.status)) why = "A discovery is running - one at a time.";
       startBtn.disabled = !!why || !!(isSmart && lookupBusy);
       startBtn.title = why || (isSmart ? "Smart followers from your connected score sites (lists are cached for 3 days)" : "Runs in the X tab; progress shows below");
-      fill(availEl, availNodes());
+      fill(availEl, !isSmart && isSafetyStop(ctx.state) ? [h("span", { class: "text-red" }, "Stopped for safety: X is not read until you review the stop. "), h("button", { type: "button", class: "linkish small", id: "discReviewStop", onClick: () => ctx.openReviewStop() }, "Review stop…")] : availNodes());
       hintEl.textContent = isSmart
         ? "Smart followers are the high-score accounts that follow a big account. They follow back more often than random followers."
         : src === "common" ? "Accounts that several smart accounts follow (2-5 accounts)." : src === "search" ? "People whose name or bio matches the words." : "Reads the list on X and scores the accounts it finds.";
@@ -330,14 +332,14 @@ export default {
             r.error ? h("p", { class: "small text-red" }, String(r.error)) : rows.length ? rankedList(rows, pid) : h("p", { class: "small muted" }, "No smart followers listed."));
         });
         const sel = lookSelected;
-        const tierSel = selectEl([["2", "Tier 2"], ["1", "Tier 1"]], "2", { class: "input input-sm", "aria-label": "Tier for added accounts" });
+        const tierSel = selectEl([["2", "Tier 2"], ["1", "Tier 1"]], lookTier, { class: "input input-sm", "aria-label": "Tier for added accounts" });
         const addBtn = btn("Add as targets", () => {
           const list = merged.filter((x) => sel.has(x.handle));
           if (list.length) busy(addBtn, () => addHandles(list, Number(tierSel.value), sel).then(drawLookup));
         }, { kind: "primary", size: "sm", iconName: "plus", id: "lookAddBtn" });
         const selInfo = h("span", { class: "small muted" });
         const syncSel = () => { const n = sel.size; selInfo.textContent = n ? `${n} selected` : "Select accounts to add them"; addBtn.disabled = !n; btnLabel(addBtn).textContent = n ? `Add ${n} as Tier ${tierSel.value}` : "Add as targets"; };
-        tierSel.addEventListener("change", syncSel);
+        tierSel.addEventListener("change", () => { lookTier = tierSel.value; syncSel(); });
         const cols = [
           { key: "handle", label: "Account", render: (x) => h("div", { class: "who" }, h("span", { class: "who-row" }, xLink(x.handle), statusTags(x.handle)), x.name ? h("span", { class: "who-name" }, x.name) : null), sort: (x) => x.handle, defaultDir: "asc" },
           { key: "followers", label: "Followers", align: "right", render: (x) => fmtCount(x.followers), sort: (x) => x.followers },
@@ -532,6 +534,8 @@ export default {
     drawSwept();
     drawCandidates(true);
     ctx.on(K.discovery, () => { drawDiscovery(); drawForm(); });
+    let inStop = isSafetyStop(ctx.state);
+    ctx.on(K.state, () => { if (isSafetyStop(ctx.state) !== inStop) { inStop = !inStop; drawForm(); } });
     ctx.on(K.scoreboard, () => { drawSweep(); drawLookup(); drawSwept(); drawForm(); reloadProviders(); });
     ctx.on(K.candidates, () => drawCandidates());
     ctx.on(K.targets, () => { drawCandidates(); drawSwept(); });

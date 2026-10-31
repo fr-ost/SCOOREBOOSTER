@@ -22,6 +22,7 @@ import { fmtUsd, fmtCount, fmtDuration, truncate, num } from "../lib/util.js";
 import { FS, FS_LABEL, followStatus, followDays } from "../lib/targets.js";
 import { dailyLimit, accountsLimit } from "../lib/safety.js";
 import { PROVIDER_DEFS } from "../lib/providerdefs.js";
+import { getSecrets } from "../lib/store.js";
 import { segMeter, vizIndex } from "./charts.js";
 
 export { fmtUsd, fmtCount, fmtDuration, truncate };
@@ -1463,6 +1464,11 @@ export async function switchMode(ctx, mode) {
 
 // ---------------------------------------------------------------- health (rail footer, popup header)
 
+// Is an OpenAI key saved? true / false, or null when it cannot be told. sx.secretsRev first (no IndexedDB read).
+export async function hasOpenaiKey(secretsRev) {
+  if (secretsRev && typeof secretsRev.hasOpenai === "boolean") return secretsRev.hasOpenai;
+  try { return !!(await getSecrets()).openaiKey; } catch (_) { return null; }
+}
 // Quick health from state + permissions (no X tab): { level: ok|warn|fail, issues: [{ level, text, href }], at }.
 export async function healthCheck({ settings, state, secretsRev } = {}) {
   const issues = [];
@@ -1473,8 +1479,9 @@ export async function healthCheck({ settings, state, secretsRev } = {}) {
   try {
     if (chrome.permissions && !(await chrome.permissions.contains({ origins: ["https://x.com/*", "https://api.openai.com/*"] }))) add("fail", "Site access to x.com or api.openai.com is missing", "#diagnostics");
   } catch (_) { /* not available */ }
-  // Same levels as Settings > Diagnostics, so the rail and the quick check agree.
-  if (secretsRev && secretsRev.hasOpenai === false) add("fail", "No OpenAI API key: ScoreX cannot write replies", "#models");
+  // Same levels as Settings > Diagnostics, so the rail and the quick check agree. sx.secretsRev is only written once a
+  // key is saved, so without it (a fresh install) the stored secrets are asked (presence only, the key is never read out).
+  if (await hasOpenaiKey(secretsRev) === false) add("fail", "No OpenAI API key: ScoreX cannot write replies", "#models");
   if (s.account && !String(s.account.handle || "").trim()) add("warn", "Your X handle is not set", "#settings");
   if (st.status === STATUS.RUNNING && st.nextTickAt && now - st.nextTickAt > 10 * 60000) add("warn", `No engine check since ${fmtTime(st.nextTickAt)}: the scheduler may be stuck`, "#diagnostics");
   for (const [id, cfg] of Object.entries(s.providers || {})) {

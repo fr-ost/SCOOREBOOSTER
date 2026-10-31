@@ -30,6 +30,8 @@ export function toneLabel(key, settings) {
   return key.charAt(0).toUpperCase() + key.slice(1);
 }
 
+// lib/scores.js ownScore weights (out of 100). The drawer labels them as weights; the parts bar shows this account's parts.
+const RANK_W = [["reach", 40], ["engagement", 25], ["activity", 20], ["quality", 15]];
 const PRESET_LABEL = { high: "High quality", balanced: "Balanced", cheap: "Cheap" };
 const WATCH_LABEL = { list: "X List (recommended)", search: "Batched Latest search", rotation: "Profile rotation" };
 // target.source -> [column label, timeline text]
@@ -154,6 +156,7 @@ export default {
       return h("div", { class: "cell-account" },
         h("div", { class: "cell-handle" }, h("span", { class: "handle" }, "@" + t.handle),
           t.profile && t.profile.verified ? h("span", { class: "verified", title: "Verified" }, icon("check")) : null,
+          isOn(t) ? null : tag("Off", "", "Turned off: ScoreX does not reply to this account"),
           h("a", { class: "tg-x", href: xUrl(t.handle), target: "_blank", rel: "noopener noreferrer", tabindex: "-1", title: `Open @${t.handle} on X`, "aria-label": `Open @${t.handle} on X` }, icon("external"))),
         h("div", { class: "cell-sub", title: (t.profile && t.profile.bio) || null }, name));
     }
@@ -577,7 +580,8 @@ export default {
         h("div", { class: "tg-sec-head" }, h("span", { class: "cap" }, "Scores"), h("span", { class: "spacer" }), ids.length ? h("span", { class: "small muted" }, plural(ids.length, "request")) : null, checkBtn),
         ids.length ? rows : h("p", { class: "small muted" }, "No score sites are on. ", h("a", { href: "#scores?view=providers" }, "Connect one on Scores"), "."),
         h("div", { class: "tg-rank" },
-          h("div", { class: "small" }, "ScoreX rank ", h("b", { class: "mono" }, own == null ? "-" : String(Math.round(own))), h("span", { class: "muted" }, " · reach 40 · engagement 25 · activity 20 · quality 15")),
+          h("div", { class: "small" }, "ScoreX rank ", h("b", { class: "mono" }, own == null ? "-" : String(Math.round(own))),
+            h("span", { class: "muted" }, " · weights: " + RANK_W.map(([k, w]) => `${k} ${w}`).join(" · "))),
           parts ? partsBar([
             { label: "Reach", value: parts.reach, weight: 40 }, { label: "Engagement", value: parts.engagement, weight: 25 },
             { label: "Activity", value: parts.activity, weight: 20 }, { label: "Quality", value: parts.quality, weight: 15 }],

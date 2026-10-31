@@ -349,7 +349,7 @@ export default {
           f({ path: "safety.reach.minChecked", type: "number", label: "Judge after (checked replies)", min: 5, max: 200, id: "reachMinChecked" }),
           f({ path: "safety.reach.dropPct", type: "number", label: "Alert when median views fall by", min: 20, max: 95, suffix: "%", id: "reachDropPct" }),
           f({ path: "safety.reach.lowViews", type: "number", label: "A reply is low under (views)", min: 1, max: 1000, id: "reachLowViews" }),
-          f({ path: "safety.reach.lowShare", type: "percent", label: "…or when this share is low", min: 10, max: 100, step: 5, suffix: "%", id: "reachLowShare" })),
+          f({ path: "safety.reach.lowShare", type: "percent", label: "…or when ≥ this share is low", min: 10, max: 100, step: 5, suffix: "%", id: "reachLowShare", hint: "Share of checked replies under the views above (50% = half)" })),
         h("p", { class: "field-hint reach-caveat" }, "Views are a proxy - X does not tell you when it hides a reply.")),
 
       advanced({ key: "safety.advanced", desc: "Breaks, per-account caps, typing and reading speed, failure limit, keyword lists, tab focus, watch cadence" },

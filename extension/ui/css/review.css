@@ -16,7 +16,7 @@
 /* cards: the focused card gets an ink border plus a 3px ink rule on the left */
 .review-card { scroll-margin-top: calc(var(--bar-h) + 16px); scroll-margin-bottom: 16px; }
 .review-card:focus { outline: none; }
-.review-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; box-shadow: none; }
+.review-card:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; box-shadow: 0 0 0 1px var(--focus-edge); }
 .review-card.is-focus { border-color: var(--text); box-shadow: inset 3px 0 0 var(--text); }
 .review-card.is-focus .rc-post { border-radius: 0; }
 .review-card .rc-post, .review-card .rc-main { padding: 12px 16px; gap: 8px; }
