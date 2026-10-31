@@ -1088,6 +1088,27 @@ try {
     await openTab(page, base, "diagnostics");
     const liveRows = await page.locator("#diagLive .dg").allInnerTexts();
     check(liveRows.length === 4 && !liveRows.some((x) => /Stopped by Pause/.test(x)), `after a reload the last complete live test is still shown, not the stopped run (${liveRows.length} rows)`);
+    // After a captcha stop the live test asks first (it would load X pages before you looked at your account);
+    // Cancel sends nothing. An "X page changed" stop runs it without asking (the stop itself recommends the test).
+    await setState(page, { status: "stopped", stopReason: "captcha", stopDetail: "Arkose challenge", alert: { reason: "captcha", detail: "Arkose challenge", at: Date.now() - 60000 } });
+    await openTab(page, base, "diagnostics");
+    await page.evaluate(() => {
+      window.__selfTests = 0;
+      const orig = chrome.runtime.sendMessage.bind(chrome.runtime);
+      chrome.runtime.sendMessage = (m, ...r) => (m && m.sx === "selfTest" ? (window.__selfTests++, Promise.resolve({ ok: false, aborted: true, error: "Stopped by Pause/Stop before the test finished", checks: [], at: Date.now() })) : orig(m, ...r));
+    });
+    await page.click("#diagLiveBtn");
+    const asked = await waitFor(page, () => !!document.querySelector(".modal-overlay .modal"), null, 4000);
+    const askText = asked ? await page.locator(".modal-overlay .modal").innerText() : "";
+    check(/stopped for safety/i.test(askText) && /Check your account on x\.com first/.test(askText), "after a captcha stop the live X test asks before loading X pages");
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(400);
+    check((await page.evaluate(() => window.__selfTests)) === 0, "cancelling that question runs no live test");
+    await setState(page, { status: "stopped", stopReason: "dom_changed", stopDetail: "No posts rendered", alert: { reason: "dom_changed", detail: "No posts rendered", at: Date.now() - 60000 } });
+    await page.waitForTimeout(300);
+    await page.click("#diagLiveBtn");
+    check(await waitFor(page, () => window.__selfTests === 1, null, 4000), "after an 'X page changed' stop the live X test runs without asking (the stop recommends it)");
+    await setState(page, { status: "paused", stopReason: null, stopDetail: "", alert: null });
     await setHandle(handle0);
   });
 

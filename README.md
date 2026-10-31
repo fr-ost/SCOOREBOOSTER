@@ -143,7 +143,8 @@ The estimator in Models & costs uses your own average token usage once you have 
 
 Limits use rolling windows (the last 24 hours / 7 days), so an active-hours window that crosses midnight
 never gets two daily limits in one session. A reply whose confirmation was unclear ("probably sent") counts
-toward every limit. Watch pages are never loaded more often than every 90 seconds.
+toward every limit. Watch pages are never loaded more often than every 90 seconds. After a failed watch load ScoreX
+waits 2-5 minutes before loading it again, also when you press Run a check now or approve a reply.
 
 **Human-like behaviour**: random check intervals, the post is opened and "read" for a few seconds (longer for
 longer posts), a small scroll, optional like, typing at 170-320 characters per minute in small chunks with

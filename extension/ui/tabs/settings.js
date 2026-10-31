@@ -9,7 +9,7 @@ import { PROVIDER_DEFS } from "../../lib/providerdefs.js";
 import * as history from "../../lib/history.js";
 import { sanitizeSettings } from "../../lib/store.js";
 import { num } from "../../lib/util.js";
-import { h, clear, fill, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, confirmFullAuto, hasOpenaiKey, modal, download, readFileText, stamp, toggleEl, xLink, badge, fmtCount, uidShort, renderTable, add, diagSquare, fmtAgo, fmtTime, fmtUsd, fmtDateTime, announce } from "../components.js";
+import { h, clear, fill, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, confirmFullAuto, hasOpenaiKey, isSafetyStop, modal, download, readFileText, stamp, toggleEl, xLink, badge, fmtCount, uidShort, renderTable, add, diagSquare, fmtAgo, fmtTime, fmtUsd, fmtDateTime, announce } from "../components.js";
 import { timeZones } from "./safety.js";
 
 const DATA_PARTS = [
@@ -210,6 +210,13 @@ function diagnosticsSection(ctx, { full = false } = {}) {
   }
   async function runLive() {
     if (!(ctx.settings.account && String(ctx.settings.account.handle || "").trim())) { toast("Set your X handle first (Your X account, below).", { type: "warn" }); return; }
+    // During a safety stop the test is what "X page changed" / "account not readable" ask you to run. After a captcha,
+    // warning, rate limit, logout or another account it would load X pages before you looked at your account: ask.
+    const st = ctx.state || {};
+    if (isSafetyStop(st) && st.stopReason && !["dom_changed", "account_unknown"].includes(st.stopReason)) {
+      const why = STOP_LABEL[st.stopReason] || st.stopReason;
+      if (!(await confirmDialog(`ScoreX stopped for safety (${why}). The live test opens 3 X pages in the X tab. Check your account on x.com first. Run the test anyway?`, { title: "Run the live X test now?", okLabel: "Run the test" }))) return;
+    }
     liveRunning = true; drawLive();
     announce("Live X test started. It takes about 30 seconds.");
     const r = await ctx.send("selfTest", {}, { raw: true, quiet: true, label: "Live X test" });
