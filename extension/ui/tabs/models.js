@@ -10,7 +10,7 @@ import * as history from "../../lib/history.js";
 import { num } from "../../lib/util.js";
 import { h, clear, section, sub, advanced, btn, busy, toast, icon, selectEl, labeled, confirmDialog, progressBar, maskKey, getPath, setPath, fmtUsd, fmtTokens, fmtNum, uidShort, badge, debounce, add, fill } from "../components.js";
 
-export const PRESET_LABEL = { high: "High quality", balanced: "Balanced", cheap: "Cheap" };
+export const PRESET_LABEL = { human: "Human (fast)", high: "High quality", balanced: "Balanced", cheap: "Cheap" };
 const effortOpts = EFFORTS.map((e) => [e, e.charAt(0).toUpperCase() + e.slice(1)]);
 const modelOpts = (s, withNone) => [...(withNone ? [["", "None"]] : []), ...s.models.map((m) => [m.id, `${m.label}${m.name ? " - " + m.name : " (no model name)"}`])];
 

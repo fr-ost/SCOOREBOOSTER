@@ -131,7 +131,7 @@ describe("Tone prompt and follow settings", () => {
   test("the Tone prompt is kept, trimmed, capped; empty means the default", () => {
     assert.equal(sanitizeSettings({ prompt: { tone: "  lowercase. blunt.  " } }).prompt.tone, "lowercase. blunt.");
     assert.equal(sanitizeSettings({ prompt: { tone: "" } }).prompt.tone, DEFAULT_TONE_PROMPT);
-    assert.equal(sanitizeSettings({ prompt: { tone: "x".repeat(5000) } }).prompt.tone.length, 2000);
+    assert.equal(sanitizeSettings({ prompt: { tone: "x".repeat(9000) } }).prompt.tone.length, 6000);
   });
 
   test("follow settings are clamped", () => {

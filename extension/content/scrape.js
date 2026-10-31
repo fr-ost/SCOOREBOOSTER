@@ -100,6 +100,10 @@
     const datetime = pl.time && pl.time.getAttribute("datetime");
     const links = textEl ? [...textEl.querySelectorAll("a[href]")].map((a) => a.getAttribute("href") || "").filter((h) => /^https?:\/\//.test(h) && !/^https?:\/\/(?:x|twitter)\.com\//.test(h)) : [];
     const repost = !!ctx && D.re("reposted").test(ctxText);
+    // The quoted post (its text and author), for the reply's context.
+    const quoteTextEl = D.qa("tweetText", article).find((el) => quoteContainer(el, article)) || null;
+    const quoteName = D.qa("tweetUserName", article).find((el) => quoteContainer(el, article));
+    const quoteHandle = ((D.text(quoteName).match(/@([A-Za-z0-9_]{1,15})(?![A-Za-z0-9_])/) || [])[1] || "");
     // On a repost the permalink belongs to the original author; keep both.
     return {
       id: pl.id,
@@ -117,10 +121,30 @@
       isQuote: D.qa("tweetUserName", article).length > 1,
       hasMedia: !!D.q("tweetPhoto", article),
       hasCard: !!D.q("cardWrapper", article),
+      quoted: quoteTextEl ? { author: quoteHandle, text: textWithEmoji(quoteTextEl).slice(0, 1000) } : null,
+      images: photos(article),
       links,
       liked: !!D.q("unlikeButton", article),
       metrics: metrics(article),
     };
+  }
+
+  // Up to 4 images of the post (photos and video stills on pbs.twimg.com, small size) with their alt text, so the
+  // model can react to what the post shows. X's placeholder alt "Image" counts as no description.
+  function photos(article) {
+    const out = [];
+    for (const box of D.qa("tweetPhoto", article)) {
+      for (const img of box.querySelectorAll("img[src]")) {
+        const src = img.getAttribute("src") || "";
+        if (!/^https:\/\/pbs\.twimg\.com\/(?:media|ext_tw_video_thumb|amplify_video_thumb|tweet_video_thumb)\//.test(src)) continue;
+        const url = /[?&]name=/.test(src) ? src.replace(/([?&]name=)[a-z0-9_]+/i, "$1small") : src;
+        if (out.some((x) => x.url === url)) continue;
+        const alt = String(img.getAttribute("alt") || "").trim();
+        out.push({ url, alt: /^image$/i.test(alt) ? "" : alt.slice(0, 300) });
+        if (out.length >= 4) return out;
+      }
+    }
+    return out;
   }
 
   // X renders emoji as <img alt="🔥"> inside the text; keep them so text comparisons work.

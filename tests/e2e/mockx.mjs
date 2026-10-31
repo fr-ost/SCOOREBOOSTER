@@ -219,7 +219,7 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
     (w) => `How are you measuring ${w} right now? Retention curves usually tell the real story before revenue does.`,
     (w) => `Counterpoint on ${w}: small teams win when the feedback loop is daily, not quarterly.`,
     (w) => `Seen this play out with ${w} twice. The second time we shipped half the scope and doubled usage.`,
-    (w) => `Curious edge case with ${w}: what breaks first when usage triples overnight?`,
+    (w) => `ok but what breaks first with ${w} when usage triples overnight?`,
     (w) => `Strong take. ${w} only works if onboarding is under a minute, otherwise churn eats it.`,
     (w) => `Underrated angle on ${w}: pricing pages convert better when they show the boring limits upfront.`,
     (w) => `Would love the numbers behind ${w}. Most teams overestimate how many users read past line one.`,
@@ -228,7 +228,8 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
   function openaiAnswer(body) {
     const instr = String(body.instructions || "");
     const input = JSON.stringify(body.input || "");
-    const isCheck = /strict editor/i.test(instr);
+    // The editor check asks for the scorex_check JSON schema; a reply comes back as plain text.
+    const isCheck = !!(body.text && body.text.format && body.text.format.name === "scorex_check") || /strict editor/i.test(instr);
     const cfg = M.openai;
     cfg.calls.push({ model: body.model, isCheck, effort: body.reasoning && body.reasoning.effort, body });
     if (cfg.failFirst > 0) { cfg.failFirst--; return { status: 429, json: { error: { message: "Rate limit reached for requests", type: "requests", param: null, code: "rate_limit_exceeded" } } }; }
@@ -236,8 +237,8 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
     if (cfg.mode === "quota") return { status: 429, json: { error: { message: "You exceeded your current quota", type: "insufficient_quota", param: null, code: "insufficient_quota" } } };
     if (cfg.mode === "noverbosity" && body.text && body.text.verbosity) return { status: 400, json: { error: { message: "Unsupported parameter: 'text.verbosity'", type: "invalid_request_error", param: "text.verbosity", code: "unsupported_parameter" } } };
     let text;
-    if (isCheck) text = JSON.stringify({ pass: cfg.checkPass, generic: !cfg.checkPass, off_topic: false, adds_value: cfg.checkPass, same_language: true, issue: cfg.checkPass ? "" : "generic" });
-    else if (cfg.mode === "skip") text = JSON.stringify({ skip: true, skip_reason: "political", comment: "" });
+    if (isCheck) text = JSON.stringify({ pass: cfg.checkPass, generic: !cfg.checkPass, off_topic: false, same_language: true, bot_like: false, issue: cfg.checkPass ? "" : "generic" });
+    else if (cfg.mode === "skip") text = "SKIP: political";
     else {
       let postText = "this";
       try {
@@ -248,7 +249,7 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
       const words = postText.split(/\s+/).filter((x) => x.length > 3);
       const w = (words[1] || words[0] || "this").toLowerCase().replace(/[^a-z]/g, "") || "this";
       const comment = cfg.comments && cfg.comments.length ? cfg.comments.shift() : TEMPLATES[tpl++ % TEMPLATES.length](w);
-      text = JSON.stringify({ skip: false, skip_reason: "", comment });
+      text = comment;
     }
     const reasoning = body.reasoning ? (body.reasoning.effort === "high" ? 900 : body.reasoning.effort === "medium" ? 400 : 120) : 0;
     return { status: 200, json: {

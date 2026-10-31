@@ -29,9 +29,12 @@ extension/
     reach.js              reply reach monitor (median views now vs before, alert + chosen action)
     conversations.js      conversation alerts: authors who answered your replies (mentions page)
     filters.js            post skip rules (ads, link-only, political, giveaway, gm, language, age)
-    quality.js            comment sanitising + rule checks + similarity vs last 50 comments
+    quality.js            comment sanitising, final touches (humanize), rule checks (bot phrases, openers,
+                          links, length) + similarity vs last 50 comments
     openai.js             raw Responses API client, usage extraction, error classification
-    generator.js          prompt building, preset/fallback chain, quality check, regeneration
+    voices.js             the UniqueFarm reply voice: system prompt, default voice, voice presets, bot phrases
+    generator.js          prompt building (voice + per-reply knobs + greeting rule), plain-text replies,
+                          preset/fallback chain, editor check, regeneration
     safety.js             ramp limits, active hours, gaps/breaks, per-target caps, page-load budget, adaptive
                           watch cadence, risk report (pure)
     tabs.js               pinned X worker tab, navigation (+ X page-load ledger by purpose), content-script

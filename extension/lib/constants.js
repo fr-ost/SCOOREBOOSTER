@@ -184,8 +184,8 @@ export const HARD = Object.freeze({
   minCheckIntervalSec: 90,
 });
 
-export const BUILTIN_TONES = Object.freeze(["witty", "insightful", "bold", "friendly", "expert"]);
+export const BUILTIN_TONES = Object.freeze(["casual", "delta", "chill", "sharp", "question", "witty", "insightful", "bold", "friendly", "expert"]);
 
 export const EFFORTS = Object.freeze(["low", "medium", "high"]);
 
-export const PRESET_KEYS = Object.freeze(["high", "balanced", "cheap"]);
+export const PRESET_KEYS = Object.freeze(["human", "high", "balanced", "cheap"]);

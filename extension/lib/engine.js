@@ -739,6 +739,9 @@ function postFields(p, t) {
     target: p.author, targetName: p.authorName || t.name || "", group: t.group, tier: t.tier, catchUp: !!p.catchUp,
     postId: p.id, postUrl: p.url, postText: truncate(p.text, 1200), postLang: p.lang || "", postCreatedAt: p.createdAt || null,
     postMetrics: p.metrics || null, postHasMedia: !!p.hasMedia, postIsQuote: !!p.isQuote,
+    // Context the reply was written from (kept for Regenerate): the quoted post and the post's images.
+    postQuote: p.quoted && p.quoted.text ? { author: truncate(String(p.quoted.author || ""), 40), text: truncate(p.quoted.text, 600) } : null,
+    postImages: Array.isArray(p.images) ? p.images.filter((i) => i && typeof i.url === "string").slice(0, 4).map((i) => ({ url: i.url, alt: truncate(String(i.alt || ""), 300) })) : [],
   };
 }
 
@@ -1035,7 +1038,7 @@ async function reviewActionCore({ id, action, text }) {
     if (!secrets.openaiKey) return { ok: false, error: "Add your OpenAI API key first" };
     if (budgetBlocks(settings, await getSpend(), rec.preset || "balanced")) return { ok: false, error: "Monthly OpenAI budget reached - raise it in Models & Costs to regenerate" };
     const t = targets[rec.target] || { handle: rec.target, group: rec.group, tier: rec.tier, name: rec.targetName, recentPosts: [], profile: null, tone: "", preset: "" };
-    const post = { id: rec.postId, url: rec.postUrl, author: rec.target, authorName: rec.targetName, text: rec.postText, lang: rec.postLang, createdAt: rec.postCreatedAt, metrics: rec.postMetrics, hasMedia: rec.postHasMedia, isQuote: rec.postIsQuote };
+    const post = { id: rec.postId, url: rec.postUrl, author: rec.target, authorName: rec.targetName, text: rec.postText, lang: rec.postLang, createdAt: rec.postCreatedAt, metrics: rec.postMetrics, hasMedia: rec.postHasMedia, isQuote: rec.postIsQuote, quoted: rec.postQuote || null, images: rec.postImages || [] };
     const tone = rec.tone ? effectiveTone(t, settings, rec.tone) : effectiveTone(t, settings);
     const previous = [rec.comment, ...(await recentComments(rec.id))].filter(Boolean);
     const g = await generate({

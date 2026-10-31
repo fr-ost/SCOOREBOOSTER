@@ -250,16 +250,18 @@ describe("targets.js", () => {
       assert.equal(tg.toneText("", s), s.prompt.tone);
       assert.equal(tg.toneText("main", s), s.prompt.tone);
       assert.equal(tg.effectiveTone({ group: "Z", tone: "" }, s).key, "main");
-      assert.deepEqual(tg.allToneKeys(s), ["witty", "insightful", "bold", "friendly", "expert", "custom:dry"]);
+      assert.deepEqual(tg.allToneKeys(s), ["casual", "delta", "chill", "sharp", "question", "witty", "insightful", "bold", "friendly", "expert", "custom:dry"]);
     });
     test("effectivePreset: target override > tier preset (accounts you comment on never follow you)", () => {
-      assert.equal(tg.effectivePreset({ group: "A", tier: 1, preset: "" }, settings), "high");
-      assert.equal(tg.effectivePreset({ group: "A", tier: 2, preset: "" }, settings), "balanced");
-      assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "" }, settings), "high");
-      assert.equal(tg.effectivePreset({ group: "B", tier: 2, preset: "" }, settings), "balanced");
+      // Default tier presets: the Human preset (UniqueFarm style) for both tiers.
+      assert.equal(tg.effectivePreset({ group: "A", tier: 1, preset: "" }, settings), "human");
+      assert.equal(tg.effectivePreset({ group: "A", tier: 2, preset: "" }, settings), "human");
+      assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "" }, settings), "human");
+      assert.equal(tg.effectivePreset({ group: "B", tier: 2, preset: "" }, settings), "human");
       assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "cheap" }, settings), "cheap");
-      assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "bogus" }, settings), "high");
-      assert.equal(tg.effectivePreset({ group: "C", tier: 9, preset: "" }, settings), "balanced");
+      assert.equal(tg.effectivePreset({ group: "B", tier: 1, preset: "bogus" }, settings), "human");
+      assert.equal(tg.effectivePreset({ group: "C", tier: 9, preset: "" }, settings), "human");
+      assert.equal(tg.effectivePreset({ tier: 1 }, sanitizeSettings({ presetMatrix: { B1: "high", B2: "balanced" }, genRev: 1 })), "high");
       assert.equal(tg.effectivePreset({ tier: 1 }, sanitizeSettings({ presetMatrix: { B1: "cheap" } })), "cheap");
     });
   });

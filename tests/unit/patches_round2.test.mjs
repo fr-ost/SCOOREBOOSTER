@@ -154,7 +154,7 @@ describe("cross-module fixes (round 2)", () => {
     };
     await patchState({ lastWatchAt: 0, nextCommentAt: 0 });
     await engine.tick("alarm");
-    const gen = calls.find((b) => /comment/.test(JSON.stringify((b.text && b.text.format && b.text.format.schema) || {})) && !/pass/.test(JSON.stringify((b.text && b.text.format && b.text.format.schema) || {})));
+    const gen = calls.find((b) => !(b.text && b.text.format && b.text.format.name === "scorex_check"));
     assert.ok(gen, "a generation call was made");
     const input = JSON.stringify(gen.input);
     assert.match(input, /owner_edits/);
@@ -175,7 +175,7 @@ describe("cross-module fixes (round 2)", () => {
     };
     await patchState({ lastWatchAt: 0, nextCommentAt: 0 });
     await engine.tick("alarm");
-    const gen2 = calls.find((b) => /comment/.test(JSON.stringify((b.text && b.text.format && b.text.format.schema) || {})) && !/pass/.test(JSON.stringify((b.text && b.text.format && b.text.format.schema) || {})));
+    const gen2 = calls.find((b) => !(b.text && b.text.format && b.text.format.name === "scorex_check"));
     if (gen2) assert.doesNotMatch(JSON.stringify(gen2.input), /owner_edits/);
   });
 });

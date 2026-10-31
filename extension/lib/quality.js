@@ -3,6 +3,13 @@
 
 import { words, ngrams, jaccard, countEmoji, normalizeText } from "./util.js";
 import { HARD } from "./constants.js";
+import { BANNED_EMOJI_RE, BOT_PHRASES, NEVER_START } from "./voices.js";
+
+const esc = (x) => x.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// Bot / marketer / assistant phrases (lib/voices.js), matched as whole words anywhere in the reply.
+const BOT_RES = BOT_PHRASES.map((p) => [p, new RegExp("(?:^|[^\\p{L}\\p{N}])" + esc(p).replace(/'/g, "['’]") + "(?=$|[^\\p{L}\\p{N}])", "iu")]);
+// Openers a reply must never start with ("Sounds", "Love", "I think"...), as a whole word at the start.
+const NEVER_RES = NEVER_START.map((p) => [p, new RegExp("^" + esc(p) + "(?=$|[^\\p{L}\\p{N}])", "iu")]);
 
 // Whole-comment or opener phrases that make a reply generic.
 export const GENERIC_PHRASES = [
@@ -156,7 +163,55 @@ export function similarity(text, previous) {
   return { max, maxText, sharedPhrase, sameOpener };
 }
 
-// Rule check. ctx: { postText, postLang, previous: string[], settings }
+// Accidental repeats some models produce ("ok this is big ok this is big", the same sentence twice) collapse to one.
+// Dots inside numbers (2.7M) and abbreviations (u.s.) are protected from the sentence split.
+export function collapseRepeats(text) {
+  let s = String(text || "").replace(/\s+/g, " ").trim();
+  if (!s) return s;
+  const PH = "\u0001";
+  s = s.replace(/(\d)\.(\d)/g, "$1" + PH + "$2").replace(/([a-z])\.([a-z])\.?/gi, "$1" + PH + "$2" + PH);
+  const onePass = (input) => {
+    for (let i = Math.floor(input.length / 2); i >= 8; i--) {
+      const a = input.slice(0, i).trim(), b = input.slice(i).trim();
+      if (a && b && a.toLowerCase() === b.toLowerCase()) return a;
+    }
+    // Sentences keep their whole punctuation run ("...", "?!"); text without a repeated sentence is left as it is.
+    const parts = input.match(/[^.!?]+[.!?]*/g) || [input];
+    const out = [];
+    let dropped = false;
+    for (const part of parts) {
+      const clean = part.trim();
+      if (!clean) continue;
+      const norm = clean.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      const prev = out.length ? out[out.length - 1].toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim() : "";
+      if (norm && norm === prev) { dropped = true; continue; }
+      out.push(clean);
+    }
+    return dropped ? out.join(" ").replace(/\s+/g, " ").trim() : input;
+  };
+  for (let i = 0; i < 10; i++) {
+    const next = onePass(s);
+    if (next === s) break;
+    s = next;
+  }
+  return s.replace(new RegExp(PH, "g"), ".");
+}
+
+// Final touches on a sanitised reply: bot-energy emojis go, a reply never starts with stray punctuation or ends on a
+// comma, a lone final period is dropped unless this reply's knobs kept it (real X replies rarely end with one; "...",
+// "?" and "!" stay), and accidental repeats collapse.
+export function humanize(text, { keepPeriod = false } = {}) {
+  let s = String(text || "").replace(BANNED_EMOJI_RE, "");
+  s = s.replace(/[ \t]{2,}/g, " ").replace(/[ \t]+([.,!?])/g, "$1").trim();
+  s = s.replace(/^[,.:;!?]+\s*/, "").trim();
+  s = collapseRepeats(s);
+  s = s.replace(/\s*,\s*$/, "").trim();
+  if (!keepPeriod && /[^.]\.$/.test(s)) s = s.slice(0, -1).trim();
+  return s;
+}
+
+// Rule check. ctx: { postText, postLang, previous: string[], settings, greeting: "pure" | "opens" | "" }
+// A reply to a pure greeting post ("gm") is meant to be tiny ("gm fam"): no minimum length, no generic check.
 // Returns { pass, reasons: [{code, text}], similarity }
 export function ruleCheck(text, ctx = {}) {
   const reasons = [];
@@ -168,7 +223,8 @@ export function ruleCheck(text, ctx = {}) {
 
   if (!t) { add("empty", "Empty comment"); return { pass: false, reasons, similarity: null }; }
   if (/^skip$/i.test(t)) { add("model_skip", "Model chose to skip this post"); return { pass: false, reasons, similarity: null }; }
-  if (t.length < minChars) add("too_short", `Shorter than ${minChars} characters`);
+  const greeting = ctx.greeting === "pure";
+  if (t.length < minChars && !greeting) add("too_short", `Shorter than ${minChars} characters`);
   if (t.length > maxChars) add("too_long", `Longer than ${maxChars} characters`);
   else if (weightedLength(t) > HARD.maxCommentChars) add("too_long", `Longer than X's ${HARD.maxCommentChars}-character limit (CJK and emoji count double)`);
   if (hasLink(t)) add("link", "Contains a link");
@@ -177,11 +233,17 @@ export function ruleCheck(text, ctx = {}) {
   if (countEmoji(t) > 1) add("emoji", "More than one emoji");
   if (DASH_RE.test(t)) add("em_dash", "Contains an em dash");
   if (AI_SELF_RE.test(t)) add("ai_mention", "Mentions AI / reveals it was generated");
-  if (isGeneric(t)) add("generic", "Generic reply");
-  else {
-    const go = genericOpener(t);
-    if (go) add("generic_opener", `Starts with a generic opener ("${go}")`);
+  if (!greeting) {
+    if (isGeneric(t)) add("generic", "Generic reply");
+    else {
+      const go = genericOpener(t);
+      const never = go ? null : NEVER_RES.find(([, re]) => re.test(t));
+      if (go) add("generic_opener", `Starts with a generic opener ("${go}")`);
+      else if (never) add("generic_opener", `Never start with "${never[0]}"`);
+    }
   }
+  const bot = BOT_RES.find(([, re]) => re.test(t));
+  if (bot) add("bot_phrase", `Uses the bot phrase "${bot[0]}"`);
   if (ctx.postText) {
     const echo = jaccard(ngrams(words(t), 3), ngrams(words(ctx.postText), 3));
     if (echo > 0.5) add("echo", "Mostly repeats the post");

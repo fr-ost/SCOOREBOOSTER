@@ -4,7 +4,8 @@
 // HistoryRecord {
 //   id, createdAt, updatedAt, postedAt, scheduledFor, status, reason, mode,
 //   target, targetName, group, tier,
-//   postId, postUrl, postText, postLang, postCreatedAt, postMetrics, postHasMedia, postIsQuote,
+//   postId, postUrl, postText, postLang, postCreatedAt, postMetrics, postHasMedia, postIsQuote, postQuote { author, text },
+//   postImages [{ url, alt }],
 //   tone, toneText, preset, modelId, modelName, effort, fallbackUsed, abArm, abExplore,
 //   comment, originalComment, edited, attempts, quality: { pass, reasons, modelVerdict },
 //   calls: [{ kind, modelId, modelName, effort, usage, cost, ms, ok, error }], tokens, cost,

@@ -110,9 +110,10 @@ export function mockOpenAI(comment = "Deferring company size is underrated, most
   globalThis.fetch = async (url, init) => {
     const body = JSON.parse(init.body);
     calls.push(body);
-    const isCheck = /pass/.test(JSON.stringify((body.text && body.text.format && body.text.format.schema) || {}));
-    const text = isCheck ? JSON.stringify({ pass: true, generic: false, off_topic: false, adds_value: true, same_language: true, issue: "" })
-      : JSON.stringify({ comment: typeof comment === "function" ? comment(body) : comment, skip: false, skip_reason: "" });
+    // The editor check answers JSON (scorex_check); a reply is plain text.
+    const isCheck = !!(body.text && body.text.format && body.text.format.name === "scorex_check");
+    const text = isCheck ? JSON.stringify({ pass: true, generic: false, off_topic: false, same_language: true, bot_like: false, issue: "" })
+      : typeof comment === "function" ? comment(body) : comment;
     const json = { output: [{ type: "message", content: [{ type: "output_text", text }] }], usage: { input_tokens: 900, output_tokens: 60 } };
     return { ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(json), json: async () => json };
   };

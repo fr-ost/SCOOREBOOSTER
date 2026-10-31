@@ -24,8 +24,11 @@ describe("store.js", () => {
       assert.equal(s.safety.accountsPerDay, 100);
       assert.deepEqual(s.safety.like, { enabled: true });
       assert.equal(s.safety.activeHours.enabled, false);
-      assert.equal(s.models.length, 12, "GPT-6 and GPT-5 families");
+      assert.equal(s.models.length, 16, "GPT-6 and GPT-5 families plus the non-reasoning Human models");
       assert.equal(s.presets.high.modelId, "m_best");
+      assert.equal(s.presets.human.modelId, "m_4o_mini");
+      assert.equal(s.models.find((m) => m.id === "m_4o_mini").reasoning, false);
+      assert.deepEqual([s.presetMatrix.B1, s.presetMatrix.B2], ["human", "human"]);
       assert.equal(sanitizeSettings(null).timezone, "Asia/Dhaka");
       assert.equal(sanitizeSettings(undefined).account.handle, "0x_nation");
     });
@@ -135,14 +138,15 @@ describe("store.js", () => {
 
     test("presets / fallback referencing removed models are repaired", () => {
       const s = sanitizeSettings({
-        modelsRev: 2, // a user who already saw the current model list and deleted the rest
+        modelsRev: 3, // a user who already saw the current model list and deleted the rest
         models: [
           { id: "a", name: "model-a", prices: { input: 1, output: 2 } },
           { id: "b", name: "model-b", prices: { input: 3, output: 4 } },
         ],
       });
       const ids = s.models.map((m) => m.id);
-      for (const k of ["high", "balanced", "cheap"]) assert.ok(ids.includes(s.presets[k].modelId), k);
+      for (const k of ["human", "high", "balanced", "cheap"]) assert.ok(ids.includes(s.presets[k].modelId), k);
+      assert.equal(s.presets.human.modelId, "a");
       assert.equal(s.presets.high.modelId, "b");
       assert.equal(s.presets.balanced.modelId, "b");
       assert.equal(s.presets.cheap.modelId, "a");

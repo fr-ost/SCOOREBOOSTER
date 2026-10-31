@@ -7,7 +7,7 @@
 // `addedIn` = the model-list revision that introduced a model. Existing installs receive the models of a
 // newer revision once (lib/store.js sanitizeSettings), without bringing back models you deleted.
 
-export const MODELS_REV = 2;
+export const MODELS_REV = 3;
 
 const m = (id, label, name, maxOutputTokens, input, cachedInput, output, addedIn = 1) => ({
   id, label, name, reasoning: true, maxOutputTokens, prices: { input, cachedInput, output, cacheWrite: input }, addedIn,
@@ -28,9 +28,16 @@ export const DEFAULT_MODELS = [
   m("m_g54_mini", "GPT-5.4 mini", "gpt-5.4-mini", 2500, 0.75, 0.075, 4.5, 2),
   m("m_g54", "GPT-5.4", "gpt-5.4", 4000, 2.5, 0.25, 15.0, 2),
   m("m_g55", "GPT-5.5", "gpt-5.5", 4000, 5.0, 0.5, 30.0, 2),
+  // Non-reasoning chat models (the Human preset): they take a temperature, write casual replies without
+  // over-polishing them and answer fast. gpt-4o-mini is the UniqueFarm default.
+  { ...m("m_4o_mini", "GPT-4o mini (human)", "gpt-4o-mini", 400, 0.15, 0.075, 0.6, 3), reasoning: false },
+  { ...m("m_4o", "GPT-4o", "gpt-4o", 400, 2.5, 1.25, 10.0, 3), reasoning: false },
+  { ...m("m_41_mini", "GPT-4.1 mini", "gpt-4.1-mini", 400, 0.4, 0.1, 1.6, 3), reasoning: false },
+  { ...m("m_41", "GPT-4.1", "gpt-4.1", 400, 2.0, 0.5, 8.0, 3), reasoning: false },
 ];
 
 export const DEFAULT_PRESETS = {
+  human: { modelId: "m_4o_mini", effort: "low" }, // UniqueFarm style: casual, fast, cheap (temperature from Tone settings)
   high: { modelId: "m_best", effort: "high" },
   balanced: { modelId: "m_balanced", effort: "medium" },
   cheap: { modelId: "m_cheap", effort: "low" },

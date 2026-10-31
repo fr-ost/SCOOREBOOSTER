@@ -227,7 +227,7 @@ describe("openai.js", () => {
     });
 
     test("unknown unsupported parameter is returned, not retried", async () => {
-      const f = fakeFetch(respond(400, errBody("unsupported_parameter", "x", "temperature")));
+      const f = fakeFetch(respond(400, errBody("unsupported_parameter", "x", "top_p")));
       const r = await callModel(args({ fetchImpl: f }));
       assert.equal(r.error.kind, "unsupported");
       assert.equal(f.calls.length, 1);

@@ -48,9 +48,10 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
    [Follow tracking](#follow-tracking)). Or use **Discover**: the smart followers of big accounts (from the score
    sites you connect), followers / following of a big account, people search, or accounts that several smart
    accounts follow. Candidates are ranked and bot-filtered; you pick which to add.
-5. **Tone > Tone prompt**: describe in your own words how your replies should sound (voice, attitude, wording,
-   length, casing). It is sent with every comment. A sensible default is filled in. **Try it** writes a sample
-   reply for any post text you paste (one real generation, never posted).
+5. **Tone > Tone prompt**: your voice, in your own words (attitude, wording, length, casing, words to avoid,
+   example replies). It is the main authority on how replies sound. The default is the **UniqueFarm voice**
+   (a real person scrolling X who reacts to one specific detail). **Try it** writes a sample reply for any post
+   text you paste (one real generation, never posted).
 6. **Models & costs > Monthly budget**: set a limit (for example $10). ScoreX stops when it is reached.
 7. Press **Start** (engine bar or popup). It starts in **Review mode**; switch to **Full auto** on Today whenever
    you want (ScoreX asks you to confirm). The **Today** screen shows the setup steps that are still open.
@@ -64,8 +65,10 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
      -> skip rules (ads, link-only, political/controversial, giveaways, "gm", language...)
      -> only targets that don't follow you (new targets are checked first)
      -> limits (200 per 24 h, 2 per account per day, 100 accounts per day, budget)
-     -> OpenAI: post + bio + 2-3 recent posts + your Tone prompt -> reply (JSON)
-     -> rule check + quality model check (generic? off-topic? repeated vs your last 50?) -> regenerate once or skip
+     -> OpenAI: the post (+ quoted post and images) + your voice + this reply's random length, ending, casing
+        and point of view -> one plain-text reply (see "How replies are written")
+     -> final touches + rule check (bot phrases, banned openers, links, repeats vs your last 50) + a light editor
+        check (generic? off-topic? bot-like?) -> rewrite with the reason (up to 3 tries) or skip
    Review mode: reply waits in Review (edit / approve / regenerate / skip)
    Full auto:   reply is queued with a human delay
      -> open the post, "read" it, scroll, optional like, type at a human speed, verify, submit, confirm
@@ -102,13 +105,18 @@ scores**, **Add as Tier 1 / 2**, **Smart followers** and **Blacklist**.
 
 ### Models and prices
 Model names are free text: when OpenAI releases a new model, type its name into a model row (or add a row) and
-update its prices. Presets use the GPT-6 family by default (late October 2026): `gpt-6-luna` (fast/cheap),
+update its prices. The **Human** preset (the default for both tiers) uses `gpt-4o-mini`, a fast non-reasoning model
+at temperature 1.0, as UniqueFarm does: it writes casual replies without over-polishing them. `gpt-4o`,
+`gpt-4.1-mini` and `gpt-4.1` are in the list too (USD per 1M tokens input / output: 0.15 / 0.60, 2.50 / 10,
+0.40 / 1.60, 2 / 8). The other presets use the GPT-6 family (late October 2026): `gpt-6-luna` (fast/cheap),
 `gpt-6.1-terra` (balanced), `gpt-6.1-sol` (high quality). The **GPT-5 family** is in the list too, ready to
 pick for any preset: `gpt-5-nano`, `gpt-5-mini`, `gpt-5`, `gpt-5.1`, `gpt-5.2`, `gpt-5.4-nano`,
 `gpt-5.4-mini`, `gpt-5.4`, `gpt-5.5` (USD per 1M tokens input / output: 0.05 / 0.40, 0.25 / 2, 1.25 / 10,
 1.25 / 10, 1.75 / 14, 0.20 / 1.25, 0.75 / 4.50, 2.50 / 15, 5 / 30). **Check the prices on
 openai.com/api/pricing and update them**; the cost numbers are only as good as this table. Use **Test** next to
-a model to confirm your key can use it. Defaults per tier: tier 1 High quality, tier 2 Balanced.
+a model to confirm your key can use it. Defaults per tier: Human for both (Models & costs > Preset per tier).
+Reasoning models get an extra "don't over-polish, keep it raw" instruction; the temperature (Tone > Creativity)
+only applies to the non-reasoning models.
 If a model errors, times out or hits a rate limit, the fallback is used once: Balanced at low effort, then
 GPT-5 mini as the last resort, so one renamed or unavailable model never stops comment generation.
 
@@ -119,11 +127,44 @@ not counted twice. Rough per-reply costs with the default prices, including the 
 
 | Preset | Model / effort | Per reply | 30 replies/day, per month |
 |---|---|---|---|
-| Cheap | gpt-6-luna / low | ~$0.0007 | ~$0.60 |
-| Balanced | gpt-6.1-terra / medium | ~$0.008 | ~$7 |
-| High quality | gpt-6.1-sol / high | ~$0.036 | ~$32 |
+| Human (default) | gpt-4o-mini / temperature 1.0 | ~$0.0005 | ~$0.45 |
+| Cheap | gpt-6-luna / low | ~$0.0008 | ~$0.70 |
+| Balanced | gpt-6.1-terra / medium | ~$0.009 | ~$8 |
+| High quality | gpt-6.1-sol / high | ~$0.038 | ~$34 |
+
+Images add about 85 input tokens each (low detail, up to 4 per post).
 
 The estimator in Models & costs uses your own average token usage once you have history.
+
+### How replies are written
+
+The reply generator is the **UniqueFarm** algorithm (ported with its owner's permission):
+
+* **A human system prompt**: write like a real person scrolling X on their phone, not an assistant, marketer or AI;
+  read the whole post (text, image, quoted post) and react to what it actually says, never a line that fits any
+  post. The answer is the reply text only.
+* **Your voice is the authority**: your Tone prompt (default: the UniqueFarm voice) is sent as the main block.
+  Built-in voice presets you can pick per target or test against it: **Casual** (JIBEX), **Delta**, **Chill**,
+  **Sharp** and **Question** (one genuine question).
+* **Per-reply knobs** drawn at random every time, so replies never sound the same: length (20% 6-10 words, 50%
+  11-18, 30% 16-24 in one block), an emoji about 15% of the time (only natural ones), no final period about 82% of
+  the time, a different point of view (a casual follower, a skeptical lurker, someone who knows the topic...) and
+  lowercase or capital first letter.
+* **Greetings**: a pure "gm" / "gn" / "wagmi" post gets a 1-4 word greeting back; a real post that opens with "gm"
+  gets the greeting mirrored, then a reply to its content. (The gm skip rule in Safety is on by default; turn it
+  off to reply to greeting posts.)
+* **Context**: the quoted post and up to 4 images (low detail, with their alt text) are part of the input
+  (Tone > Let the model see post images).
+* **Never**: bot phrases ("sounds like", "great point", "game changer", "curious to see", "love this"...), openers
+  like Sounds / Looks / Wow / Great / I think, links, hashtags, @mentions, dashes, the rocket / sparkles / target
+  emojis. A reply that slips is rewritten with the reason (up to 3 tries per post); bot emojis, a trailing comma and accidental
+  repeats are cleaned up.
+* **Skips** are rare: the model only answers SKIP for political, tragic, NSFW, hateful or scam posts (the skip
+  rules in Safety catch most of those before any call). The editor check is light: it only fails replies that
+  are generic, off-topic, in the wrong language or read like a bot.
+
+Upgrading from 1.2: if your Tone prompt and tier presets were still the old defaults, they move to the UniqueFarm
+voice and the Human preset once. Anything you had changed stays as it was.
 
 ## 5. Safety (main account)
 
@@ -360,8 +401,9 @@ wording to the `text` patterns (captcha, rate limit, "Your post was sent", ...).
 
 ## 11. Privacy
 
-Everything stays in your browser (`chrome.storage.local` and IndexedDB). The only outbound requests are to
-`api.openai.com` and, only for the score sites you turn on, `api.sorsa.io`, `twitterscore.io`,
+Everything stays in your browser (`chrome.storage.local` and IndexedDB). With "Let the model see post images" on
+(the default), the public X image links of the post you reply to are sent to OpenAI, which downloads them itself.
+The only outbound requests are to `api.openai.com` and, only for the score sites you turn on, `api.sorsa.io`, `twitterscore.io`,
 `api.ethos.network` and `api.discover.getmoni.io` (they receive X handles, nothing else). There is no telemetry,
 no remote code and no X API. API keys are never exported, logged or sent to x.com. Permissions: `storage`,
 `alarms` and `notifications`, plus host access to `x.com` and `api.openai.com`; the score sites and `scripting`

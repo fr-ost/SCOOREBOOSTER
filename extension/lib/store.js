@@ -11,6 +11,7 @@ import { K, STATUS, MODE, HARD, SCHEMA_VERSION } from "./constants.js";
 import { deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact, parseHandleList } from "./util.js";
 import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK, MODELS_REV } from "./models.js";
 import { PROVIDER_DEFS } from "./providerdefs.js";
+import { DEFAULT_VOICE, VOICE_PRESETS } from "./voices.js";
 import { db, STORES } from "./db.js";
 
 const area = () => globalThis.chrome.storage.local;
@@ -55,6 +56,8 @@ export function resetCount() { return resets; }
 // ---------- defaults ----------
 
 export const DEFAULT_TONES = {
+  // Voice presets from UniqueFarm (lib/voices.js), then the original ScoreX tones.
+  ...Object.fromEntries(Object.entries(VOICE_PRESETS).map(([k, v]) => [k, v.text])),
   witty: "Witty and light. A clever angle or a playful twist, never a joke at their expense.",
   insightful: "Insightful and sharp. Add one concrete new point, data angle, implication or counterpoint they did not mention.",
   bold: "Bold and confident. Take a clear stance or a contrarian-but-reasonable angle in few words.",
@@ -62,8 +65,11 @@ export const DEFAULT_TONES = {
   expert: "Expert and precise. Show domain knowledge with one specific detail, mechanism or example.",
 };
 
-// The default Tone prompt (Tone & Prompts tab). Sent with every comment unless a target has its own tone.
-export const DEFAULT_TONE_PROMPT = "Insightful and sharp, like a smart builder who knows the space. Add one concrete point, data angle, implication or counterpoint the author did not mention. Casual and confident, never sycophantic, never salesy.";
+// The default Tone prompt (Tone screen): the UniqueFarm default voice. Sent with every comment unless a target has
+// its own tone. Settings that still hold the old default are moved to it once (genRev 1).
+export const DEFAULT_TONE_PROMPT = DEFAULT_VOICE;
+export const LEGACY_DEFAULT_TONE_PROMPT = "Insightful and sharp, like a smart builder who knows the space. Add one concrete point, data angle, implication or counterpoint the author did not mention. Casual and confident, never sycophantic, never salesy.";
+export const TONE_MAX = 6000; // characters of a Tone prompt / tone text
 
 // Whole words / phrases (see filters.js). No ambiguous single words for a crypto account: "woke up", "DAO voting",
 // "vote for proposal 12", "leader election", "Christian" (a name), "Bitcoin is a religion", "Riot Platforms".
@@ -115,7 +121,7 @@ export const DEFAULT_SETTINGS = {
   },
   // Model preset per tier. Only accounts that don't follow you are commented on, so B1 / B2 are used
   // (A1 / A2 are kept for old exports).
-  presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" },
+  presetMatrix: { A1: "balanced", A2: "cheap", B1: "human", B2: "human" },
 
   models: DEFAULT_MODELS,
   modelsRev: MODELS_REV, // revision of the built-in model list these settings have seen (lib/models.js)
@@ -139,6 +145,8 @@ export const DEFAULT_SETTINGS = {
     autoStyleFromHistory: true,
     extraRules: "",
     learnFromEdits: true, // your recent review edits (draft -> what you posted) are shown to the model as voice examples
+    useImages: true, // the post's images go to the model (low detail) so it reacts to what it sees
+    temperature: 1.0, // creativity for non-reasoning models (Human preset); reasoning models ignore it
   },
 
   // Follow tracking: only accounts that don't follow you are commented on.
@@ -161,6 +169,7 @@ export const DEFAULT_SETTINGS = {
   budget: { monthlyUsd: 0, warnAtPct: 80 }, // 0 = no limit
 
   safetyRev: 2, // revision of the safety defaults these settings have seen
+  genRev: 1, // revision of the reply-generation defaults these settings have seen (1 = UniqueFarm voice + Human preset)
   safety: {
     ramp: [200, 200, 200], // daily comment limit: week 1, week 2, week 3+ (each clamped to HARD.dailyComments)
     gapMin: { min: 2, max: 6 }, // random minutes between comments
@@ -400,7 +409,7 @@ export function sanitizeSettings(raw) {
   // Custom tones: a list of { id, name, text }; anything else would break tone lookups (and with them generation).
   s.customTones = (Array.isArray(s.customTones) ? s.customTones : [])
     .filter((c) => isPlainObject(c) && c.id != null && String(c.id).trim())
-    .map((c) => ({ ...c, id: String(c.id).trim().slice(0, 60), name: String(c.name || "").slice(0, 80), text: String(c.text || "").slice(0, 2000) }));
+    .map((c) => ({ ...c, id: String(c.id).trim().slice(0, 60), name: String(c.name || "").slice(0, 80), text: String(c.text || "").slice(0, TONE_MAX) }));
 
   // Settings from before the Tone prompt existed: take over the tone the user had chosen, and drop the old
   // default A/B tone lists (they would test other tones against the user's own prompt).
@@ -414,7 +423,10 @@ export function sanitizeSettings(raw) {
     const ab = s.learning.abTones;
     if (ab && !Array.isArray(ab)) for (const g of ["A", "B"]) if (JSON.stringify(ab[g]) === JSON.stringify(oldAb[g])) ab[g] = [];
   }
-  s.prompt.tone = String(s.prompt.tone || "").trim().slice(0, 2000) || DEFAULT_TONE_PROMPT;
+  s.prompt.tone = String(s.prompt.tone || "").trim().slice(0, TONE_MAX) || DEFAULT_TONE_PROMPT;
+  s.prompt.useImages = s.prompt.useImages !== false;
+  s.prompt.temperature = clamp(num(s.prompt.temperature, 1.0), 0, 1.5);
+  for (const k of Object.keys(s.tones || {})) s.tones[k] = String(s.tones[k] == null ? "" : s.tones[k]).slice(0, TONE_MAX);
   delete s.prompt.styleExamples; // pasted comment samples are no longer used
   s.prompt.styleExampleCount = clamp(Math.round(num(s.prompt.styleExampleCount, 4)), 0, 10);
   s.prompt.extraRules = String(s.prompt.extraRules || "").slice(0, 2000);
@@ -440,7 +452,7 @@ export function sanitizeSettings(raw) {
   delete l.autoMoveToA; delete l.followCheckEveryHours; // replaced by follow tracking (settings.follow)
   if (!l.abTones || typeof l.abTones !== "object") l.abTones = deepClone(DEFAULT_SETTINGS.learning.abTones);
   for (const g of ["A", "B"]) l.abTones[g] = (Array.isArray(l.abTones[g]) ? l.abTones[g] : []).map(String).filter(Boolean).slice(0, 12);
-  l.abPresets = (Array.isArray(l.abPresets) ? l.abPresets : []).filter((p) => ["high", "balanced", "cheap"].includes(p));
+  l.abPresets = (Array.isArray(l.abPresets) ? l.abPresets : []).filter((p) => ["human", "high", "balanced", "cheap"].includes(p));
   l.explore = clamp(num(l.explore, 0.2), 0, 0.6);
   l.minSamples = clamp(Math.round(num(l.minSamples, 8)), 2, 100);
   l.coldAfterComments = clamp(Math.round(num(l.coldAfterComments, 6)), 2, 50);
@@ -518,14 +530,22 @@ export function sanitizeSettings(raw) {
     m.label = String(m.label || m.name || m.id);
   }
   const ids = new Set(s.models.map((m) => m.id));
-  for (const k of ["high", "balanced", "cheap"]) {
+  for (const k of ["human", "high", "balanced", "cheap"]) {
     const p = (s.presets[k] ||= { ...DEFAULT_PRESETS[k] });
-    if (!ids.has(p.modelId)) p.modelId = s.models[Math.min(s.models.length - 1, k === "high" ? s.models.length - 1 : k === "balanced" ? 1 : 0)].id;
+    if (!ids.has(p.modelId)) p.modelId = k === "human" && ids.has("m_4o_mini") ? "m_4o_mini" : s.models[Math.min(s.models.length - 1, k === "high" ? s.models.length - 1 : k === "balanced" ? 1 : 0)].id;
     if (!["low", "medium", "high"].includes(p.effort)) p.effort = DEFAULT_PRESETS[k].effort;
   }
   if (!ids.has(s.fallback.modelId)) s.fallback.modelId = s.models[0].id;
   if (s.fallback.secondModelId && !ids.has(s.fallback.secondModelId)) s.fallback.secondModelId = "";
   if (!["low", "medium", "high"].includes(s.fallback.effort)) s.fallback.effort = "low";
+  // Reply generation moved to the UniqueFarm voice and the Human preset (genRev 1): settings still on the old
+  // defaults (Tone prompt, tier presets) follow; anything you changed by hand is kept.
+  if (raw && !(Number(raw.genRev) >= 1)) {
+    if (String(s.prompt.tone).trim() === LEGACY_DEFAULT_TONE_PROMPT) s.prompt.tone = DEFAULT_TONE_PROMPT;
+    const pm = raw.presetMatrix || {};
+    if (pm.B1 === "high" && pm.B2 === "balanced" && s.presets.human) { s.presetMatrix.B1 = "human"; s.presetMatrix.B2 = "human"; }
+  }
+  s.genRev = 1;
   for (const k of ["A1", "A2", "B1", "B2"]) if (!s.presets[s.presetMatrix[k]]) s.presetMatrix[k] = DEFAULT_SETTINGS.presetMatrix[k];
   if (!s.presets[s.quality.checkerPreset]) s.quality.checkerPreset = "cheap";
   return s;

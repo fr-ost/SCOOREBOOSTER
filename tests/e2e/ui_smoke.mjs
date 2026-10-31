@@ -828,7 +828,7 @@ try {
     check(await cardSays(/^(?![\s\S]*Will not post)/), "turned on again, the reply waits for its slot again");
     await page.waitForTimeout(500); // let the redraws of these target changes settle before the keyboard checks
     const metas = await page.locator("#pendingList .rc-foot-meta").allInnerTexts();
-    check(metas.some((m) => /effort \w+/.test(m) && /(High quality|Balanced|Cheap) preset/.test(m)), "card meta names the reasoning effort and the preset: " + (metas[0] || "").replace(/\s+/g, " "));
+    check(metas.some((m) => /effort \w+/.test(m) && /(Human \(fast\)|High quality|Balanced|Cheap) preset/.test(m)), "card meta names the reasoning effort and the preset: " + (metas[0] || "").replace(/\s+/g, " "));
     check((await page.locator("#pendingList .review-card.is-focus").count()) === 1 && (await page.locator("#pendingList .expiry").count()) === 3, "one focused card; every card shows when it expires");
     const fol = page.locator("#pendingList .review-card.is-follows");
     check((await fol.count()) === 1 && (await fol.first().locator('[data-ctl="approve"]').isDisabled()) && /follows you now/.test(await fol.first().innerText()), "the reply to an account that follows you now has Approve disabled with a note");
@@ -987,7 +987,7 @@ try {
     await page.locator("#tonePrompt").press("Tab");
     let ts1 = await waitSetting(page, (x) => x.prompt.tone === myTone);
     check(ts1 && ts1.prompt.tone === myTone && !("styleExamples" in ts1.prompt), "editing the Tone prompt saves settings.prompt.tone (no styleExamples key)");
-    check(!(await page.locator("#toneResetBtn").isDisabled()) && (await page.locator("#toneCount").innerText()).trim() === `${myTone.length} / 2000`, "Reset is enabled for a custom Tone prompt and the counter shows its length");
+    check(!(await page.locator("#toneResetBtn").isDisabled()) && (await page.locator("#toneCount").innerText()).trim() === `${myTone.length} / 6000`, "Reset is enabled for a custom Tone prompt and the counter shows its length");
     check((await page.locator("#abTones .chip").count()) === 5 && /Tones to test against your Tone prompt/.test(await page.locator('details[data-adv="tones.ab"]').textContent()), "A/B testing: one tone list (5 built-in tones) tested against the Tone prompt");
     check(/Best comments per prompt/.test(await page.locator('details[data-adv="tones.advanced"]').textContent()) && (await page.locator("#autoStyleToggle").count()) === 1, "Advanced: learn from my best comments (automatic style references)");
     await page.reload();
@@ -1144,7 +1144,7 @@ try {
     check(mrows.length === 2 && /Tier 1 · big influencer/.test(mrows[0]) && /Tier 2 · smart account/.test(mrows[1]), "Models: preset per tier has 2 rows (tier 1, tier 2)");
     await page.getByLabel("Preset for tier 1").selectOption("cheap");
     const ms = await waitSetting(page, (x) => x.presetMatrix.B1 === "cheap");
-    check(ms && ms.presetMatrix.B1 === "cheap" && ms.presetMatrix.B2 === "balanced", "tier 1 preset saves presetMatrix.B1");
+    check(ms && ms.presetMatrix.B1 === "cheap" && ms.presetMatrix.B2 === "human", "tier 1 preset saves presetMatrix.B1 (tier 2 stays on the default Human preset)");
     await page.getByLabel("Preset for tier 1").selectOption("high");
     await waitSetting(page, (x) => x.presetMatrix.B1 === "high");
     check((await page.locator('#spendReportsLink[href="#results?view=spend"]').count()) === 1, "Models links to Results › Spend for the reports");

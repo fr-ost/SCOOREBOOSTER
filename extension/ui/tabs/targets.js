@@ -32,7 +32,7 @@ export function toneLabel(key, settings) {
 
 // lib/scores.js ownScore weights (out of 100). The drawer labels them as weights; the parts bar shows this account's parts.
 const RANK_W = [["reach", 40], ["engagement", 25], ["activity", 20], ["quality", 15]];
-const PRESET_LABEL = { high: "High quality", balanced: "Balanced", cheap: "Cheap" };
+const PRESET_LABEL = { human: "Human (fast)", high: "High quality", balanced: "Balanced", cheap: "Cheap" };
 const WATCH_LABEL = { list: "X List (recommended)", search: "Batched Latest search", rotation: "Profile rotation" };
 // target.source -> [column label, timeline text]
 const SOURCE_LABEL = { manual: ["By you", "Added by you"], import: ["Import", "Imported from a file"], discovery: ["Discovery", "Added from Discovery"], candidate: ["Discovery", "Added from Discovery"], candidates: ["Discovery", "Added from Discovery"], popup: ["Popup", "Added from the popup"], smart: ["Smart followers", "Added from smart followers"] };

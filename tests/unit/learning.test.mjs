@@ -7,7 +7,8 @@ import { sanitizeSettings } from "../../extension/lib/store.js";
 import { newTarget } from "../../extension/lib/targets.js";
 import { DAY, _setRandom } from "../../extension/lib/util.js";
 
-const base = (over = {}) => sanitizeSettings({ learning: { enabled: true, abTesting: true, explore: 0, abTones: ["insightful", "witty"], abPresets: [] }, ...over });
+// The tier presets these tests were written for (tier 1 High quality, tier 2 Balanced; the default is now Human).
+const base = (over = {}) => sanitizeSettings({ presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" }, genRev: 1, learning: { enabled: true, abTesting: true, explore: 0, abTones: ["insightful", "witty"], abPresets: [] }, ...over });
 const posted = (arm, group, results, extra = {}) => ({ status: "posted", postedAt: 1000, group, abArm: arm, tone: arm.split("|")[0], preset: arm.split("|")[1], cost: 0.01, results, ...extra });
 
 describe("learning.js", () => {

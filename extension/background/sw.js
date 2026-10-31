@@ -146,7 +146,8 @@ async function previewPrompt(handle) {
   const previous = (await H.recentPosted(12)).map((r) => r.comment);
   return {
     ok: true,
-    instructions: buildInstructions({ settings, target: t, toneText: tone.text, angle: "(a random angle is chosen per comment)", myHandle: settings.account.handle, hasExamples: false }),
+    // The length / emoji / ending / point-of-view knobs are drawn again for every real reply.
+    instructions: buildInstructions({ settings, toneText: tone.text, myHandle: settings.account.handle, hasExamples: false, reasoning: !!((settings.models.find((m) => m.id === ((settings.presets[T.effectivePreset(t, settings)] || {}).modelId)) || {}).reasoning) }),
     input: buildInput({ post, target: t, styleExamples: [], avoid: previous }),
   };
 }

@@ -17,6 +17,7 @@ const DROPPABLE = {
   "reasoning.effort": "noReasoning",
   reasoning: "noReasoning",
   store: "noStore",
+  temperature: "noTemperature",
 };
 
 export function extractUsage(u) {
@@ -73,17 +74,27 @@ export function classifyError(status, body, headers) {
   return { kind, status, code, type, param, message, retryAfterMs };
 }
 
-export function buildBody({ model, instructions, input, effort, maxOutputTokens, jsonSchema, compat = {} }) {
+// input: the user text, or { text, images: [url] } to let the model look at the post's images (low detail, public
+// pbs.twimg.com URLs that OpenAI fetches itself). temperature only goes to non-reasoning models (reasoning models
+// reject it); verbosity only to reasoning models.
+export function buildBody({ model, instructions, input, effort, maxOutputTokens, jsonSchema, temperature, compat = {} }) {
+  const isObj = input && typeof input === "object";
+  const content = [{ type: "input_text", text: isObj ? String(input.text || "") : String(input == null ? "" : input) }];
+  if (isObj && Array.isArray(input.images) && !compat.noImages) {
+    for (const url of input.images.slice(0, 4)) if (typeof url === "string" && /^https:\/\//.test(url)) content.push({ type: "input_image", image_url: url, detail: "low" });
+  }
   const body = {
     model: model.name,
     instructions,
-    input: [{ role: "user", content: [{ type: "input_text", text: input }] }],
+    input: [{ role: "user", content }],
     max_output_tokens: model.maxOutputTokens || maxOutputTokens || 1500,
   };
   if (!compat.noStore) body.store = false;
   if (model.reasoning && effort && !compat.noReasoning) body.reasoning = { effort };
+  // Only a model marked reasoning:false is a chat model (settings treat every other model as a reasoning model).
+  if (model.reasoning === false && Number.isFinite(temperature) && !compat.noTemperature) body.temperature = temperature;
   const text = {};
-  if (!compat.noVerbosity) text.verbosity = "low";
+  if (model.reasoning !== false && !compat.noVerbosity) text.verbosity = "low";
   if (jsonSchema && !compat.noFormat) text.format = { type: "json_schema", name: jsonSchema.name, schema: jsonSchema.schema, strict: true };
   if (Object.keys(text).length) body.text = text;
   return body;
@@ -91,13 +102,15 @@ export function buildBody({ model, instructions, input, effort, maxOutputTokens,
 
 // One model call. Returns { ok, text, refusal, usage, status, incompleteReason, ms, compat, error }.
 // compat (per model name) is updated in place when the API rejects an optional parameter.
-export async function callModel({ apiKey, model, instructions, input, effort, jsonSchema, timeoutMs = 90000, compat = {}, fetchImpl }) {
+export async function callModel({ apiKey, model, instructions, input, effort, jsonSchema, temperature, timeoutMs = 90000, compat = {}, fetchImpl }) {
   const f = fetchImpl || globalThis.fetch;
   if (!apiKey) return { ok: false, error: { kind: "no_key", message: "No OpenAI API key set" }, usage: extractUsage(null), ms: 0, compat };
   const started = now();
   let lastErr = null;
+  let noImages = false; // per call only: one image X deleted must not turn images off for the model for good
   for (let attempt = 0; attempt < 4; attempt++) {
-    const body = buildBody({ model, instructions, input, effort, jsonSchema, compat });
+    const body = buildBody({ model, instructions, input, effort, jsonSchema, temperature, compat: noImages ? { ...compat, noImages: true } : compat });
+    const hasImages = body.input[0].content.length > 1;
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), timeoutMs);
     let res, json = null, raw = "";
@@ -122,6 +135,12 @@ export async function callModel({ apiKey, model, instructions, input, effort, js
         compat[DROPPABLE[err.param]] = true;
         lastErr = err;
         continue; // retry without the rejected parameter
+      }
+      // A model (or an image URL it could not fetch) that rejects the post's images: answer from the text alone.
+      if (hasImages && res.status === 400 && /image/i.test(err.message + " " + err.param)) {
+        noImages = true;
+        lastErr = err;
+        continue;
       }
       return { ok: false, error: err, usage: extractUsage(json && json.usage), ms: now() - started, compat };
     }
