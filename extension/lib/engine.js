@@ -603,7 +603,7 @@ async function tickBody(settings, secrets, reason = "timer") {
     const c2 = await computeCounts(settings, now());
     if (c2.openQueue < 3 && c2.pendingReview < settings.review.maxPending) {
       const cands = [];
-      for (const p of catchUpCandidates(await getTargets(), settings, now())) {
+      for (const p of catchUpCandidates(await getTargets(), settings, now(), c2)) {
         if (cands.length >= 12) break;
         if (!(await H.byPostId(p.id)).length) cands.push(p);
       }
@@ -688,7 +688,7 @@ function scorePost(p, t, ts) {
   const ageMin = p.createdAt ? (ts - p.createdAt) / MIN : 10;
   const m = p.metrics || {};
   const velocity = ((m.likes || 0) + 2 * (m.replies || 0)) / Math.max(1, ageMin);
-  return (t.priority || 50) + (t.tier === 1 ? 15 : 0) - ageMin * 0.8 + Math.min(20, Math.log10(1 + velocity) * 10);
+  return (Number.isFinite(t.priority) ? t.priority : 50) + (t.tier === 1 ? 15 : 0) - ageMin * 0.8 + Math.min(20, Math.log10(1 + velocity) * 10);
 }
 
 async function handleFresh(posts, ctx) {
