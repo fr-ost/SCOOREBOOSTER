@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ScoreX",
   "short_name": "ScoreX",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "AI replies on X from your own browser: review mode, follow-back tracking, score checks, real costs and strict safety limits.",
   "minimum_chrome_version": "116",
   "permissions": [

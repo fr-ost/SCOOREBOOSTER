@@ -988,7 +988,7 @@ try {
     let ts1 = await waitSetting(page, (x) => x.prompt.tone === myTone);
     check(ts1 && ts1.prompt.tone === myTone && !("styleExamples" in ts1.prompt), "editing the Tone prompt saves settings.prompt.tone (no styleExamples key)");
     check(!(await page.locator("#toneResetBtn").isDisabled()) && (await page.locator("#toneCount").innerText()).trim() === `${myTone.length} / 6000`, "Reset is enabled for a custom Tone prompt and the counter shows its length");
-    check((await page.locator("#abTones .chip").count()) === 5 && /Tones to test against your Tone prompt/.test(await page.locator('details[data-adv="tones.ab"]').textContent()), "A/B testing: one tone list (5 built-in tones) tested against the Tone prompt");
+    check((await page.locator("#abTones .chip").count()) === 10 && /Tones to test against your Tone prompt/.test(await page.locator('details[data-adv="tones.ab"]').textContent()), "A/B testing: one tone list (10 built-in tones: the 5 UniqueFarm voices and 5 ScoreX tones) tested against the Tone prompt");
     check(/Best comments per prompt/.test(await page.locator('details[data-adv="tones.advanced"]').textContent()) && (await page.locator("#autoStyleToggle").count()) === 1, "Advanced: learn from my best comments (automatic style references)");
     await page.reload();
     await page.waitForSelector('#view[data-ready="tones"]');

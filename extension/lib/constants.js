@@ -1,7 +1,7 @@
 // ScoreX - shared constants. Keep string values stable: they are persisted in storage and history.
 
 export const APP = "ScoreX";
-export const VERSION = "1.2.0";
+export const VERSION = "1.3.0";
 
 // chrome.storage.local keys
 export const K = Object.freeze({
