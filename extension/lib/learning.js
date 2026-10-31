@@ -14,7 +14,7 @@ import { navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
 import { notify } from "./notify.js";
 import { valueDetails, learnedRates } from "./scores.js";
-import { checkReach } from "./reach.js";
+import { checkReach, checkDelayMs } from "./reach.js";
 import * as H from "./history.js";
 import { now, DAY, HOUR, MIN, random, clamp, sleep, humanDelay, num } from "./util.js";
 
@@ -267,17 +267,23 @@ export async function updatePriorities(settings, ts = now()) {
 //   * with the reply reach monitor on, 1-2 replies per run also get an early look ~3 h after posting, so a drop in
 //     views shows up the same day (lib/reach.js compares early looks only with early looks).
 // The newest due replies come first (the freshest views for the reach monitor); a first look is skipped for replies
-// older than a week. Failed checks back off (6 h, 12 h, 24 h) and are given up after 3 failures.
+// older than a week (or 2 days past a check delay longer than 5 days). Failed checks back off (6 h, 12 h, 24 h) and
+// are given up after 3 failures.
 const EARLY_FROM_MS = 3 * HOUR;
 const EARLY_UNTIL_MS = 8 * HOUR;
 const FIRST_LOOK_MAX_AGE_MS = 7 * DAY;
+const firstLookMaxAge = (settings) => Math.max(FIRST_LOOK_MAX_AGE_MS, checkDelayMs(settings) + 2 * DAY);
 
 // Which replies to check in this run (pure). Returns { early: [records], regular: [records], max }.
 export function checkPlan(records, settings, ts = now()) {
   const L = settings.learning;
   const conv = !!(L.conversations && L.conversations.enabled);
   const reachOn = !!(settings.safety && settings.safety.reach && settings.safety.reach.enabled);
-  const max = Math.max(0, num(L.maxChecksPerRun, 3) - (conv ? 1 : 0));
+  // Conversation alerts take one page load of the budget, never the last one: with "Max checks per run" at 1 the
+  // engagement checks (self-learning, reach monitor) would otherwise never run. 0 means no checks.
+  const cap = Math.max(0, Math.round(num(L.maxChecksPerRun, 3)));
+  const max = cap ? Math.max(1, cap - (conv ? 1 : 0)) : 0;
+  const delay = checkDelayMs(settings), maxAge = firstLookMaxAge(settings);
   const usable = (r) => {
     const res = r.results || {};
     return r.status === HS.POSTED && r.postedAt && r.replyUrl && r.replyId && !res.gone && (res.failures || 0) < 3 && !(res.nextCheckAt && ts < res.nextCheckAt);
@@ -294,7 +300,7 @@ export function checkPlan(records, settings, ts = now()) {
       if (earlyIds.has(r.id)) return false;
       const res = r.results || {};
       const age = ts - r.postedAt;
-      if (!res.checkedAt) return age >= L.engagementCheckAfterHours * HOUR && age <= FIRST_LOOK_MAX_AGE_MS;
+      if (!res.checkedAt) return age >= delay && age <= maxAge;
       if (conv || L.enabled === false) return false; // the late look only served author replies / learning
       return (res.checks || 1) < 2 && age >= 72 * HOUR && ts - res.checkedAt > 24 * HOUR;
     })
@@ -364,7 +370,7 @@ export async function learningStep({ tabId, settings, me, shouldStop }) {
   await processFollowBacks(settings);
   let visits = 0;
 
-  const plan = checkPlan(await H.since(ts - FIRST_LOOK_MAX_AGE_MS - 2 * DAY), settings, ts);
+  const plan = checkPlan(await H.since(ts - firstLookMaxAge(settings) - 2 * DAY), settings, ts);
   const todo = [...plan.early.map((r) => ["early", r]), ...plan.regular.map((r) => ["regular", r])];
   for (const [kind, r] of todo) {
     if (await stopped()) return { did: "aborted" };

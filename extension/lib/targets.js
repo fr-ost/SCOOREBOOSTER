@@ -8,7 +8,8 @@
 //   recentPosts: [{ id, text, createdAt, metrics, lang, isQuote, hasMedia, hasCard, links }]  (newest first, max 5)
 //   lastPostAt, lastCheckedAt,
 //   rel: { followsYou (null = not checked yet), youFollow, checkedAt, youFollowSince, followedBackAt,
-//          notFollowingSeen, unfollowedYouAt (it followed you, then unfollowed), gone (profile not found; cleared
+//          notFollowingSeen, unfollowedYouAt (it followed you, then unfollowed; followedBackAt then moves to
+//          prevFollowedBackAt), gone (profile not found; cleared
 //          when the profile reads fine again or the target is turned on again), verifiedAt (last "does it still
 //          follow you?" visit, follow.js) },
 //   score: { own, sorsa, combined, flags, bot, updatedAt, sorsaUpdatedAt, providers: { [id]: { score, max, at } },
@@ -219,9 +220,12 @@ export function applyFollow(t, followsYou, ts = now()) {
     t.rel.notFollowingSeen = (t.rel.notFollowingSeen || 0) + 1;
     if (t.rel.notFollowingSeen >= 2) {
       // The account unfollowed you: it is treated as not following again (comments resume), and the give-up window
-      // starts again with the next comment instead of counting from comments before it followed you.
+      // starts again with the next comment instead of counting from comments before it followed you. An earlier
+      // follow-back no longer counts (kept in prevFollowedBackAt), so a new one is credited and notified again.
       t.rel.followsYou = false;
       t.rel.unfollowedYouAt = ts;
+      if (t.rel.followedBackAt) { t.rel.prevFollowedBackAt = t.rel.followedBackAt; t.rel.followedBackAt = null; }
+      t.rel.followBackCredited = false;
       if (t.stats) t.stats.firstCommentAt = null;
     }
   } else {

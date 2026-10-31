@@ -206,11 +206,34 @@ export async function cancelDiscovery() {
   return setJob({ status: "cancelling" });
 }
 
+// Score-site scores a candidate already has (smart followers: providerScores { [id]: score }) go to
+// target.score.providers[id] = { score, max, at } like a score check's, so value ranking can use them at once
+// without new provider requests. A newer score the target already has is kept.
+function carryProviderScores(t, c, blend) {
+  const ps = c.providerScores && typeof c.providerScores === "object" ? c.providerScores : null;
+  if (!ps) return;
+  const at = Number(c.seenAt) || Number(c.foundAt) || now();
+  const fresh = Object.entries(ps).filter(([, v]) => v != null && v !== "" && Number.isFinite(Number(v)) && Number(v) >= 0);
+  if (!fresh.length) return;
+  t.score = t.score && typeof t.score === "object" ? t.score : {};
+  const provs = { ...(t.score.providers || {}) };
+  for (const [id, v] of fresh) {
+    const prev = provs[id];
+    if (prev && prev.score != null && Number(prev.at) >= at) continue;
+    if (id === "sorsa" && t.score.sorsa != null && Number(t.score.sorsaUpdatedAt) >= at) continue;
+    provs[id] = { score: Number(v), max: null, at };
+    if (id === "sorsa") { t.score.sorsa = Number(v); t.score.sorsaUpdatedAt = at; }
+  }
+  t.score.providers = provs;
+  t.score.combined = combinedScore(t.score.own, t.score.sorsa, blend);
+}
+
 // Move candidates into targets.
 export async function candidatesToTargets(handles, tier, upsert) {
   const cands = await getCandidates();
   const rows = handles.map(normalizeHandle).filter((h) => cands[h]).map((h) => ({ handle: h, tier, name: cands[h].name || "" }));
   const res = await upsert(rows, { tier, source: "discovery" });
+  const blend = (await getSettings()).scores.blendSorsa;
   // Carry over the profile/score we already collected. A seen "Follows you" badge is taken over; "does
   // not follow you" is left to follow tracking, which checks it with its own safety checks.
   await updateTargets((all) => {
@@ -218,8 +241,9 @@ export async function candidatesToTargets(handles, tier, upsert) {
       const c = cands[r.handle];
       const t = Object.hasOwn(all, r.handle) ? all[r.handle] : null;
       if (!t || !c) continue;
-      if (c.profile) { const { followsYou, youFollow, ...profile } = c.profile; applyProfile(t, profile, c.recentPosts || []); }
+      if (c.profile) { const { followsYou, youFollow, ...profile } = c.profile; applyProfile(t, profile, c.recentPosts || [], blend); }
       if (c.followsYou) applyFollow(t, true);
+      carryProviderScores(t, c, blend);
     }
     return all;
   });

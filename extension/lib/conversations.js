@@ -37,7 +37,8 @@ export function cleanText(s) {
 }
 
 // Pure: which mentions are answers from accounts you replied to in the last 72 h. Each is matched to your newest reply
-// to that account posted before the answer. Returns [{ tweet, rec }] (oldest answer first).
+// to that account posted before the answer. A post that only mentions you (isReply false: no "Replying to" line) is no
+// answer; an unknown isReply is still accepted. Returns [{ tweet, rec }] (oldest answer first).
 export function matchMentions(tweets, records, { me = "", ts = now(), seen = new Set() } = {}) {
   const mine = String(me || "").toLowerCase();
   const byTarget = new Map();
@@ -49,7 +50,7 @@ export function matchMentions(tweets, records, { me = "", ts = now(), seen = new
   const out = [];
   const used = new Set();
   for (const tw of tweets || []) {
-    if (!tw || !tw.id || !tw.author || tw.isRepost || seen.has(tw.id) || used.has(tw.id)) continue;
+    if (!tw || !tw.id || !tw.author || tw.isRepost || tw.isReply === false || seen.has(tw.id) || used.has(tw.id)) continue;
     const author = String(tw.author).toLowerCase();
     if (author === mine) continue;
     const recs = byTarget.get(author);

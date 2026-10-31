@@ -13,16 +13,31 @@ import { HS, STOP, MODE, K } from "./constants.js";
 import { getSettings, getState, patchState, update, log } from "./store.js";
 import { notify } from "./notify.js";
 import * as H from "./history.js";
-import { now, DAY, HOUR, num } from "./util.js";
+import { now, DAY, HOUR, num, clamp } from "./util.js";
 
-export const WINDOW = 30; // heuristic: the last 30 checked replies are compared with the 30 before them
-// A "day-after" reading: taken 20 h - 4 days after posting (heuristic; the 24 h check may run a little early or late).
+// Heuristic: the last 30 checked replies are compared with the 30 before them. A "Judge after (checked replies)"
+// setting (safety.reach.minChecked) above 30 widens both windows to that many, so the monitor can still alert.
+export const WINDOW = 30;
+// A "day-after" reading: the first engagement check, taken engagementCheckAfterHours (24 h by default) after posting.
+// It counts when taken between 5/6 of that delay and 4 times it (20 h - 4 days by default; heuristic: the check may run
+// a little early or late), so readings taken at a very different age are never compared with each other.
 export const MATURE_FROM_MS = 20 * HOUR;
 export const MATURE_UNTIL_MS = 4 * DAY;
-const HISTORY_DAYS = 30; // how far back readings are looked for
+const HISTORY_DAYS = 30; // how far back readings are looked for (plus the part of a check delay above 24 h)
 export const CAVEAT = "Views are a proxy - X does not tell you when it hides a reply.";
 
 const isNum = (v) => v != null && v !== "" && Number.isFinite(Number(v));
+
+// settings.learning.engagementCheckAfterHours in ms (24 h when missing; 1 h - 30 days, the range the settings allow).
+export function checkDelayMs(settings) {
+  const v = settings && settings.learning ? settings.learning.engagementCheckAfterHours : null;
+  return clamp(v == null || v === "" ? 24 : num(v, 24), 1, 720) * HOUR;
+}
+// The day-after window for the configured check delay: { from, until } in ms after posting.
+export function matureWindow(settings) {
+  const f = checkDelayMs(settings) / DAY;
+  return { from: MATURE_FROM_MS * f, until: MATURE_UNTIL_MS * f };
+}
 
 export function median(values) {
   const a = (values || []).filter(isNum).map(Number).sort((x, y) => x - y);
@@ -41,14 +56,16 @@ const dayReading = (res) => (isNum(res.dayViews) && res.dayViewsAt ? { v: Number
 export function reachStats(records, settings, ts = now()) {
   const R = (settings && settings.safety && settings.safety.reach) || {};
   const lowViews = num(R.lowViews, 10);
+  const W = Math.max(WINDOW, Math.round(num(R.minChecked, 0))); // a window always has room for minChecked readings
+  const win = matureWindow(settings);
   const posted = (records || []).filter((r) => r && r.status === HS.POSTED && r.postedAt && r.results && !r.results.gone && r.postedAt <= ts);
   const mature = posted
     .map((r) => ({ r, d: dayReading(r.results) }))
-    .filter(({ r, d }) => d && d.at - r.postedAt >= MATURE_FROM_MS && d.at - r.postedAt <= MATURE_UNTIL_MS)
+    .filter(({ r, d }) => d && d.at - r.postedAt >= win.from && d.at - r.postedAt <= win.until)
     .sort((a, b) => b.r.postedAt - a.r.postedAt);
-  const recent = mature.slice(0, WINDOW), prev = mature.slice(WINDOW, 2 * WINDOW);
+  const recent = mature.slice(0, W), prev = mature.slice(W, 2 * W);
   const early = posted.filter((r) => isNum(r.results.earlyViews)).sort((a, b) => b.postedAt - a.postedAt);
-  const eRecent = early.slice(0, WINDOW), ePrev = early.slice(WINDOW, 2 * WINDOW);
+  const eRecent = early.slice(0, W), ePrev = early.slice(W, 2 * W);
   const vals = (list, key) => list.map((r) => Number(r.results[key]));
   const medianViews = median(recent.map((x) => x.d.v)), prevMedianViews = median(prev.map((x) => x.d.v));
   const lowCount = recent.filter((x) => x.d.v < lowViews).length;
@@ -107,7 +124,7 @@ async function switchToReview() {
 export async function checkReach(settings, ts = now()) {
   if (!settings) settings = await getSettings();
   const R = (settings.safety && settings.safety.reach) || {};
-  const stats = reachStats(await H.since(ts - HISTORY_DAYS * DAY), settings, ts);
+  const stats = reachStats(await H.since(ts - HISTORY_DAYS * DAY - Math.max(0, checkDelayMs(settings) - DAY)), settings, ts);
   const reach = { checked: stats.checked, medianViews: stats.medianViews, prevMedianViews: stats.prevMedianViews, lowShare: stats.lowShare, at: ts, prevChecked: stats.prevChecked, dropPct: stats.dropPct, early: stats.early };
   const st = await getState();
   const verdict = R.enabled ? reachVerdict(stats, settings) : null;

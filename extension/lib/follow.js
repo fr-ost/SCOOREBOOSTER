@@ -58,8 +58,19 @@ export function followPlan(targets, settings, st, ts = now()) {
   const newestChecking = checking.reduce((m, t) => Math.max(m, t.addedAt || 0), 0);
   const scanAt = st.followersScanAt || 0;
   const retryOk = !st.followersScanRetryAt || ts >= st.followersScanRetryAt;
-  const scan = retryOk && (checking.length > 0 || active.length > 0) &&
-    (ts - scanAt >= f.scanEveryHours * HOUR || (checking.length > 0 && newestChecking > scanAt) || !badgeTrusted(st, ts));
+  const verifiedToday = list.filter((t) => t.rel && t.rel.verifiedAt && ts - t.rel.verifiedAt < DAY).length;
+  const verify = list
+    .filter((t) => [FS.FOLLOWS, FS.FOLLOWED_BACK].includes(followStatus(t)) && waitOk(t))
+    .filter((t) => !t.rel.checkedAt || ts - t.rel.checkedAt >= (t.rel.notFollowingSeen > 0 ? VERIFY_CONFIRM_MS : VERIFY_EVERY_MS))
+    .sort((a, b) => (b.rel.notFollowingSeen || 0) - (a.rel.notFollowingSeen || 0) || (a.rel.checkedAt || 0) - (b.rel.checkedAt || 0))
+    .slice(0, Math.max(0, Math.min(VERIFY_PER_RUN, VERIFY_PER_DAY - verifiedToday)))
+    .map((t) => ({ handle: t.handle, why: "verify" }));
+  // Verify visits wait for a trusted badge, and once no target is Checking or Not following only this scan renews it:
+  // while one is due and the trust has lapsed, the scan keeps running at its routine interval.
+  const lapsed = !!st.followBadgeOkAt && !badgeTrusted(st, ts);
+  const scan = retryOk && (((checking.length > 0 || active.length > 0) &&
+    (ts - scanAt >= f.scanEveryHours * HOUR || (checking.length > 0 && newestChecking > scanAt) || !badgeTrusted(st, ts))) ||
+    (verify.length > 0 && lapsed && ts - scanAt >= f.scanEveryHours * HOUR));
   const giveUp = active.filter((t) => giveUpDue(t, settings, ts) && waitOk(t));
   const recheck = active
     .filter((t) => t.stats && t.stats.comments > 0 && !giveUpDue(t, settings, ts) && waitOk(t) && (!t.rel.checkedAt || ts - t.rel.checkedAt >= f.recheckHours * HOUR))
@@ -69,13 +80,6 @@ export function followPlan(targets, settings, st, ts = now()) {
     ...checking.filter(waitOk).map((t) => ({ handle: t.handle, why: "check" })),
     ...recheck.map((t) => ({ handle: t.handle, why: "recheck" })),
   ];
-  const verifiedToday = list.filter((t) => t.rel && t.rel.verifiedAt && ts - t.rel.verifiedAt < DAY).length;
-  const verify = list
-    .filter((t) => [FS.FOLLOWS, FS.FOLLOWED_BACK].includes(followStatus(t)) && waitOk(t))
-    .filter((t) => !t.rel.checkedAt || ts - t.rel.checkedAt >= (t.rel.notFollowingSeen > 0 ? VERIFY_CONFIRM_MS : VERIFY_EVERY_MS))
-    .sort((a, b) => (b.rel.notFollowingSeen || 0) - (a.rel.notFollowingSeen || 0) || (a.rel.checkedAt || 0) - (b.rel.checkedAt || 0))
-    .slice(0, Math.max(0, Math.min(VERIFY_PER_RUN, VERIFY_PER_DAY - verifiedToday)))
-    .map((t) => ({ handle: t.handle, why: "verify" }));
   return { scan, deep: checking.length > 0, profiles, verify, counts: { checking: checking.length, active: active.length, giveUp: giveUp.length } };
 }
 
