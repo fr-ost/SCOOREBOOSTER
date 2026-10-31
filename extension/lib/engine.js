@@ -944,12 +944,6 @@ async function routineBackground({ tabId, settings, me, shouldStop }) {
     if (r && r.did) return r;
   }
   if (await shouldStop()) return null;
-  if (settings.follow.followFirst) {
-    const r = await withPurpose("follow", () => followFirstStep({ tabId, settings, me, shouldStop }));
-    if (r && r.stop) return r;
-    if (r && r.did) return r;
-  }
-  if (await shouldStop()) return null;
   if (settings.learning.conversations && settings.learning.conversations.enabled) {
     const r = await withPurpose("mentions", () => conversationsStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
@@ -958,6 +952,12 @@ async function routineBackground({ tabId, settings, me, shouldStop }) {
   if (await shouldStop()) return null;
   if (settings.learning.enabled || (settings.safety.reach && settings.safety.reach.enabled)) {
     const r = await withPurpose("check", () => learningStep({ tabId, settings, me, shouldStop }));
+    if (r && r.stop) return r;
+    if (r && r.did) return r;
+  }
+  // Follow first from a profile: only when follow tracking, alerts and engagement checks had nothing to do.
+  if (settings.follow.followFirst && !(await shouldStop())) {
+    const r = await withPurpose("follow", () => followFirstStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }
