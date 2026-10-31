@@ -31,6 +31,15 @@
     return { box, where: "inline", root: primary };
   }
 
+  // Click into the box like a person (mousedown, mouseup, click) and focus it, so X's editor becomes active and takes
+  // the paste (UniqueFarm). A box that already has the focus is left as it is.
+  function activate(box) {
+    if (!box) return;
+    if (document.activeElement === box || box.contains(document.activeElement)) return;
+    try { for (const t of ["mousedown", "mouseup", "click"]) box.dispatchEvent(new MouseEvent(t, { bubbles: true, cancelable: true, view: window })); } catch (_) {}
+    try { box.focus({ preventScroll: true }); } catch (_) {}
+  }
+
   function caretToEnd(box) {
     try {
       box.focus({ preventScroll: true });
@@ -127,7 +136,14 @@
     if (p1) return p1;
     if (!c.box) return { ok: false, error: "composer_missing", dom: true };
     try { c.box.scrollIntoView({ block: "center" }); } catch (_) {}
-    // Focus like a click into the box (no synthetic click: on some layouts it opens the modal twice).
+    // Click straight into the reply box and focus it (UniqueFarm), then give X a moment; a layout that opens the
+    // reply modal from that click is picked up by composer() (the modal wins).
+    activate(c.box);
+    await D.sleep(500 + Math.random() * 500);
+    const p2 = promptCheck();
+    if (p2) return p2;
+    c = composer();
+    if (!c.box) return { ok: false, error: "composer_missing", dom: true };
     caretToEnd(c.box);
     return { ok: true, where: c.where, text: boxText(c.box) };
   }
@@ -169,6 +185,7 @@
   async function insertWhole(box, text) {
     const clean = String(text || "").trim();
     const same = () => loose(boxText(box)) === loose(clean);
+    activate(box); // the typing pause may have cost the focus
     try { box.focus({ preventScroll: true }); } catch (_) {}
     await D.sleep(50);
     selectAllIn(box); // replaces whatever is in the box

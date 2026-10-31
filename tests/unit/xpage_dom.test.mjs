@@ -319,6 +319,17 @@ ${notice}<button data-testid="tweetButton">Reply</button></div>`;
     b.addEventListener("paste", (e) => { e.preventDefault(); window.__pastes++; b.textContent = e.clipboardData.getData("text/plain"); }); })();`;
   const REPLY = "ngl the timing on this is what makes it work, the rest is noise";
 
+  test("opening the reply box clicks into it and focuses it (X's editor becomes active, UniqueFarm)", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      const r = await p.call({ sx: "openComposer", tweetId: TID, expectMe: "0x_nation" });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.where, "inline");
+      assert.ok((await p.clicks()).includes("tweetTextarea_0"), "clicked into the reply box");
+      assert.equal(await p.page.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-testid")), "tweetTextarea_0");
+    } finally { await p.close(); }
+  });
+
   test("the reply goes in with one paste (X's editor commits it), not character by character", async () => {
     const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
     try {
