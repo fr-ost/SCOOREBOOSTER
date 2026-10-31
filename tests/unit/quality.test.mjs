@@ -29,7 +29,7 @@ describe("quality.js", () => {
       assert.equal(sanitizeComment("Answer : yes, but only on L2"), "yes, but only on L2");
     });
     test("removes leading @mentions only", () => {
-      assert.equal(sanitizeComment("@vitalik @balajis the bottleneck is UX"), "the bottleneck is UX");
+      assert.equal(sanitizeComment("@vitalik @balajis, the bottleneck is UX"), "the bottleneck is UX");
       assert.equal(sanitizeComment("@vitalik, the bottleneck is UX"), "the bottleneck is UX");
       assert.equal(sanitizeComment("@vitalik: the bottleneck is UX"), "the bottleneck is UX");
       assert.equal(sanitizeComment("the bottleneck is @vitalik's UX"), "the bottleneck is @vitalik's UX");

@@ -162,14 +162,15 @@ describe("XP2-4: 'already in the thread' means our comment, not any reply of you
   beforeEach(() => resetStorage());
   const run = (env) => postReply(rec, { tabId: env.tab.id, settings: sanitizeSettings({ safety: { readDelaySec: { min: 1, max: 1 } } }), me: "0x_nation", allowLike: true, shouldStop: async () => false });
 
-  test("your own reply to another commenter under the post: the comment is still posted", async (t) => {
+  test("a reply of yours with other text is already under the post: skipped, not recorded as posted, no second reply", async (t) => {
     fast(t);
     const env = fakeTab(xPage([MINE_TO_ALICE]));
     const r = await run(env);
-    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.equal(r.ok, false, JSON.stringify(r));
     assert.ok(!r.already, "not recorded as posted without posting: " + JSON.stringify(r));
-    assert.equal(r.replyId, SENT.replyId);
-    assert.equal(env.count("submitReply"), 1);
+    assert.equal(r.skip, true);
+    assert.equal(r.reason, "already_replied_by_you");
+    for (const c of ["like", "openComposer", "type", "submitReply"]) assert.equal(env.count(c), 0, c);
   });
 
   test("our comment is already in the thread (an earlier attempt went out): nothing is typed again", async (t) => {

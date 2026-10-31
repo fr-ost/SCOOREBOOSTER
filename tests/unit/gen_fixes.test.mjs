@@ -39,7 +39,12 @@ describe("GEN-1 sanitizeComment never turns a reply into a fragment", () => {
     assert.ok(codes(t).includes("mention"));
     assert.equal(sanitizeComment("@vitalik, the bottleneck is UX"), "the bottleneck is UX");
     assert.equal(sanitizeComment("@vitalik: the bottleneck is UX"), "the bottleneck is UX");
-    assert.equal(sanitizeComment("@vitalik @balajis the bottleneck is UX"), "the bottleneck is UX");
+    // A chain before a lowercase word may be the subject ("@a @b would both disagree"): it stays and fails the
+    // mention rule (regenerated), never posted with the tags. A chain with a comma, or before a capital, is decoration.
+    assert.equal(sanitizeComment("@vitalik @balajis the bottleneck is UX"), "@vitalik @balajis the bottleneck is UX");
+    assert.ok(codes("@vitalik @balajis the bottleneck is UX").includes("mention"));
+    assert.equal(sanitizeComment("@vitalik @balajis, the bottleneck is UX"), "the bottleneck is UX");
+    assert.equal(sanitizeComment("@vitalik @balajis The bottleneck is UX"), "The bottleneck is UX");
   });
   test("labels need a colon or a spaced dash; compounds stay", () => {
     for (const t of ["Response-time under load matters more than peak TPS", "Answer-first threads get more replies than hot takes", "Reply-guy energy is how most of CT grew"]) assert.equal(sanitizeComment(t), t);

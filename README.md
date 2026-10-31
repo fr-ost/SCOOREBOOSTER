@@ -246,7 +246,10 @@ Provider keys are stored like the OpenAI key (the extension's IndexedDB) and are
   big accounts rank higher. Nothing is added or followed until you choose.
 * **Target scores**: fetch provider scores for your targets (a background job with progress and Cancel).
 * **Daily request caps** per provider protect your free quotas and the sites; requests are paced and cached
-  (your own score 20 h, checks and smart-follower lists 3 days, target scores 7 days).
+  (your own score 20 h, smart-follower lists 3 days, target scores 7 days). **Check** always asks each enabled
+  site again (1 request per site, as its button says); the last check of an account stays visible without a new
+  request. In target-score runs an account a site has no data for is remembered as "no data" and not asked again
+  for a week, and a site that refused your own score (bot check, key, rate limit) is asked again the next day.
 * **Provider overrides** (Scores > Advanced): if a site renames a field or moves an endpoint, patch it there
   (JSON, limited to that provider's own https hosts) without waiting for an update.
 

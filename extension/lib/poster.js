@@ -126,6 +126,9 @@ export async function postReply(rec, ctx) {
   }
   const done = ourReply(st.myReplies, text);
   if (done) return { ok: true, already: true, replyUrl: done.url, replyId: done.id, liked: !!st.focal.liked };
+  // You already replied under this post yourself (by hand, other text): no second reply from your account, and the
+  // item is not recorded as posted (it was not).
+  if (st.myReplies && st.myReplies.length) return { ok: false, skip: true, reason: "already_replied_by_you" };
   if (st.canReply === false) return { ok: false, skip: true, reason: "replies_restricted" };
   if (st.focalIndex > 0) return { ok: false, skip: true, reason: "reply_in_thread_not_original_post" };
   // Nothing is liked, typed or submitted unless this page is logged in as your account.

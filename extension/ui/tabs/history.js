@@ -396,7 +396,7 @@ export default {
         dirty.comments = true; show();
       }, { kind: "ghost", size: "sm" });
       const clearBtn = btn("Clear history", async () => {
-        if (!(await confirmDialog("Delete the comment history (costs, results)? Comments posted in the last 8 days and items still in the queue are kept, because the daily and per-account safety limits depend on them. Targets and settings stay. This cannot be undone - export a CSV first if you need it.", { title: "Clear history", okLabel: "Delete history", danger: true }))) return;
+        if (!(await confirmDialog("Delete the comment history (costs, results)? Comments posted in the last 8 days and items still in the queue are kept, because the daily and per-account safety limits depend on them. Skipped and failed attempts from the last 8 days stay as short records (date, status, post link), so ScoreX never answers those posts again. Targets and settings stay. This cannot be undone - export a CSV first if you need it.", { title: "Clear history", okLabel: "Delete history", danger: true }))) return;
         const r = await ctx.send("historyClear", {}, { label: "Clear history" });
         if (r) { toast(`History cleared (${num(r.removed)} removed, ${num(r.kept)} kept for safety limits)`); sig = null; load(); ctx.refreshCounts(); }
       }, { kind: "danger-soft", iconName: "trash", id: "historyClearBtn" });
