@@ -56,7 +56,7 @@ describe("catch-up in the engine", () => {
       await H.put(H.newRecord({ status: HS.POSTED, target: "big" + i, postId: `7${i}${k}`, comment: "earlier reply " + i + k, attempts: 1, createdAt: Date.now() - 2 * HOUR, postedAt: Date.now() - 2 * HOUR + k * MIN }));
     }
     env.addTab({ id: 3, url: "https://x.com/home", pinned: true, index: 0 });
-    await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, startedAt: Date.now() - HOUR, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0,
+    await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, startedAt: Date.now() - HOUR, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, workerTabFreshAt: Date.now(),
       followBadgeOkAt: Date.now(), followersScanAt: Date.now(), lastWatchAt: Date.now() - 30 * 1000 }); // watched 30 s ago: this tick skips the watch page
 
     // The selection the engine works from: 12 tier-1 posts first, zed's post 13th.

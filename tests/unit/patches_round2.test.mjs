@@ -33,7 +33,7 @@ async function setup(env, { settings = {}, targets = {}, state = {} } = {}) {
   await setSecrets({ openaiKey: "sk-test-1234567890abcdef" });
   await save({ [K.targets]: targets });
   env.addTab({ id: 3, url: "https://x.com/home", pinned: true, index: 0 });
-  await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, followBadgeOkAt: Date.now(), followersScanAt: Date.now(), ...state });
+  await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, workerTabFreshAt: Date.now(), followBadgeOkAt: Date.now(), followersScanAt: Date.now(), ...state });
 }
 
 describe("cross-module fixes (round 2)", () => {

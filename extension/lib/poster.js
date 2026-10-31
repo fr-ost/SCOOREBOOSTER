@@ -11,6 +11,25 @@ import { sleep, humanDelay, randInt, randFloat, chance, tweetIdFromUrl } from ".
 
 // Same normalisation as content/actions.js (zero-width joiners are dropped on both sides).
 const norm = (t) => String(t || "").replace(/\u00a0/g, " ").replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
+// The comparison form of the composer text (same as the content script's): no whitespace, no zero-width or emoji
+// variation characters, straight quotes, NFC. X re-rendering its box never blocks a reply; garbled text still does.
+export const loose = (t) => String(t || "").normalize("NFC").replace(/[\u200b-\u200d\u2060\ufeff\ufe0e\ufe0f]/g, "").replace(/[\u2018\u2019\u02bc]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, "");
+// How long a person would take to type the text at cpmMin-cpmMax characters per minute (capped at 45 s).
+export function typingMs(text, cpmMin, cpmMax) {
+  const cpm = Math.max(30, randFloat(cpmMin, cpmMax));
+  return Math.min(45000, Math.round((Array.from(String(text || "")).length / cpm) * 60000));
+}
+// Sleep in slices, false as soon as Pause/Stop is pressed.
+async function pauseFor(ms, stopped) {
+  let left = Math.max(0, ms);
+  while (left > 0) {
+    const step = Math.min(2000, left);
+    await sleep(step);
+    left -= step;
+    if (await stopped()) return false;
+  }
+  return true;
+}
 // Our reply among your replies in the thread: its text starts like the comment (as content/actions.js replyResult
 // compares). Another reply of yours under the post (e.g. one you wrote by hand to another commenter) is not it.
 const ourReply = (replies, text) => (replies || []).find((r) => norm(r.text).toLowerCase().startsWith(norm(text).toLowerCase().slice(0, 40)));
@@ -174,34 +193,28 @@ export async function postReply(rec, ctx) {
     if (oc.text) await send(tabId, CMD.CLEAR_COMPOSER, {}, 8000); // leftover draft
     await sleep(humanDelay(600, 1800));
 
-    // Type at a human speed. Delays live here (worker), each chunk is one quick page command.
-    let typed = "";
-    let misses = 0;
-    let k = 0;
-    for (const ch of typingPlan(text, sf.typingCpm.min, sf.typingCpm.max)) {
-      await sleep(ch.delay);
-      if (++k % 8 === 0 && (await stopped())) { await cleanup(tabId); return { ok: false, aborted: true, liked }; }
-      const r = await send(tabId, CMD.TYPE, { text: ch.text }, 8000);
-      if (r.state) return { ok: false, stop: stopFor(r.state), detail: r.detail || r.state, liked, unsure: false }; // prompt: touch nothing
-      if (r.page) { const vv = pageVerdict(r.page, settings); if (vv && vv.stop) { await cleanup(tabId); return { ok: false, stop: vv.stop, detail: vv.detail, liked }; } }
-      if (!r.ok) { if (++misses >= 3) break; continue; }
-      typed = r.text || typed;
-    }
-    // Verify; if character typing did not land, fall back to inserting the whole text once.
+    // A human typing pause for this reply, then the whole reply goes in at once (one paste event): X's editor garbles
+    // synthetic character-by-character typing and later re-renders its own version (ported from UniqueFarm).
+    const typeMs = typingMs(text, sf.typingCpm.min, sf.typingCpm.max);
+    if (!(await pauseFor(Math.round(typeMs * 0.7), stopped))) { await cleanup(tabId); return { ok: false, aborted: true, liked }; }
+    const r = await send(tabId, CMD.TYPE, { text, whole: true }, 15000);
+    if (r.state) return { ok: false, stop: stopFor(r.state), detail: r.detail || r.state, liked, unsure: false }; // prompt: touch nothing
+    if (r.page) { const vv = pageVerdict(r.page, settings); if (vv && vv.stop) { await cleanup(tabId); return { ok: false, stop: vv.stop, detail: vv.detail, liked }; } }
+    // Verify; if the text did not land, clear the box and insert it once more.
     let ct = await send(tabId, CMD.COMPOSER_TEXT, {}, 8000);
-    if (norm(ct.text) !== norm(text)) {
+    if (loose(ct.text) !== loose(text)) {
       await send(tabId, CMD.CLEAR_COMPOSER, {}, 8000);
       await sleep(humanDelay(400, 900));
-      const t2 = await send(tabId, CMD.TYPE, { text }, 8000);
+      const t2 = await send(tabId, CMD.TYPE, { text, whole: true }, 15000);
       if (t2.state) return { ok: false, stop: stopFor(t2.state), detail: t2.detail || t2.state, liked, unsure: false };
       ct = await send(tabId, CMD.COMPOSER_TEXT, {}, 8000);
-      if (norm(ct.text) !== norm(text)) {
+      if (loose(ct.text) !== loose(text)) {
         await cleanup(tabId);
         return { ok: false, fail: true, reason: "text_not_accepted_by_composer", liked };
       }
     }
-    await sleep(humanDelay(1200, 3800)); // re-read before sending
-    if (await stopped()) { await cleanup(tabId); return { ok: false, aborted: true, liked }; } // last chance: Pause/Stop wins
+    // The rest of the typing time plus a re-read before sending; last chance for Pause/Stop.
+    if (!(await pauseFor(Math.round(typeMs * 0.3) + humanDelay(1200, 3800), stopped))) { await cleanup(tabId); return { ok: false, aborted: true, liked }; }
 
     // The content script checks the account and looks for prompts once more right before the click.
     const sb = await send(tabId, CMD.SUBMIT_REPLY, { expectText: text, expectMe: want || undefined }, 15000);

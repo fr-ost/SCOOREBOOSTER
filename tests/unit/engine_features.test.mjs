@@ -95,7 +95,7 @@ describe("engine features (worker tab)", () => {
     await save({ [K.settings]: baseSettings, [K.targets]: { alice: notFollowing("alice") } });
     await setSecrets({ openaiKey: "sk-test-1234567890abcdef" });
     env.addTab({ id: 3, url: "https://x.com/home", pinned: true, index: 0 });
-    await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, startedAt: Date.now() - HOUR, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, followBadgeOkAt: Date.now(), followersScanAt: Date.now() });
+    await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, startedAt: Date.now() - HOUR, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, workerTabFreshAt: Date.now(), followBadgeOkAt: Date.now(), followersScanAt: Date.now() });
   });
   afterEach(async () => { _setClock(null); _setRandom(null); await engine.pause().catch(() => {}); });
 

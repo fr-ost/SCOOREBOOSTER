@@ -46,7 +46,7 @@ describe("DATA2-1: Clear history keeps what the engine's dedupe and generation l
     await S.save({ [K.settings]: settingsRaw, [K.targets]: { alice } });
     await S.setSecrets({ openaiKey: "sk-test-1234567890abcdef" });
     env.addTab({ id: 3, url: "https://x.com/home", pinned: true, index: 0 });
-    await S.patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, startedAt: Date.now() - HOUR, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, followBadgeOkAt: Date.now(), followersScanAt: Date.now() });
+    await S.patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, startedAt: Date.now() - HOUR, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, workerTabFreshAt: Date.now(), followBadgeOkAt: Date.now(), followersScanAt: Date.now() });
   });
   afterEach(async () => { _setClock(null); _setRandom(null); await engine.pause().catch(() => {}); });
 

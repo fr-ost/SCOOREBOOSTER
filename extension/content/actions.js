@@ -148,12 +148,73 @@
     return rawText(box) !== before;
   }
 
-  // Type the next chunk of characters at the end of the composer.
-  async function type({ text }) {
+  // ---- Inserting the reply (ported from UniqueFarm) ----
+  // X's editor (Draft.js) commits a pasted text into its own state. Typing a few characters at a time with synthetic
+  // events can desync that state from what the box shows (garbled or doubled text), and X later re-renders the box
+  // from its own state. So the whole reply goes in with one real paste event; beforeinput insertFromPaste and
+  // execCommand insertText are fallbacks. loose(): the comparison form (no whitespace, no zero-width or emoji
+  // variation characters, straight quotes, NFC), so a harmless re-render never blocks a reply.
+  const loose = (t) => String(t || "").normalize("NFC").replace(/[\u200b-\u200d\u2060\ufeff\ufe0e\ufe0f]/g, "").replace(/[\u2018\u2019\u02bc]/g, "'").replace(/[\u201c\u201d]/g, '"').replace(/\s+/g, "");
+  function selectAllIn(box) {
+    try { const sel = window.getSelection(); const r = document.createRange(); r.selectNodeContents(box); sel.removeAllRanges(); sel.addRange(r); } catch (_) {}
+  }
+  function dispatchPaste(box, text) {
+    try {
+      const dt = new DataTransfer();
+      dt.setData("text/plain", text);
+      box.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, composed: true, clipboardData: dt }));
+      return true;
+    } catch (_) { return false; }
+  }
+  async function insertWhole(box, text) {
+    const clean = String(text || "").trim();
+    const same = () => loose(boxText(box)) === loose(clean);
+    try { box.focus({ preventScroll: true }); } catch (_) {}
+    await D.sleep(50);
+    selectAllIn(box); // replaces whatever is in the box
+    await D.sleep(20);
+    dispatchPaste(box, clean);
+    await D.sleep(160);
+    if (!same() && !boxText(box)) {
+      selectAllIn(box);
+      try { box.dispatchEvent(new InputEvent("beforeinput", { inputType: "insertFromPaste", data: clean, bubbles: true, cancelable: true, composed: true })); } catch (_) {}
+      await D.sleep(140);
+    }
+    if (!same() && !boxText(box)) {
+      selectAllIn(box);
+      try { document.execCommand("insertText", false, clean); } catch (_) {}
+      await D.sleep(140);
+    }
+    if (!same() && boxText(box)) { // doubled or garbled: one more paste over everything
+      selectAllIn(box);
+      dispatchPaste(box, clean);
+      await D.sleep(160);
+    }
+    caretToEnd(box);
+    return same();
+  }
+  // X keeps the Reply button disabled until its editor state has the text: a real edit that nets out commits it.
+  function nudge(box) {
+    try {
+      box.focus({ preventScroll: true });
+      caretToEnd(box);
+      document.execCommand("insertText", false, " ");
+      document.execCommand("delete", false);
+    } catch (_) {}
+  }
+
+  // Type the next chunk of characters at the end of the composer, or (whole:true) put the whole reply in at once.
+  async function type({ text, whole }) {
     const p = promptCheck(); // a prompt appeared while typing: stop typing, touch nothing
     if (p) return p;
     const { box } = composer();
     if (!box) return { ok: false, error: "composer_missing", dom: true };
+    if (whole) {
+      const ok = await insertWhole(box, text);
+      const p2 = promptCheck();
+      if (p2) return p2;
+      return { ok, text: boxText(box), error: ok ? undefined : "typing_ignored" };
+    }
     if (document.activeElement !== box && !box.contains(document.activeElement)) caretToEnd(box);
     const changed = insertChunk(box, String(text || ""));
     return { ok: changed, text: boxText(box), error: changed ? undefined : "typing_ignored" };
@@ -205,20 +266,29 @@
     if (p0) return p0;
     const c = composer();
     if (!c.box) return { ok: false, error: "composer_missing", dom: true };
-    const got = boxText(c.box);
-    if (expectText && norm(expectText) !== got) return { ok: false, error: "composer_text_mismatch", text: got };
+    let got = boxText(c.box);
+    // X may have re-rendered the box from its own editor state: paste the reply once more before giving up.
+    if (expectText && loose(expectText) !== loose(got)) {
+      await insertWhole(c.box, expectText);
+      got = boxText(c.box);
+      if (loose(expectText) !== loose(got)) return { ok: false, error: "composer_text_mismatch", text: got };
+    }
     const key = c.where === "modal" ? "replySubmitModal" : "replySubmitInline";
     const find = () => D.q(key, c.root) || D.q("replySubmitModal") || D.q("replySubmitInline");
     let btn = null;
-    await D.waitFor(() => {
-      if (promptCheck()) return true;
+    // About 8 s for the button to enable; meanwhile the editor is nudged, and every 3rd try the reply is pasted again
+    // (UniqueFarm's recovery for a text that sits in the box but not in X's editor state).
+    for (let i = 0; i < 12; i++) {
+      if (promptCheck()) break;
       const b = find();
-      if (b && !D.isDisabled(b)) { btn = b; return true; }
-      return null;
-    }, 6000, 250);
-    // Checked again right before the click: the account and any prompt that showed up while waiting.
+      if (b && !D.isDisabled(b)) { btn = b; break; }
+      if (i > 0) { if (i % 3 === 0) await insertWhole(c.box, expectText || got); else nudge(c.box); }
+      await D.sleep(i === 0 ? 250 : 650);
+    }
+    // Checked again right before the click: the account, any prompt that showed up while waiting, and the text.
     const late = accountCheck(expectMe) || promptCheck();
     if (late) return late;
+    if (expectText && loose(expectText) !== loose(boxText(c.box))) return { ok: false, error: "composer_text_mismatch", text: boxText(c.box) };
     if (!btn || !btn.isConnected || D.isDisabled(btn)) {
       // A present-but-disabled button usually means X rejects the text (e.g. over its weighted length).
       return find() ? { ok: false, error: "submit_button_disabled" } : { ok: false, error: "submit_button_missing", dom: true };

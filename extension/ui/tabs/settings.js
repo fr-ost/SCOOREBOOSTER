@@ -445,6 +445,7 @@ export default {
     const workerSec = section({ title: "Worker tab and debugging" },
       h("div", { class: "form-grid" },
         f({ path: "advanced.tabMode", type: "select", label: "Worker tab", options: [["pinned", "Pinned tab in this window"], ["window", "Separate window (keep it visible)"]], format: (v) => v || "pinned", hint: "Use a visible window if X does not render in a background tab." }),
+        f({ path: "advanced.freshTab", type: "toggle", label: "Fresh X tab when it has been in the background a while", hint: "Chrome slows down tabs that stay in the background for about 5 minutes, and X then shows no posts. ScoreX opens a fresh X tab (and closes the old one) when a check starts after 4+ minutes in the background." }),
         f({ path: "advanced.debug", type: "toggle", label: "Debug logging", hint: "More detail in Recent activity. Keys are always redacted." })));
     const selectorsSec = section({ title: "Selector overrides", hint: "Patch selectors when X changes its page (\"X page changed\" stop). Same shape as content/selectors.js; merged over the built-in values." },
       labeled("Overrides JSON", ovText),

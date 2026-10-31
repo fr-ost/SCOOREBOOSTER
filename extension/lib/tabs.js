@@ -237,6 +237,30 @@ async function protect(tabId) {
   try { await chrome.tabs.update(tabId, { autoDiscardable: false }); } catch (_) {}
 }
 
+// Chrome slows a tab down hard once it has been in the background for about 5 minutes (intensive timer throttling),
+// and X then renders few or no posts in it ("rendered no posts while hidden"). Like UniqueFarm, which opens a fresh
+// background tab for every job, the worker tab is replaced by a fresh one when a job starts and the tab has been in
+// the background longer than this (settings.advanced.freshTab, on by default).
+export const FRESH_TAB_MS = 4 * 60 * 1000;
+async function hiddenFromUser(t) {
+  if (!t.active) return true;
+  try { const w = await chrome.windows.get(t.windowId); return !!w && w.state === "minimized"; } catch (_) { return false; }
+}
+async function freshTab(old) {
+  let tab = null;
+  try {
+    // Same window and place; pinned stays pinned, and a separate-window tab stays that window's visible tab.
+    tab = await chrome.tabs.create({ url: "https://x.com/home", active: !!old.active && !old.pinned, pinned: !!old.pinned, windowId: old.windowId, index: old.index });
+  } catch (_) { tab = null; }
+  if (!tab) return null;
+  await setWorker(tab.id, { workerTabPinned: !!tab.pinned, workerTabIndex: old.index, workerLastUrl: "https://x.com/home", workerTabFreshAt: now() });
+  await countLoad("other");
+  try { await chrome.tabs.remove(old.id); } catch (_) {}
+  if (!(await waitReady(tab.id, 45000))) return null;
+  await protect(tab.id);
+  return tab.id;
+}
+
 async function createTab(settings) {
   const url = "https://x.com/home";
   let tab;
@@ -250,7 +274,7 @@ async function createTab(settings) {
   if (!tab) return null;
   // Remembered right away (with the page it opens): if X does not load now, the next check reloads this tab
   // instead of opening yet another pinned tab.
-  await setWorker(tab.id, { workerTabPinned: !!tab.pinned, workerTabIndex: tab.index, workerLastUrl: url });
+  await setWorker(tab.id, { workerTabPinned: !!tab.pinned, workerTabIndex: tab.index, workerLastUrl: url, workerTabFreshAt: now() });
   await countLoad("other");
   const ok = await waitReady(tab.id, 45000);
   if (!ok) return null;
@@ -277,6 +301,12 @@ export async function workerTab(settings, { create = true } = {}) {
         try { await chrome.tabs.reload(t.id); await countLoad("other"); } catch (_) {}
         if (await waitReady(t.id, 40000)) { await protect(t.id); return t.id; }
       } else if (await ping(t.id)) {
+        const fresh = !settings || !settings.advanced || settings.advanced.freshTab !== false;
+        if (fresh && now() - (st.workerTabFreshAt || 0) > FRESH_TAB_MS && (await hiddenFromUser(t))) {
+          const id = await freshTab(t);
+          if (id != null) return id;
+          return null; // the new tab did not load: the next check retries it (never a pile of tabs)
+        }
         return t.id;
       } else {
         // Tab exists but the content script is silent (extension reloaded, frozen): reload it.

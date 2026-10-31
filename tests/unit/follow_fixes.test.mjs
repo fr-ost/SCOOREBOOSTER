@@ -132,7 +132,7 @@ describe("FOL-7: discovery does not spend profile visits on accounts that alread
 
   test("followers of a big account: the 'Follows you' cell is skipped, the next candidate is scored", async () => {
     await save({ [K.settings]: { discovery: { enrichMax: 1, minFollowers: 0 } } });
-    await patchState({ workerTabId: 7 });
+    await patchState({ workerTabId: 7, workerTabFreshAt: NOW });
     const r = await runDiscovery({ source: "followersOf", handles: ["big"], enrich: true }, async () => {});
     assert.equal(r.ok, true);
     const profileVisits = fx.navigations.filter((u) => /^https:\/\/x\.com\/[a-z_]+$/.test(u));

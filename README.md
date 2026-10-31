@@ -188,9 +188,11 @@ toward every limit. Watch pages are never loaded more often than every 90 second
 waits 2-5 minutes before loading it again, also when you press Run a check now or approve a reply.
 
 **Human-like behaviour**: random check intervals, the post is opened and "read" for a few seconds (longer for
-longer posts), a small scroll, optional like, typing at 170-320 characters per minute in small chunks with
-pauses, a re-read before sending, X's confirmation is awaited. Typing is paced from the service worker, so it
-stays realistic even when the X tab is in the background.
+longer posts), a small scroll, optional like, a typing pause as long as typing the reply at 170-320 characters
+per minute would take, then the reply goes into the box in one go (like a paste, as UniqueFarm does: X's editor
+garbles synthetic character-by-character typing), a re-read before sending, X's confirmation is awaited. If X's
+editor shows other text than the reply right before sending, ScoreX pastes the reply again once and never sends
+text that does not match.
 
 **Auto-stop**: ScoreX stops immediately, shows a desktop notification and a red **!** badge, and does **not**
 retry when it sees: a captcha / verification page, X's "this request looks like it might be automated" or any
@@ -389,9 +391,11 @@ wording to the `text` patterns (captcha, rate limit, "Your post was sent", ...).
 ## 10. Known limits
 
 * **X can change its page** at any time. ScoreX detects broken pages and stops, but it cannot fix them alone.
-* **Background tab rendering**: Chrome may not fully render x.com in a hidden tab. If ScoreX reports "X tab
-  not rendering", switch **Settings > Worker tab and selectors > Worker tab** to *separate window* (keep that window visible, for
-  example on a second screen) or enable **Safety > Bring X tab to front while posting**.
+* **Background tab rendering**: Chrome slows down a tab that stays in the background for about 5 minutes, and X
+  then renders no posts in it. ScoreX therefore replaces its X tab with a fresh one when a check starts after 4+
+  minutes in the background (Settings > Worker tab and selectors > Fresh X tab; you may see the pinned tab
+  reopen). If ScoreX still reports "X tab not rendering", switch **Worker tab** to *separate window* and keep
+  that window visible (not minimized, for example on a second screen).
 * Only **original posts** are commented (no replies inside threads, no reposts). Quote posts are included by default.
 * "Following since" for cleanup is the first time ScoreX saw that you follow an account.
 * Engagement numbers come from what the page shows. X does not show whether the author liked your reply, so

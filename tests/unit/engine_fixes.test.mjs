@@ -38,7 +38,7 @@ async function setup(env, { settings = {}, targets = {}, state = {} } = {}) {
   await setSecrets({ openaiKey: "sk-test-1234567890abcdef" });
   await save({ [K.targets]: targets });
   env.addTab({ id: 3, url: "https://x.com/home", pinned: true, index: 0 });
-  await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, followBadgeOkAt: Date.now(), followersScanAt: Date.now(), ...state });
+  await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, workerTabFreshAt: Date.now(), followBadgeOkAt: Date.now(), followersScanAt: Date.now(), ...state });
 }
 
 describe("engine fixes (review round 1)", () => {
@@ -132,7 +132,7 @@ describe("engine fixes (review round 1)", () => {
 
     test("same session: the stored tab is reused even after it moved", async () => {
       resetStorage();
-      await patchState({ workerTabId: 4, workerTabPinned: true, workerTabIndex: 0, workerLastUrl: lastUrl });
+      await patchState({ workerTabId: 4, workerTabPinned: true, workerTabIndex: 0, workerLastUrl: lastUrl, workerTabFreshAt: Date.now() });
       senv.sessionData.set(tabs._test.SESSION_KEY, 4);
       senv.addTab({ id: 4, url: "https://x.com/alice", pinned: true, index: 2 });
       assert.equal(await tabs.workerTab(sanitizeSettings({})), 4);
@@ -141,7 +141,7 @@ describe("engine fixes (review round 1)", () => {
     test("after an extension reload (no session marker) our own tab is recognised by its last page and kept", async () => {
       resetStorage();
       senv.sessionData.clear();
-      await patchState({ workerTabId: 5, workerTabPinned: true, workerTabIndex: 0, workerLastUrl: lastUrl });
+      await patchState({ workerTabId: 5, workerTabPinned: true, workerTabIndex: 0, workerLastUrl: lastUrl, workerTabFreshAt: Date.now() });
       senv.addTab({ id: 5, url: lastUrl, pinned: true, index: 0 });
       assert.equal(await tabs.workerTab(sanitizeSettings({})), 5);
       assert.equal(senv.tabs.size, 1, "no second tab opened");

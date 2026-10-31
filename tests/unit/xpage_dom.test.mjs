@@ -313,6 +313,48 @@ ${notice}<button data-testid="tweetButton">Reply</button></div>`;
     } finally { await p.close(); }
   });
 
+  // X's editor (Draft.js) takes a paste into its own state and renders that; a plain contenteditable ignores a
+  // synthetic paste. This fake does what Draft.js does with a paste over a full selection: the box shows the text.
+  const DRAFT_LIKE = `(() => { const b = document.querySelector('[data-testid="tweetTextarea_0"]'); window.__pastes = 0;
+    b.addEventListener("paste", (e) => { e.preventDefault(); window.__pastes++; b.textContent = e.clipboardData.getData("text/plain"); }); })();`;
+  const REPLY = "ngl the timing on this is what makes it work, the rest is noise";
+
+  test("the reply goes in with one paste (X's editor commits it), not character by character", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      await p.page.addScriptTag({ content: DRAFT_LIKE });
+      const r = await p.call({ sx: "type", text: REPLY, whole: true });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(await p.page.evaluate(() => document.querySelector('[data-testid="tweetTextarea_0"]').textContent), REPLY);
+      assert.equal(await p.page.evaluate(() => window.__pastes), 1);
+    } finally { await p.close(); }
+  });
+
+  test("submit: a box X re-rendered with other text is repaired by pasting the reply again, then sent", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      await p.page.addScriptTag({ content: DRAFT_LIKE });
+      await p.call({ sx: "type", text: REPLY, whole: true });
+      await p.page.evaluate(() => { document.querySelector('[data-testid="tweetTextarea_0"]').textContent = "wyw wyw ngl the timing"; });
+      const r = await p.call({ sx: "submitReply", expectText: REPLY, expectMe: "0x_nation" });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(await p.page.evaluate(() => document.querySelector('[data-testid="tweetTextarea_0"]').textContent), REPLY);
+      assert.ok((await p.clicks()).includes("tweetButtonInline"), "Reply clicked with the right text");
+    } finally { await p.close(); }
+  });
+
+  test("submit: text that cannot be put right is never sent (composer_text_mismatch, nothing clicked)", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      // An editor that rewrites itself to other text on every paste (stuck state).
+      await p.page.addScriptTag({ content: `(() => { const b = document.querySelector('[data-testid="tweetTextarea_0"]'); b.addEventListener("paste", (e) => { e.preventDefault(); b.textContent = "something else entirely"; }); b.textContent = "something else entirely"; })();` });
+      const r = await p.call({ sx: "submitReply", expectText: REPLY, expectMe: "0x_nation" });
+      assert.equal(r.ok, false);
+      assert.equal(r.error, "composer_text_mismatch");
+      assert.ok(!(await p.clicks()).includes("tweetButtonInline"));
+    } finally { await p.close(); }
+  });
+
   test("typing stops when a prompt is up (nothing is inserted)", async () => {
     const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(PROMPT));
     try {

@@ -274,7 +274,7 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
   }
   if (seenNow.length) await markSeen(seenNow);
   fresh.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  if (hiddenEmpty) log("warn", "The X tab rendered no posts while hidden. If this repeats, use Settings > Advanced > separate window, or allow bringing the tab to front.");
+  if (hiddenEmpty) log("info", "X showed no posts in its background tab (Chrome slows down tabs that stay hidden): the next check starts in a fresh X tab");
   return { ok: true, posts: fresh, waiting, scanned: posts.length, source: plan.label, hiddenEmpty, visibleEmpty, page: lastPage };
 }
 

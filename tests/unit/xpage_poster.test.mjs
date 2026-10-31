@@ -141,14 +141,36 @@ describe("poster: unknown X prompts (fail closed)", () => {
 
   test("a prompt while typing -> stop, the rest is not typed and nothing is clicked", async (t) => {
     fast(t);
-    let n = 0;
-    const box = { text: "" };
-    const env = fakeTab(xPage({ type: (m) => { if (++n === 3) return PROMPT; box.text += m.text; return { ok: true, text: box.text }; } }));
+    const env = fakeTab(xPage({ type: () => PROMPT }));
     const r = await run(env);
     assert.equal(r.stop, STOP.UNKNOWN_PROMPT);
-    assert.equal(env.count("type"), 3);
+    assert.equal(env.count("type"), 1);
     assert.deepEqual(env.after("type"), []);
     assert.equal(env.count("submitReply"), 0);
+  });
+
+  test("the reply goes in at once (one paste-style insert of the whole text), never character by character", async (t) => {
+    fast(t);
+    const env = fakeTab(xPage());
+    const r = await run(env);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const types = env.calls.filter((c) => c.cmd === "type");
+    assert.equal(types.length, 1);
+    assert.equal(types[0].msg.whole, true);
+    assert.equal(types[0].msg.text, rec.comment);
+  });
+
+  test("X re-rendering the box (curly quotes, other spacing, a variation selector) is not a mismatch; garbled text is", async (t) => {
+    fast(t);
+    const rendered = rec.comment.replace(/'/g, "\u2019").replace(/ /g, "  ") + "\ufe0f";
+    const env = fakeTab(xPage({ composerText: () => ({ ok: true, text: rendered }) }));
+    const r = await run(env);
+    assert.equal(r.ok, true, JSON.stringify(r));
+    const garbled = fakeTab(xPage({ composerText: () => ({ ok: true, text: "wyw wyw " + rec.comment }) }));
+    const g = await run(garbled);
+    assert.equal(g.ok, false);
+    assert.equal(g.reason, "text_not_accepted_by_composer");
+    assert.equal(garbled.count("submitReply"), 0, "garbled text is never posted");
   });
 
   test("a prompt right before the click -> stop, Reply not clicked, no cleanup", async (t) => {

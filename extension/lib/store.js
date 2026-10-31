@@ -251,7 +251,9 @@ export const DEFAULT_SETTINGS = {
   history: { compactAfterDays: 30, keepUnpostedDays: 90 },
 
   ui: { theme: "system" },
-  advanced: { debug: false, tabMode: "pinned" }, // tabMode: "pinned" tab in your window or a separate "window"
+  // tabMode: "pinned" tab in your window or a separate "window". freshTab: replace the X tab with a fresh one when a
+  // check starts and it has been in the background for 4+ minutes (Chrome throttles long-hidden tabs; lib/tabs.js).
+  advanced: { debug: false, tabMode: "pinned", freshTab: true },
 };
 
 export const DEFAULT_STATE = {
@@ -272,6 +274,7 @@ export const DEFAULT_STATE = {
   breakUntil: null,
   sleepingUntil: null,
   workerTabId: null,
+  workerTabFreshAt: null, // when the current X tab was opened fresh (lib/tabs.js replaces it after FRESH_TAB_MS in the background)
   job: null, // { kind, id, startedAt, leaseUntil, step }
   consecutiveFailures: 0,
   softErrors: 0,

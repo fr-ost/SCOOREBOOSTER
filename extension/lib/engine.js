@@ -584,7 +584,10 @@ async function tickBody(settings, secrets, reason = "timer") {
     const emptyWatchStreak = !w.source ? state.emptyWatchStreak || 0 : fresh ? 0 : (state.emptyWatchStreak || 0) + 1;
     await patchState({ softErrors: 0, errorPageStreak: 0, watchRetryAt: null, emptyStreak, hiddenEmptyStreak: hiddenStreak, emptyWatchStreak, ...(fresh ? { lastFreshAt: now() } : {}), lastWatchAt: now(), lastWatchSource: w.source, lastWatchScanned: w.scanned });
     if (emptyStreak >= 4) { await stop(STOP.DOM_CHANGED, "No posts rendered on watch pages 4 times in a row - X may have changed its page"); return null; }
-    if (hiddenStreak === 3) await notify("sx-hidden", "ScoreX: X tab not rendering", "X showed no posts while its tab was hidden. Open Settings > Advanced and switch to 'separate window', or enable 'bring X tab to front'.");
+    // X rendered nothing in the background tab: Chrome throttles long-hidden tabs, so the next check starts in a fresh
+    // tab (lib/tabs.js FRESH_TAB_MS). Only when that keeps happening is the owner told.
+    if (hiddenStreak) await patchState({ workerTabFreshAt: 0 });
+    if (hiddenStreak === 3) await notify("sx-hidden", "ScoreX: X tab not rendering", "X showed no posts in its background tab 3 times, even in a fresh tab. Switch Settings > Worker tab and selectors > Worker tab to 'Separate window' and keep that window visible (not minimized).");
     if (w.posts.length) {
       counts = await computeCounts(settings, now());
       await handleFresh(w.posts, { settings, secrets, mode, counts, tabId, me });
