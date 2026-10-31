@@ -233,13 +233,26 @@
     return !openDialog() && (!c.box || !boxText(c.box));
   }
 
+  // X keeps the text in the box until its request finishes, so a prompt that shows up while the reply is still being
+  // sent (an unrelated sheet) would otherwise look like "not sent": the box is watched this long first.
+  const PROMPT_GRACE_MS = 8000;
+
   // After submitting: wait for X's confirmation (toast with a link, composer cleared, or our reply in the thread).
   // An unknown prompt (or AI-label text) ends the wait as state "unknown_prompt"; cleared/sent tell the worker
-  // whether the reply may have gone out anyway.
+  // whether the reply may have gone out anyway. Nothing on the page is touched.
   async function replyResult({ tweetId, expectText, me, timeoutMs = 20000 }) {
     const want = norm(expectText).slice(0, 60).toLowerCase();
     const sentToast = () => D.qa("toast").some((t) => D.re("replySent").test(D.text(t)) || !!t.querySelector('a[href*="/status/"]'));
     const prompted = (p, sent) => ({ ...p, cleared: composerCleared(), sent: !!sent || sentToast() });
+    // Our reply's link from X's "sent" toast, if it shows one.
+    const toastLink = () => {
+      for (const t of D.qa("toast")) {
+        const a = t.querySelector('a[href*="/status/"]');
+        const m = a && (a.getAttribute("href") || "").match(/\/([A-Za-z0-9_]{1,15})\/status\/(\d{5,25})/);
+        if (m) return { replyId: m[2], replyUrl: `https://x.com/${m[1]}/status/${m[2]}` };
+      }
+      return {};
+    };
     const res = await D.waitFor(() => {
       const ts = X.toastState();
       if (ts) return { ok: false, state: ts.state, detail: ts.detail };
@@ -261,6 +274,15 @@
       }
       return null;
     }, timeoutMs, 400);
+    if (res && res.state === "unknown_prompt" && !res.cleared && !res.sent) {
+      // The text is still in the box, so X may still be sending the reply: watch a few seconds more (touching
+      // nothing). A box that empties or a "sent" toast means it went out; an X warning toast means X refused it.
+      await D.waitFor(() => composerCleared() || sentToast() || X.toastState(), Math.min(PROMPT_GRACE_MS, timeoutMs), 400);
+      const ts = X.toastState();
+      if (ts) return { ok: false, state: ts.state, detail: ts.detail };
+      const sent = sentToast();
+      return { ...res, cleared: composerCleared(), sent, ...(sent ? toastLink() : {}) };
+    }
     if (res && res.ok) {
       // X sometimes follows a sent reply with a sheet (e.g. an AI label or "may be hidden" notice): look for a
       // moment before reporting success, so it is never missed.

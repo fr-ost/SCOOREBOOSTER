@@ -125,8 +125,10 @@ async function readProfile(tabId, handle, settings, stopped = NEVER, purpose) {
   const r = await send(tabId, CMD.SCRAPE_PROFILE, {}, 20000);
   const v2 = pageVerdict(r.page, settings);
   if (v2 && v2.stop) return { ok: false, stop: v2.stop, detail: v2.detail };
-  if (!r.ok || !r.profile) return { ok: false, soft: "profile_not_rendered", page: r.page };
-  return { ok: true, profile: r.profile, posts: r.tweets || [], page: r.page };
+  if (!r.ok) return { ok: false, soft: r.error || "scrape_failed", page: r.page }; // the tab did not answer
+  // The page answered without a profile header: X's error page, or a header ScoreX can no longer read.
+  if (!r.profile) return { ok: false, soft: v2 && v2.soft === "error_page" ? "error_page" : "profile_not_rendered", detail: v2 && v2.detail, page: r.page };
+  return { ok: true, profile: r.profile, posts: r.tweets || [], articleCount: r.articleCount || 0, unparsed: r.unparsed || 0, page: r.page };
 }
 
 // X answered a watched list with "this page doesn't exist" (mistyped, deleted, or someone else's private list):
@@ -151,10 +153,11 @@ const engineStopped = async () => (await getState()).status !== STATUS.RUNNING;
 
 /**
  * One watch check. Returns { ok, posts (fresh candidates, newest first), waiting (too fresh, retry soon),
- * scanned, source, page (last page report), stop?, soft?, hiddenEmpty?, aborted? }
+ * scanned, source, page (last page report), stop?, soft?, hiddenEmpty?, visibleEmpty?, aborted? }
  * opts.shouldStop(): Pause/Stop pressed (default: the engine is no longer running). It is checked before every
  * navigation and scroll; an aborted check returns { ok:true, aborted:true, posts:[] } and touches no state.
  * A watched X List that does not exist returns { ok:false, soft:"list_not_found" } (and is skipped for a while).
+ * Rotation: every visited target moves to the back of the rotation; one X says does not exist is turned off.
  */
 export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = {}) {
   const stopped = opts.shouldStop || engineStopped;
@@ -170,6 +173,8 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
   let pageInfo = null;
   let lastPage = null;
   const profileUpdates = {};
+  // Rotation: what the profile visits showed (gone: X says the account does not exist; failed: no profile read).
+  const rot = { gone: [], failed: [], read: 0, articleCount: 0, unparsed: 0 };
   if (plan.kind === "rotation") {
     for (const h of plan.handles) {
       const r = await readProfile(tabId, h, settings, stopped, "watch");
@@ -177,7 +182,14 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
       if (r.stop) return { ok: false, stop: r.stop, detail: r.detail, source: plan.label };
       if (r.budget) return { ok: false, soft: r.soft, budget: true, until: r.until, source: plan.label };
       if (r.page) lastPage = r.page;
-      if (r.ok) { posts.push(...(r.posts || [])); if (r.profile) profileUpdates[h] = { profile: r.profile, posts: r.posts }; }
+      if (r.notFound) rot.gone.push(h);
+      else if (r.ok) {
+        rot.read++;
+        rot.articleCount += r.articleCount || 0;
+        rot.unparsed += r.unparsed || 0;
+        posts.push(...(r.posts || []));
+        profileUpdates[h] = { profile: r.profile, posts: r.posts };
+      } else rot.failed.push(r);
       await sleep(humanDelay(2000, 6000));
     }
   } else {
@@ -195,26 +207,46 @@ export async function watchOnce(tabId, settings, targetsMap, ts = now(), opts = 
   }
   if (await stopped()) return aborted;
 
-  // Structural sanity: articles rendered but none could be parsed -> selectors are outdated.
-  if (pageInfo && pageInfo.articleCount >= 3 && pageInfo.unparsed >= pageInfo.articleCount) {
-    return { ok: false, stop: STOP.DOM_CHANGED, detail: `${pageInfo.articleCount} posts on the page but none could be read`, source: plan.label };
+  // Structural sanity: articles rendered but none could be parsed -> selectors are outdated (rotation: over all the
+  // profile pages of this check).
+  const counted = plan.kind === "rotation" ? rot : pageInfo;
+  if (counted && counted.articleCount >= 3 && counted.unparsed >= counted.articleCount) {
+    return { ok: false, stop: STOP.DOM_CHANGED, detail: `${counted.articleCount} posts on the ${plan.kind === "rotation" ? "profile pages" : "page"} but none could be read`, source: plan.label };
   }
   const realEmpty = !!(pageInfo && (pageInfo.notFound || pageInfo.emptyResult)); // X said "no results"
-  const hiddenEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && pageInfo.page.hidden && !realEmpty);
-  const visibleEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && !pageInfo.page.hidden && !realEmpty);
+  let hiddenEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && pageInfo.page.hidden && !realEmpty);
+  let visibleEmpty = !!(pageInfo && !pageInfo.articleCount && pageInfo.page && !pageInfo.page.hidden && !realEmpty);
+  // Rotation without a single readable profile: a page that answered without a profile header counts like a watch
+  // page without posts (hidden tab, or X changed its markup: the engine stops after 4 in a row); visits that all
+  // failed otherwise (no answer from the tab, X's error page) are a failed check.
+  let failed = null;
+  if (plan.kind === "rotation" && !rot.read && rot.failed.length) {
+    if (rot.failed.some((r) => r.soft === "profile_not_rendered")) {
+      hiddenEmpty = !!(lastPage && lastPage.hidden);
+      visibleEmpty = !hiddenEmpty;
+    } else {
+      failed = { soft: rot.failed.every((r) => r.soft === "error_page") ? "error_page" : rot.failed[0].soft, detail: rot.failed[0].detail };
+    }
+  }
 
   // Update target caches (recent posts feed the prompt; profiles from rotation feed the ranking).
   const byAuthor = Object.create(null);
   for (const p of posts) if (!p.isRepost && Object.hasOwn(targetsMap, p.author)) (byAuthor[p.author] ||= []).push(p);
-  if (Object.keys(byAuthor).length || Object.keys(profileUpdates).length) {
+  if (Object.keys(byAuthor).length || Object.keys(profileUpdates).length || plan.kind === "rotation") {
     const stNow = Object.keys(profileUpdates).length ? await getState() : st;
     await updateTargets((all) => {
       for (const [h, ps] of Object.entries(byAuthor)) if (all[h]) mergePosts(all[h], ps);
       for (const [h, u] of Object.entries(profileUpdates)) if (all[h]) applyProfile(all[h], trustedFollowReading(u.profile, stNow), u.posts, settings.scores.blendSorsa);
+      // Whatever a visit showed, the target goes to the back of the rotation: a profile that does not render or no
+      // longer exists must not be picked first again on every check.
       for (const h of plan.handles || []) if (all[h]) all[h].lastCheckedAt = now();
+      // X says the account does not exist (renamed, suspended, deleted): turned off, as the follow check does.
+      for (const h of rot.gone) if (all[h]) { all[h].rel = { ...(all[h].rel || {}), gone: true, checkedAt: now() }; all[h].enabled = false; }
       return all;
     });
+    for (const h of rot.gone) log("info", `@${h}: profile not found (suspended, deleted or renamed) - target turned off`);
   }
+  if (failed) return { ok: false, soft: failed.soft, detail: failed.detail, source: plan.label, page: lastPage };
 
   const seen = await getSeen();
   const fresh = [], waiting = [], seenNow = [];

@@ -11,6 +11,9 @@ import { sleep, humanDelay, randInt, randFloat, chance, tweetIdFromUrl } from ".
 
 // Same normalisation as content/actions.js (zero-width joiners are dropped on both sides).
 const norm = (t) => String(t || "").replace(/\u00a0/g, " ").replace(/[\u200b-\u200d\ufeff]/g, "").replace(/\s+/g, " ").trim();
+// Our reply among your replies in the thread: its text starts like the comment (as content/actions.js replyResult
+// compares). Another reply of yours under the post (e.g. one you wrote by hand to another commenter) is not it.
+const ourReply = (replies, text) => (replies || []).find((r) => norm(r.text).toLowerCase().startsWith(norm(text).toLowerCase().slice(0, 40)));
 
 // Split text into 1-3 character chunks with per-chunk delays for a given chars-per-minute speed.
 export function typingPlan(text, cpmMin, cpmMax) {
@@ -121,10 +124,8 @@ export async function postReply(rec, ctx) {
     if (pv2 && pv2.notFound) return { ok: false, skip: true, reason: "post_not_found" };
     return { ok: false, retry: true, reason: "post_not_rendered" };
   }
-  if (st.myReplies && st.myReplies.length) {
-    const mine = st.myReplies[0];
-    return { ok: true, already: true, replyUrl: mine.url, replyId: mine.id, liked: !!st.focal.liked };
-  }
+  const done = ourReply(st.myReplies, text);
+  if (done) return { ok: true, already: true, replyUrl: done.url, replyId: done.id, liked: !!st.focal.liked };
   if (st.canReply === false) return { ok: false, skip: true, reason: "replies_restricted" };
   if (st.focalIndex > 0) return { ok: false, skip: true, reason: "reply_in_thread_not_original_post" };
   // Nothing is liked, typed or submitted unless this page is logged in as your account.
@@ -221,7 +222,8 @@ export async function postReply(rec, ctx) {
       if (!rr2.noAnswer) rr = rr2;
     }
     if (rr.state === "unknown_prompt") {
-      // Leave the page exactly as it is (no cleanup clicks). It may have been sent if X cleared the box.
+      // Leave the page exactly as it is (no cleanup clicks). It may have been sent if X cleared the box or showed its
+      // "sent" toast (X keeps the text while sending, so the page watches the box a few seconds after the prompt).
       return { ok: false, stop: STOP.UNKNOWN_PROMPT, detail: rr.detail || "Unknown dialog", liked, unsure: !!(rr.cleared || rr.sent), replyUrl: rr.replyUrl || "" };
     }
     if (rr.state) { const s = stopFor(rr.state); return { ok: false, stop: s, detail: rr.detail || rr.state, liked, unsure: !REJECTED.has(s) }; } // a warning / limit toast = X refused it
@@ -239,7 +241,7 @@ export async function postReply(rec, ctx) {
     const again = await send(tabId, CMD.SCRAPE_STATUS, { tweetId, me }, 20000);
     v = verdictOf(again, settings);
     if (v) return { ok: false, stop: v.stop, detail: v.detail, liked, unsure: true };
-    const mine = again.ok && again.myReplies && again.myReplies.find((r) => norm(r.text).toLowerCase().startsWith(norm(text).toLowerCase().slice(0, 40)));
+    const mine = again.ok && ourReply(again.myReplies, text);
     if (mine) return { ok: true, replyUrl: mine.url, replyId: mine.id, liked, via: "recheck" };
     await cleanup(tabId);
     return { ok: false, fail: true, reason, liked, unsure: true };

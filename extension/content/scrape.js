@@ -226,8 +226,10 @@
       const loc = items.querySelector('[data-testid="UserLocation"]');
       if (loc) profile.location = D.text(loc).slice(0, 80);
     }
-    const { tweets } = scrapeTweets(30);
-    return { profile, tweets: tweets.filter((t) => t.author === handle) };
+    // articleCount / unparsed: posts rendered on the page and how many of them could not be read (the watcher's
+    // "X changed its markup" check, as on list and search pages).
+    const { tweets, articleCount, unparsed } = scrapeTweets(30);
+    return { profile, tweets: tweets.filter((t) => t.author === handle), articleCount, unparsed };
   }
 
   function scrapeUsers(limit = 200) {
