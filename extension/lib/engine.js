@@ -18,7 +18,7 @@ import { postReply } from "./poster.js";
 import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
-import { followStep, badgeTrusted } from "./follow.js";
+import { followStep, badgeTrusted, followRoom, wantsFollow, recordFollow, followFirstStep } from "./follow.js";
 import { conversationsStep } from "./conversations.js";
 import { catchUpCandidates, catchUpMaxAgeMin } from "./catchup.js";
 import { cancelDiscovery } from "./discovery.js";
@@ -847,7 +847,11 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   });
   if (!claimed) return "gone";
   const shouldStop = async () => !(await stillRunning());
-  const r = await postReply(claimed, { tabId, settings, me, allowLike, shouldStop });
+  // Follow first: a target you do not follow is followed on its post page right before the reply (within the cap).
+  const tgt = (await getTargets())[rec.target];
+  const pctx = { tabId, settings, me, allowLike, shouldStop, followFirst: !!(tgt && wantsFollow(tgt, settings) && followRoom(settings, state) > 0) };
+  const r = await postReply(claimed, pctx);
+  if (pctx.followResult) await recordFollow(rec.target, pctx.followResult);
   const ts = now();
   if (r.aborted) {
     await H.patch(rec.id, { status: prevStatus, reason: "Posting interrupted by Pause/Stop - not posted", ...(r.liked ? { liked: true, likedAt: ts } : {}) });
@@ -936,6 +940,12 @@ async function backgroundStep({ tabId, settings, me }) {
 async function routineBackground({ tabId, settings, me, shouldStop }) {
   {
     const r = await withPurpose("follow", () => followStep({ tabId, settings, me, shouldStop }));
+    if (r && r.stop) return r;
+    if (r && r.did) return r;
+  }
+  if (await shouldStop()) return null;
+  if (settings.follow.followFirst) {
+    const r = await withPurpose("follow", () => followFirstStep({ tabId, settings, me, shouldStop }));
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }

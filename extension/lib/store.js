@@ -157,6 +157,8 @@ export const DEFAULT_SETTINGS = {
     scanEveryHours: 2, // how often your newest followers are scanned for follow-backs
     recheckHours: 72, // profile re-check of the accounts you comment on
     checksPerRun: 4, // profile visits per idle check
+    followFirst: true, // follow a target you do not follow before (or while) commenting on it
+    followsPerDay: 40, // follow-first: accounts followed per 24 h (HARD.dailyFollows at most)
   },
 
   review: {
@@ -274,6 +276,8 @@ export const DEFAULT_STATE = {
   breakUntil: null,
   sleepingUntil: null,
   workerTabId: null,
+  followTimes: [], // follow-first: when ScoreX followed someone (rolling 24 h cap)
+  lastFollowAt: null,
   workerTabFreshAt: null, // when the current X tab was opened fresh (lib/tabs.js replaces it after FRESH_TAB_MS in the background)
   job: null, // { kind, id, startedAt, leaseUntil, step }
   consecutiveFailures: 0,
@@ -442,6 +446,8 @@ export function sanitizeSettings(raw) {
   fo.scanEveryHours = clamp(num(fo.scanEveryHours, 2), 1, 24);
   fo.recheckHours = clamp(num(fo.recheckHours, 72), 12, 336);
   fo.checksPerRun = clamp(Math.round(num(fo.checksPerRun, 4)), 1, 8);
+  fo.followFirst = fo.followFirst !== false;
+  fo.followsPerDay = clamp(Math.round(num(fo.followsPerDay, 40)), 0, HARD.dailyFollows);
 
   s.review.pendingMaxAgeMin = clamp(num(s.review.pendingMaxAgeMin, 180), 10, 24 * 60);
   s.review.approvedMaxAgeMin = clamp(num(s.review.approvedMaxAgeMin, 240), 10, 24 * 60);

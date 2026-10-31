@@ -53,6 +53,7 @@
     async replyResult(m) { return A.replyResult(m); },
     async followState() { return A.followState(); },
     async unfollow(m) { return A.unfollow(m); },
+    async follow(m) { return A.follow(m); },
     async replyStats(m) { return A.replyStats(m); },
   };
 

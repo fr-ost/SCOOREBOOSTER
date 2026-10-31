@@ -123,7 +123,7 @@ describe("Tone prompt and follow settings", () => {
     const s = sanitizeSettings({});
     assert.equal(s.prompt.tone, DEFAULT_TONE_PROMPT);
     assert.equal("styleExamples" in s.prompt, false);
-    assert.deepEqual(s.follow, { giveUpDays: 14, autoRemove: true, blacklist: true, scanEveryHours: 2, recheckHours: 72, checksPerRun: 4 });
+    assert.deepEqual(s.follow, { giveUpDays: 14, autoRemove: true, blacklist: true, scanEveryHours: 2, recheckHours: 72, checksPerRun: 4, followFirst: true, followsPerDay: 40 });
     assert.deepEqual(s.learning.abTones, { A: [], B: [] });
     assert.equal("autoMoveToA" in s.learning, false);
   });
@@ -136,7 +136,9 @@ describe("Tone prompt and follow settings", () => {
 
   test("follow settings are clamped", () => {
     const f = sanitizeSettings({ follow: { giveUpDays: 1, scanEveryHours: 0, recheckHours: 1, checksPerRun: 99, autoRemove: 0, blacklist: false } }).follow;
-    assert.deepEqual(f, { giveUpDays: 3, autoRemove: true, blacklist: false, scanEveryHours: 1, recheckHours: 12, checksPerRun: 8 });
+    assert.deepEqual(f, { giveUpDays: 3, autoRemove: true, blacklist: false, scanEveryHours: 1, recheckHours: 12, checksPerRun: 8, followFirst: true, followsPerDay: 40 });
+    assert.equal(sanitizeSettings({ follow: { followsPerDay: 999 } }).follow.followsPerDay, 100, "hard cap");
+    assert.equal(sanitizeSettings({ follow: { followFirst: false } }).follow.followFirst, false);
     assert.equal(sanitizeSettings({ follow: { autoRemove: false } }).follow.autoRemove, false);
     assert.equal(sanitizeSettings({ follow: { giveUpDays: 500 } }).follow.giveUpDays, 90);
   });

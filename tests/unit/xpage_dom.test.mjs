@@ -227,7 +227,8 @@ ${notice}<button data-testid="tweetButton">Reply</button></div>`;
     try {
       const r = await p.call({ sx: "submitReply", expectText: "Love the AI-generated look, which model?" });
       assert.equal(r.ok, true, JSON.stringify(r));
-      assert.deepEqual(await p.clicks(), ["tweetButton"]);
+      const cl = await p.clicks();
+      assert.ok(cl.length >= 1 && cl.every((x) => x === "tweetButton"), "only Reply clicked (this fake page never reacts, so it is clicked again): " + cl);
     } finally { await p.close(); }
     p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(modal(`<div><span>Add an AI label so people know this reply was generated with AI.</span><button data-testid="aiLabelToggle">Add label</button></div>`), { composer: "" }));
     try {
@@ -327,6 +328,55 @@ ${notice}<button data-testid="tweetButton">Reply</button></div>`;
       assert.equal(r.where, "inline");
       assert.ok((await p.clicks()).includes("tweetTextarea_0"), "clicked into the reply box");
       assert.equal(await p.page.evaluate(() => document.activeElement && document.activeElement.getAttribute("data-testid")), "tweetTextarea_0");
+    } finally { await p.close(); }
+  });
+
+  test("Reply click: once X reacts (the box empties) it is never clicked again; an ignored click gets the shortcut and one more click", async () => {
+    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      await p.page.addScriptTag({ content: DRAFT_LIKE });
+      await p.page.addScriptTag({ content: `document.querySelector('[data-testid="tweetButtonInline"]').addEventListener("click", () => { setTimeout(() => { document.querySelector('[data-testid="tweetTextarea_0"]').textContent = ""; }, 300); });` });
+      await p.call({ sx: "type", text: REPLY, whole: true });
+      const r = await p.call({ sx: "submitReply", expectText: REPLY, expectMe: "0x_nation" });
+      assert.equal(r.ok, true);
+      assert.equal(r.started, true);
+      assert.equal(r.tries, 1);
+      assert.deepEqual((await p.clicks()).filter((x) => x === "tweetButtonInline"), ["tweetButtonInline"]);
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      await p.page.addScriptTag({ content: DRAFT_LIKE });
+      await p.page.addScriptTag({ content: `window.__keys = 0; document.querySelector('[data-testid="tweetTextarea_0"]').addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) window.__keys++; });` });
+      await p.call({ sx: "type", text: REPLY, whole: true });
+      const r = await p.call({ sx: "submitReply", expectText: REPLY, expectMe: "0x_nation" });
+      assert.equal(r.started, false, "nothing reacted");
+      assert.equal(r.tries, 3);
+      assert.equal(await p.page.evaluate(() => window.__keys), 1, "X's Ctrl/Cmd+Enter shortcut was tried once");
+      assert.equal((await p.clicks()).filter((x) => x === "tweetButtonInline").length, 2);
+    } finally { await p.close(); }
+  });
+
+  test("follow: only the author's own 'Follow @handle' button (never an ad or a suggestion); already following is left alone", async () => {
+    const side = (label, extra = "") => `<aside aria-label="Relevant people"><div data-testid="UserCell"><button aria-label="${label}" data-testid="11-follow" id="authorFollow"><span>Follow</span></button></div></aside>${extra}`;
+    const ad = `<div data-testid="placementTracking"><button aria-label="Follow @bigbob" data-testid="99-follow" id="adFollow">Follow</button></div><div aria-label="Who to follow"><button aria-label="Follow @someoneelse" data-testid="12-follow">Follow</button></div>`;
+    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(side("Follow @bigbob", ad)));
+    try {
+      await p.page.addScriptTag({ content: `document.getElementById("authorFollow").addEventListener("click", (e) => { e.currentTarget.setAttribute("aria-label", "Following @bigbob"); e.currentTarget.setAttribute("data-testid", "11-unfollow"); });` });
+      const r = await p.call({ sx: "follow", handle: "bigbob", expectMe: "0x_nation" });
+      assert.equal(r.ok, true, JSON.stringify(r));
+      assert.ok(!r.already);
+      assert.deepEqual((await p.clicks()).filter((x) => /follow/.test(x)), ["11-follow"], "only the author's button");
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(side("Following @bigbob")));
+    try {
+      const r = await p.call({ sx: "follow", handle: "bigbob", expectMe: "0x_nation" });
+      assert.equal(r.already, true);
+      assert.deepEqual((await p.clicks()).filter((x) => /follow/.test(x)), [], "nothing clicked");
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+    try {
+      const r = await p.call({ sx: "follow", handle: "bigbob", expectMe: "0x_nation" });
+      assert.equal(r.error, "follow_button_missing");
     } finally { await p.close(); }
   });
 

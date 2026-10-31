@@ -175,6 +175,22 @@ export async function postReply(rec, ctx) {
     await sleep(humanDelay(900, 2600));
   }
 
+  // Follow first (ctx.followFirst, from settings.follow.followFirst for a target you do not follow): the author's
+  // "Follow @handle" button on this page. Not there -> the background follow step does it from the profile, and the
+  // reply goes on either way. The outcome is left in ctx.followResult for the engine.
+  if (ctx.followFirst) {
+    if (await stopped()) return { ok: false, aborted: true, liked };
+    const fr = await send(tabId, CMD.FOLLOW, { handle: rec.target, expectMe: want || undefined }, 15000);
+    v = verdictOf(fr, settings);
+    if (v) return { ok: false, stop: v.stop, detail: v.detail, liked };
+    const arf = accountRefusal(fr, want);
+    if (arf && arf.stop) return { ok: false, stop: arf.stop, detail: arf.detail, liked };
+    if (arf) return accountUnknown(liked);
+    if (fr.state) return { ok: false, stop: stopFor(fr.state), detail: fr.detail || "X warning after follow", liked };
+    ctx.followResult = fr.ok ? (fr.pending ? "pending" : fr.already ? "already" : "followed") : "missing";
+    if (fr.ok && !fr.already) await sleep(humanDelay(900, 2200));
+  }
+
   if (await stopped()) return { ok: false, aborted: true, liked };
   const restore = sf.bringTabToFront ? await bringToFront(tabId) : null;
   try {
@@ -250,7 +266,10 @@ export async function postReply(rec, ctx) {
 
     // Unclear (not confirmed, no answer from the tab, an error): look at the thread again for our reply before
     // deciding (never re-submit).
-    const reason = rr.cleared ? "sent_but_not_visible" : rr.noAnswer ? "no_answer_after_submit" : "not_confirmed";
+    // X never reacted to the Reply click, the shortcut or the second click: nothing went out. What X showed, if anything,
+    // goes into the reason so the owner can see why.
+    const ignored = sb.ok && sb.started === false;
+    const reason = (rr.cleared ? "sent_but_not_visible" : rr.noAnswer ? "no_answer_after_submit" : ignored ? "x_ignored_reply_click" : "not_confirmed") + (rr.xSaid ? ` (X: ${String(rr.xSaid).slice(0, 160)})` : "");
     await sleep(humanDelay(2500, 4500));
     await navigate(tabId, rec.postUrl);
     await waitForPage(tabId, ["tweet"], 20000);
@@ -260,7 +279,7 @@ export async function postReply(rec, ctx) {
     const mine = again.ok && ourReply(again.myReplies, text);
     if (mine) return { ok: true, replyUrl: mine.url, replyId: mine.id, liked, via: "recheck" };
     await cleanup(tabId);
-    return { ok: false, fail: true, reason, liked, unsure: true };
+    return { ok: false, fail: true, reason, liked, unsure: !ignored };
   } finally {
     if (restore) await restore();
   }

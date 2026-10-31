@@ -135,6 +135,7 @@ export const CMD = Object.freeze({
   REPLY_RESULT: "replyResult",
   FOLLOW_STATE: "followState",
   UNFOLLOW: "unfollow",
+  FOLLOW: "follow",
   REPLY_STATS: "replyStats",
   SELF_TEST: "selfTest", // counts which selectors match on the current page (Diagnostics)
 });
@@ -175,6 +176,7 @@ export const HARD = Object.freeze({
   dailyComments: 200,
   dailyLikes: 200, // likes only happen right before a comment, so they never exceed the comments
   dailyUnfollows: 30,
+  dailyFollows: 100, // follow-first: accounts followed per 24 h at most
   minGapMin: 2, // never two comments closer than this
   perTargetDay: 2,
   perTargetWeek: 14,

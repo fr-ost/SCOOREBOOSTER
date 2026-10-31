@@ -312,9 +312,42 @@
       // A present-but-disabled button usually means X rejects the text (e.g. over its weighted length).
       return find() ? { ok: false, error: "submit_button_disabled" } : { ok: false, error: "submit_button_missing", dom: true };
     }
+    // Did X start sending? The box empties, the Reply button greys out or goes away, a progress bar shows, or a new
+    // toast / prompt appears. If none of that happens, X ignored the click (its handler never ran): then X's own
+    // Ctrl/Cmd+Enter shortcut, then one more click (UniqueFarm). Never again once anything has started.
+    const toastsBefore = new Set(D.qa("toast").map((t) => D.text(t)));
+    const started = () => composerCleared() || !btn.isConnected || D.isDisabled(btn)
+      || !!(c.root && c.root.querySelector('[role="progressbar"]'))
+      || D.qa("toast").some((t) => !toastsBefore.has(D.text(t))) || !!promptCheck();
     D.humanClick(btn);
-    return { ok: true, where: c.where };
+    let tries = 1;
+    let began = !!(await D.waitFor(() => (started() ? true : null), 5000, 250));
+    if (!began && loose(boxText(c.box)) === loose(expectText || got)) {
+      keyboardSubmit(c.box);
+      tries++;
+      began = !!(await D.waitFor(() => (started() ? true : null), 4000, 250));
+      if (!began && btn.isConnected && !D.isDisabled(btn) && !promptCheck()) {
+        D.humanClick(btn);
+        tries++;
+        began = !!(await D.waitFor(() => (started() ? true : null), 4000, 250));
+      }
+    }
+    return { ok: true, where: c.where, tries, started: began };
   }
+
+  // X's own submit shortcut in the reply box (Cmd+Enter on a Mac, Ctrl+Enter elsewhere).
+  function keyboardSubmit(box) {
+    try {
+      box.focus({ preventScroll: true });
+      caretToEnd(box);
+      const mac = /mac/i.test(navigator.platform || "");
+      const o = { key: "Enter", code: "Enter", keyCode: 13, which: 13, ctrlKey: !mac, metaKey: mac, bubbles: true, cancelable: true, composed: true };
+      for (const t of ["keydown", "keypress", "keyup"]) box.dispatchEvent(new KeyboardEvent(t, o));
+    } catch (_) {}
+  }
+
+  // What X shows right now (toasts and alerts), for the reason of an unconfirmed reply.
+  const xMessages = () => D.qa("toast").map((t) => D.text(t).replace(/\s+/g, " ").trim()).filter(Boolean).slice(0, 3).join(" | ").slice(0, 200);
 
   // Did X take the reply? (no composer dialog left and the box is empty)
   function composerCleared() {
@@ -382,13 +415,46 @@
     if (res) return res;
     // No explicit confirmation: if the composer emptied and no modal is left, X most likely accepted it.
     const cleared = composerCleared();
-    return { ok: false, error: cleared ? "unconfirmed_cleared" : "not_confirmed", cleared };
+    const { box } = composer();
+    return { ok: false, error: cleared ? "unconfirmed_cleared" : "not_confirmed", cleared, xSaid: xMessages(), textLeft: !!(box && boxText(box)) };
   }
 
   function followState() {
     const { profile } = S.scrapeProfile();
     if (!profile) return { ok: false, error: "profile_not_rendered" };
     return { ok: true, followsYou: profile.followsYou, youFollow: profile.youFollow, pending: profile.followPending, profile };
+  }
+
+  // Follow an account (follow-first): on its post page the author's button reads "Follow @handle" (UniqueFarm), on its
+  // profile it is the header's follow button. Never a "Who to follow" suggestion or an ad. A "Following @handle" /
+  // unfollow button means you already follow it; a protected account answers with a pending request.
+  async function follow({ handle, expectMe }) {
+    const acct = accountCheck(expectMe);
+    if (acct) return acct;
+    const p0 = promptCheck();
+    if (p0) return p0;
+    const h = String(handle || "").toLowerCase().replace(/^@/, "");
+    if (!h) return { ok: false, error: "no_handle" };
+    const inAd = (el) => !!(el && el.closest('[data-testid="placementTracking"]'));
+    const labelled = () => [...document.querySelectorAll("button[aria-label], [role=\"button\"][aria-label]")].filter((b) => !inAd(b));
+    const label = (b) => (b.getAttribute("aria-label") || "").trim().toLowerCase();
+    const following = () => labelled().some((b) => label(b) === "following @" + h || label(b) === "unfollow @" + h)
+      || (onProfile() && !!S.relationButtons(D.q("primaryColumn") || document).un);
+    const pending = () => labelled().some((b) => label(b) === "pending @" + h) || (onProfile() && !!S.relationButtons(D.q("primaryColumn") || document).pend);
+    const onProfile = () => (location.pathname.split("/")[1] || "").toLowerCase() === h;
+    if (following()) return { ok: true, already: true };
+    if (pending()) return { ok: true, pending: true, already: true };
+    let btn = labelled().find((b) => label(b) === "follow @" + h) || null;
+    if (!btn && onProfile()) btn = S.relationButtons(D.q("primaryColumn") || document).fo;
+    if (!btn) return { ok: false, error: "follow_button_missing" };
+    D.humanClick(btn);
+    const done = await D.waitFor(() => following() || pending() || X.toastState() || promptCheck(), 8000, 250);
+    const ts = X.toastState();
+    if (ts) return { ok: false, state: ts.state, detail: ts.detail };
+    const p1 = promptCheck();
+    if (p1) return p1;
+    if (pending()) return { ok: true, pending: true };
+    return done && following() ? { ok: true } : { ok: false, error: "follow_not_confirmed" };
   }
 
   async function unfollow({ handle, expectMe }) {
@@ -434,5 +500,5 @@
     return { ok: true, y: window.scrollY, atBottom };
   }
 
-  globalThis.SXActions = { like, openComposer, type, composerText, clearComposer, closeComposer, submitReply, replyResult, followState, unfollow, replyStats, scroll, focalArticle };
+  globalThis.SXActions = { like, openComposer, type, composerText, clearComposer, closeComposer, submitReply, replyResult, followState, follow, unfollow, replyStats, scroll, focalArticle };
 })();

@@ -262,6 +262,14 @@ ScoreX only comments on accounts that **don't follow you**. Import a list of 100
    (Targets > Blacklist). The number of days, automatic removal and the blacklist are switches on the
    Targets screen (**Edit rules**).
 
+**Follow them first** (Targets > Edit rules, on): a reply from someone who does not follow you is easy to ignore, so
+ScoreX follows a target you don't follow before replying to it: on the post page right before the reply (the
+author's own "Follow @handle" button, never a suggestion or an ad), or from the profile while idle, one account
+every 3-8 minutes, at most 40 a day by default (hard cap 100). A protected account gets a follow request. Accounts
+that already follow you are not touched. Note: with Cleanup on, accounts you followed are unfollowed after its
+days without a follow-back; keep those days at or above the give-up days if you want the follow to last while
+ScoreX is still replying.
+
 Safety check: if X shows your followers list without any "Follows you" badge, the badge markup has changed
 and every account would look like a non-follower, so ScoreX stops ("X page changed") instead of commenting.
 "Doesn't follow you" is only trusted while the badge was seen working in the last 3 days. If an account
