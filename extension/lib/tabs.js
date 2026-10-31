@@ -40,6 +40,14 @@ export async function withPurpose(purpose, fn) {
   purposeHint = PURPOSES.includes(purpose) ? purpose : null;
   try { return await fn(); } finally { purposeHint = prev; }
 }
+// The lease holder's abort check (engine.withLease, for jobs outside the tick): once Pause/Stop set it, navigate()
+// loads nothing more for that job and answers { ok:false, aborted:true, error:"aborted" }.
+let abortHint = null;
+export async function withAbort(isAborted, fn) {
+  const prev = abortHint;
+  abortHint = typeof isAborted === "function" ? isAborted : null;
+  try { return await fn(); } finally { abortHint = prev; }
+}
 
 const bucketOf = (ts) => Math.floor(ts / HOUR);
 const inWindow = (i, h) => i > h - 24 && i <= h;
@@ -311,11 +319,13 @@ export async function workerTab(settings, { create = true } = {}) {
 // Navigate the worker tab and wait until the new page's content script is ready.
 // opts: { purpose } (one of PURPOSES; otherwise the engine's current job, else inferred from the URL) or, as
 // before, a timeout in ms. With settings.safety.maxPageLoads24h reached it returns { ok:false, budget:true,
-// error:"page_budget", until } without loading anything: callers wait (it is never a failure or a stop).
+// error:"page_budget", until } without loading anything: callers wait (it is never a failure or a stop). A lease job
+// that Pause/Stop aborted (withAbort) gets { ok:false, aborted:true, error:"aborted" }, also without loading anything.
 export async function navigate(tabId, url, opts) {
   const o = typeof opts === "number" ? { timeoutMs: opts } : opts && typeof opts === "object" ? opts : {};
   const timeoutMs = Number(o.timeoutMs) > 0 ? Number(o.timeoutMs) : 45000;
   const purpose = PURPOSES.includes(o.purpose) ? o.purpose : purposeHint || inferPurpose(url);
+  if (abortHint && abortHint()) return { ok: false, aborted: true, error: "aborted" };
   const settings = await getSettings().catch(() => null);
   if (settings && settings.safety && settings.safety.maxPageLoads24h > 0) {
     const pb = pageBudget(settings, await getState(), now());

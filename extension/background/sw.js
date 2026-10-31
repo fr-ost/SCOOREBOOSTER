@@ -123,7 +123,8 @@ async function startDiscovery(opts, jobId) {
     const cur = await mine();
     if (!cur) return { ok: false, error: "superseded" };
     if (cur.status === "cancelling") { await save({ [K.discovery]: { ...cur, status: "cancelled", finishedAt: now() } }); return { ok: false, error: "cancelled" }; }
-    const r = await engine.withLease("discovery", () => runDiscovery({ ...opts, jobId }, engine.stop));
+    // Checked again under the lease: a check that held the X tab meanwhile may have ended in a safety stop.
+    const r = await engine.withLease("discovery", async () => (engine.safetyStopped(await getState()) ? { ok: false, error: engine.SAFETY_STOP_ERROR } : runDiscovery({ ...opts, jobId }, engine.stop)));
     if (!r || !r.busy) return r;
     await sleep(5000);
   }
@@ -195,6 +196,8 @@ const handlers = {
   candidatesClear: async () => { await updateCandidates(() => ({})); return { ok: true }; },
 
   discoveryStart: async (m) => {
+    // After a safety stop (captcha, X warning, rate limit...) nothing drives the X tab until you review the stop.
+    if (engine.safetyStopped(await getState())) return { ok: false, error: engine.SAFETY_STOP_ERROR };
     const cur = await load(K.discovery, {});
     if (ACTIVE_DISCOVERY.includes(cur.status)) return { ok: false, error: "A discovery is already running - cancel it first" };
     const jobId = "d" + now().toString(36);

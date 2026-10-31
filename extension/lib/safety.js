@@ -190,7 +190,7 @@ export function riskReport(settings, state, counts, footprint, reach, ts = now()
   // 1) Replies per 24 h (actual, up to 25) plus the daily limit you allow (up to 5). Heuristic: ~100 replies a
   //    day is a lot for one person; limits above 100 a day leave room for that.
   const volPts = clamp(posted / 100, 0, 1) * 25 + (limit > 100 ? 5 : limit > 50 ? 3 : 0);
-  add("volume", "Replies per day", `${posted} replies in the last 24 h (daily limit ${limit})`, volPts);
+  add("volume", "Replies per day", `${posted} ${posted === 1 ? "reply" : "replies"} in the last 24 h (daily limit ${limit})`, volPts);
 
   // 2) Hours active per day (active hours off = 24 h). People sleep; heuristic: 20 h+ is the busiest pattern.
   const hrs = activeHoursPerDay(settings);
@@ -221,13 +221,17 @@ export function riskReport(settings, state, counts, footprint, reach, ts = now()
   const score = clamp(Math.round(factors.reduce((s, f) => s + f.points, 0)), 0, 100);
   const level = score >= RISK_LEVELS.high ? "high" : score >= RISK_LEVELS.medium ? "medium" : "low";
 
-  // Hours until the daily limit at the pace of the last 24 h (null when nothing was posted yet).
+  // Hours until the daily limit at the pace of the last 24 h (null when nothing was posted yet): the replies counted
+  // over the time they cover (since the first of them, counts.firstPostedAt; without it since the last start), and
+  // never sooner than the hard minimum gap between comments allows.
   let hoursToLimit = null;
   if (posted >= limit) hoursToLimit = 0;
   else if (posted > 0) {
-    const ran = st.startedAt ? (ts - st.startedAt) / HOUR : 24;
+    const from = Number(counts && counts.firstPostedAt) || Number(st.startedAt) || 0;
+    const ran = from ? (ts - from) / HOUR : 24;
     const pace = posted / clamp(ran, 1, 24);
-    hoursToLimit = Math.round(((limit - posted) / pace) * 10) / 10;
+    const fastest = ((limit - posted) * HARD.minGapMin * MIN) / HOUR;
+    hoursToLimit = Math.max(Math.round(((limit - posted) / pace) * 10) / 10, Math.ceil(fastest * 10) / 10);
   }
   return { level, score, factors, hoursToLimit };
 }
