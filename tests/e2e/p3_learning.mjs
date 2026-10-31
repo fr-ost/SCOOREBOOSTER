@@ -12,7 +12,8 @@ const patchTargets = (patches) => H.patchTargets(patches);
 
 try {
   M.addUser("bigbob", { name: "Big Bob", followers: 40000 });
-  await setup(H, { learning: { enabled: true, abTesting: true, explore: 0, abTones: ["insightful", "witty"], abPresets: [], minSamples: 4, coldAfterComments: 3, engagementCheckAfterHours: 24, maxChecksPerRun: 3 } });
+  // Tier presets pinned to High quality / Balanced (the A/B data below uses Balanced arms; the default is Human).
+  await setup(H, { genRev: 1, presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" }, learning: { enabled: true, abTesting: true, explore: 0, abTones: ["insightful", "witty"], abPresets: [], minSamples: 4, coldAfterComments: 3, engagementCheckAfterHours: 24, maxChecksPerRun: 3 } });
   await H.msg("targetsUpsert", { rows: ["bigbob"], defaults: { tier: 2 } });
   await H.msg("start");
   const tb = await H.untilChecked(["bigbob"]);
