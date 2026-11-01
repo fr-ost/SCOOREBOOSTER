@@ -53,6 +53,8 @@ function checkInvariants(where) {
     if (FOLLOWERS.includes(author)) violations.push(`${where}: reply to @${author}, who followed from the start`);
     if (OTHERS.includes(author)) violations.push(`${where}: reply to non-target @${author}`);
     if (followSince[author] && r.at > followSince[author] + 2000) violations.push(`${where}: reply to @${author} after ScoreX knew it follows you`);
+    // Follow first: no reply to an account you do not follow - a follow that X kept comes before it.
+    if (TARGETS.includes(author) && !M.followLog.some((f) => f.handle === author && f.kept && f.at <= r.at)) violations.push(`${where}: reply to @${author} without a follow X kept before it`);
     if (removedAt[author] && r.at > removedAt[author] + 60000) violations.push(`${where}: reply to @${author} after it was removed/blacklisted`);
     for (const [a, b] of pauses) if (r.at > a + 5000 && r.at < b) violations.push(`${where}: reply at ${new Date(r.at).toISOString()} while paused`);
   }
@@ -116,6 +118,7 @@ try {
     } else if (roll < 0.42) { await H.msg("pause"); paused = Date.now(); ev("paused"); }
     else if (roll < 0.50) { const tab = (await H.xTabs())[0]; if (tab) { await tab.close().catch(() => {}); ev("X tab closed"); } }
     else if (roll < 0.58) { await H.settings({ mode: "review" }); ev("switched to Review mode"); }
+    else if (roll < 0.68) { M.followMode = pick(["notkept", "revert", "limit"]); ev(`X does not take follows (${M.followMode})`); }
 
     // Two checks per cycle (one posts a due reply, the next watches and generates). Clock-based waits (gaps /
     // breaks) are sped up; history-based limits (daily, per target) stay untouched.
@@ -133,6 +136,7 @@ try {
     // Undo the disruption and recover like a user would.
     if (M.replyMode !== "ok") M.replyMode = "ok";
     if (M.pageMode !== "ok") M.pageMode = "ok";
+    if (M.followMode !== "ok") M.followMode = "ok";
     if (paused) { await sleep(3000); pauses.push([paused, Date.now()]); await H.msg("resume"); ev("resumed"); }
     const s = (await H.msg("getStatus")).status;
     if (s.state.status === "stopped") {
