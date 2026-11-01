@@ -124,13 +124,15 @@ export function fill(template, vars) {
 }
 
 // Run one capability. Returns { ok, score?, max?, list?, url, error?, message? } and never throws.
-export async function runCapability(def, mode, cap, handle, { key = "", fetchImpl, readPage = readPageInTab } = {}) {
+// vars: extra URL placeholders for paged APIs ({page}, {size}; defaults 1 and 20).
+export async function runCapability(def, mode, cap, handle, { key = "", fetchImpl, readPage = readPageInTab, vars: more = {} } = {}) {
   const m = def && def.modes && def.modes[mode];
   const spec = m && m[cap];
   if (!spec) return { ok: false, error: "unsupported", message: `${def ? def.name : "Provider"} cannot do that in this mode` };
   const k = headerValue(key || "");
   const plain = { handle: String(handle || "").replace(/^@/, "").toLowerCase() };
-  const vars = { ...plain, key: k };
+  const page = clamp(Math.round(num(more.page, 1)), 1, 100000), size = clamp(Math.round(num(more.size, 20)), 1, 100);
+  const vars = { page, size, ...plain, key: k };
   // The key only ever goes into a request to the provider's own API host. A browser tab URL (it lands in your
   // history) and the page link (stored in chrome.storage and shown as a link) never carry it.
   const tab = spec.kind === "tab";
@@ -145,8 +147,13 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
   for (const [hk, v] of Object.entries(cleanHeaders(spec.headers) || {})) headers[hk] = headerValue(String(v).replace(/\{key\}/g, k));
   const as = spec.kind === "html" ? "text" : "json";
   const r = await fetchData(url, { headers, as, fetchImpl, timeoutMs });
+  // A rejected key gets one plain message: it doesn't work, get a new one (never the key itself).
+  const keyBad = { ok: false, error: "auth", status: r.status, message: `Your ${def.name} API key doesn't work - get a new key${def.keyHelp ? ` (${def.keyHelp})` : ""} and paste it in Scores > Providers`, url: pageUrl };
+  if (k && !r.ok && r.error === "auth") return keyBad;
+  if (k && !r.ok && r.error === "rate") return { ...r, message: `${def.name}: too many requests or no requests left on your plan (429) - try again later, or check your plan's usage`, url: pageUrl };
   if (!r.ok && r.error === "not_found") return { ...r, message: `${def.name} has no data for @${vars.handle}`, url: pageUrl };
   if (!r.ok) return { ...r, url: pageUrl };
+  if (k && as === "json" && keyRejectedBody(r.json)) return keyBad;
   const json = as === "json" ? r.json : (spec.json ? jsonFromHtml(r.text, spec.json) : undefined);
   const text = as === "text" ? textFromHtml(r.text) : undefined;
   if (spec.notFoundPath && json !== undefined && pickValue({ path: spec.notFoundPath }, { json }) != null) return { ok: false, error: "not_found", message: `${def.name} has no data for @${vars.handle}`, url: pageUrl };
@@ -169,6 +176,15 @@ export async function runCapability(def, mode, cap, handle, { key = "", fetchImp
     if (spec.total) out.total = toNumber(pickValue(spec.total, { json, text }));
   }
   return finish(def, cap, out, pageUrl, vars.handle);
+}
+
+// An API that answers 200 with an error body about the key ({ success: false, error: "Invalid API key" }).
+function keyRejectedBody(json) {
+  if (!json || typeof json !== "object" || Array.isArray(json)) return false;
+  const failed = json.success === false || json.ok === false || /^(?:error|fail(?:ed|ure)?)$/i.test(String(json.status || "")) || json.error != null;
+  if (!failed) return false;
+  const msg = [json.error, json.detail, json.message, json.msg, json.error && json.error.message].filter((x) => typeof x === "string").join(" ");
+  return /api[\s_-]?key|\btoken\b|unauthori[sz]ed|forbidden|invalid key|key (?:is )?(?:invalid|expired|not valid|revoked)|subscription (?:expired|inactive)|trial (?:has )?(?:ended|expired)/i.test(msg);
 }
 
 // True when one of the value paths is present in the JSON with the value null (a missing field is a changed API).

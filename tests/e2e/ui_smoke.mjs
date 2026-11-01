@@ -41,8 +41,8 @@ const { chromium } = require("playwright");
 const EXT = "/home/user/SCOOREBOOSTER/extension";
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "out");
 // [route, rail label / screen title]
-const SCREENS = [["overview", "Today"], ["review", "Review"], ["targets", "Targets"], ["discover", "Discover"], ["scores", "Scores"], ["history", "Results"], ["tones", "Tone"], ["models", "Models & costs"], ["safety", "Safety"], ["settings", "Settings"]];
-const READY = { results: "history", diagnostics: "settings" }; // route aliases -> the screen that renders them
+const SCREENS = [["overview", "Today"], ["review", "Review"], ["targets", "Targets"], ["discover", "Discover"], ["scores", "Scores"], ["history", "Results"], ["comments", "History"], ["tones", "Tone"], ["models", "Models & costs"], ["safety", "Safety"], ["settings", "Settings"]];
+const READY = { results: "history", diagnostics: "settings", comments: "history" }; // route aliases -> the screen that renders them
 const FAKE_KEY = "sk-test-UIsmoke1234567890abcdWXYZ";
 
 fs.mkdirSync(OUT, { recursive: true });
@@ -438,18 +438,21 @@ try {
   await section("shell: rail, engine bar, aliases, menu sheet", async () => {
     await openTab(page, base, "overview");
     const labels = await page.locator("#nav .tab .tab-label").allInnerTexts();
-    check(JSON.stringify(labels) === JSON.stringify(SCREENS.map((x) => x[1])), "rail lists the 10 screens in order: " + labels.join(", "));
+    check(JSON.stringify(labels) === JSON.stringify(SCREENS.map((x) => x[1])), "rail lists the 11 screens in order: " + labels.join(", "));
     check((await page.locator("#nav .rail-group").allInnerTexts()).join("|").toUpperCase() === "WORK|GROWTH|SETUP", "rail groups WORK / GROWTH / SETUP");
     check((await page.locator('#nav .tab.active[aria-current="page"] .tab-label').innerText()).trim() === "Today", "active screen is marked with aria-current (Today)");
     check(await waitFor(page, () => document.querySelector('#nav [data-tab="review"] .tab-count')?.textContent === "3", null, 8000), "Review rail item shows a count of 3");
     for (const [r, label] of SCREENS) {
       await page.click(`#nav .tab[data-tab="${r}"]`);
-      const ok = await waitFor(page, (x) => !!document.querySelector(`#view[data-ready="${x}"]`), r, 15000);
+      const ok = await waitFor(page, (x) => !!document.querySelector(`#view[data-ready="${x}"]`), READY[r] || r, 15000);
       curRoute = r;
       check(ok && (await page.locator("#screenTitle").innerText()).trim() === label && (await page.locator(`#nav .tab[data-tab="${r}"]`).getAttribute("aria-current")) === "page", `rail click opens ${label} (#view[data-ready="${r}"], title, aria-current)`);
     }
     await openTab(page, base, "results");
     check((await page.locator("#screenTitle").innerText()).trim() === "Results" && (await page.locator("#nav .tab.active").getAttribute("data-tab")) === "history", "#results opens Results (rail item history active)");
+    await openTab(page, base, "comments");
+    check((await page.locator("#screenTitle").innerText()).trim() === "History" && (await page.locator("#nav .tab.active").getAttribute("data-tab")) === "comments" && (await page.locator("#resultsComments").isVisible()) && (await page.locator("#historyTable").count()) === 1, "#comments opens History: every comment (Results > Comments, all time), its own rail item active");
+    check((await page.locator('#resultsRange [aria-checked="true"]').getAttribute("data-value")) === "all" && (await page.locator('#resultsView [aria-checked="true"]').getAttribute("data-value")) === "comments", "History opens on Comments, all time");
     await openTab(page, base, "diagnostics");
     check((await page.locator("#diagnostics").count()) === 1, "#diagnostics opens Settings › Diagnostics");
     await openTab(page, base, "overview");
@@ -706,7 +709,7 @@ try {
     await page.locator("#followRecheckHours").fill("5");
     await page.locator("#followRecheckHours").press("Tab");
     fs1 = await waitSetting(page, (x) => x.follow.recheckHours === 12);
-    check(fs1 && fs1.follow.recheckHours === 12 && fs1.follow.scanEveryHours === 2 && fs1.follow.checksPerRun === 4, "Follow checks: re-check hours 5 is clamped to 12 (scan every 2 h, 4 checks per run unchanged)");
+    check(fs1 && fs1.follow.recheckHours === 12 && fs1.follow.scanEveryHours === 2 && fs1.follow.checksPerRun === 10, "Follow checks: re-check hours 5 is clamped to 12 (scan every 2 h, 10 checks per run unchanged)");
     check(/Follows you/.test(await page.locator("#followHow").innerText()), "the rules explain how follow detection works");
     check((await page.locator("#rulesSheet #useValue").count()) === 1, "the rules hold the score-aware ranking switch (targeting.useValue)");
     await page.keyboard.press("Escape");
@@ -959,7 +962,7 @@ try {
     await waitFor(page, () => document.getElementById("historyCount")?.textContent === "14");
     check((await page.locator("#hGroup").count()) === 0 && !(await page.locator("#historyTable thead th").allInnerTexts()).some((x) => /^\s*Group\s*$/.test(x)), "no Group filter or column");
     const heads = await page.locator("#historyTable thead th").allInnerTexts();
-    check(["Date", "Target", "Comment", "Status", "Results"].every((x) => heads.some((y) => new RegExp(x, "i").test(y))), "Comments columns: Date, Target, Comment, Status, Results");
+    check(["Date", "Target", "Post", "Comment", "Status", "Outcome"].every((x) => heads.some((y) => new RegExp(x, "i").test(y))), "Comments columns: Date, Target, Post, Comment, Status, Outcome");
     await page.locator("#historyTable tbody tr").first().click();
     check(await waitFor(page, () => !!document.querySelector("#historyDrawer")), "a Comments row opens the details drawer");
     await page.keyboard.press("Escape");
@@ -1017,13 +1020,13 @@ try {
     await page.getByLabel("Week 1", { exact: true }).fill("999");
     await page.getByLabel("Week 1", { exact: true }).press("Tab");
     await waitSaved(page);
-    check((await page.getByLabel("Week 1", { exact: true }).inputValue()) === "200", "ramp 999 is clamped to the hard cap 200 right away");
+    check((await page.getByLabel("Week 1", { exact: true }).inputValue()) === "300", "ramp 999 is clamped to the hard cap 300 right away");
     await page.reload();
     await page.waitForSelector('#view[data-ready="safety"]');
     check((await page.getByLabel("Gap between comments maximum").inputValue()) === "45", "gap max 45 persisted after reload");
-    check((await page.getByLabel("Week 1", { exact: true }).inputValue()) === "200", "ramp week 1 persisted as 200 after reload");
+    check((await page.getByLabel("Week 1", { exact: true }).inputValue()) === "300", "ramp week 1 persisted as 300 after reload");
     const st = await savedSettings(page);
-    check(st && st.safety.ramp[0] === 200 && st.safety.gapMin.max === 45, "chrome.storage has ramp[0]=200 and gapMin.max=45");
+    check(st && st.safety.ramp[0] === 300 && st.safety.gapMin.max === 45, "chrome.storage has ramp[0]=300 and gapMin.max=45");
     await page.getByLabel("Gap between comments minimum").fill("1");
     await page.getByLabel("Gap between comments minimum").press("Tab");
     await waitSaved(page);

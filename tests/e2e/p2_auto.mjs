@@ -38,8 +38,8 @@ try {
   assert(s.today.limit === 30 && s.rampStage === 2, "week 3+ daily limit is 30");
   await H.settings({ safety: { ramp: [10, 20, 999] } });
   s = (await H.msg("getStatus")).status;
-  assert(s.today.limit === 200, "ramp is clamped to the hard cap of 200");
-  assert(s.today.likeLimit === 200 && s.today.accountsLimit === 100, "no separate like limit (one like per comment), 100 accounts per day");
+  assert(s.today.limit === 300, "ramp is clamped to the hard cap of 300");
+  assert(s.today.likeLimit === 300 && s.today.accountsLimit === 100, "no separate like limit (one like per comment), 100 accounts per day");
 
   // ---- full auto: generate -> queue -> post with like ----
   const p2 = M.addPost("alice", "We cut our signup form from 9 fields to 3 and conversion jumped. Asking for company size later worked fine.", 2);

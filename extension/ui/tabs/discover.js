@@ -15,6 +15,7 @@ import {
 } from "../components.js";
 import { barInCell, overlapDots, fmtShort } from "../charts.js";
 import { readiness, usageLeft, MODE_TAG } from "./scores.js";
+import { smartDbSection } from "./smartdb_ui.js";
 
 const DAY = 864e5;
 const SMART_TTL = 3 * DAY; // lib/scoreboard.js smartFollowersOf cache
@@ -524,7 +525,8 @@ export default {
       h("div", { class: "disc-top" }, h("div", { class: "filterbar" }, srcSeg), formRow, optRow, hintEl, filtersAdv, discHost, sweepHost),
       lookHost,
       sweptHost,
-      candSec);
+      candSec,
+      smartDbSection(ctx));
 
     await loadProviders();
     drawForm();

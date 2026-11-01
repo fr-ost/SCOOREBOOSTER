@@ -45,7 +45,7 @@ describe("store.js", () => {
         watch: { checkIntervalSec: { min: 5, max: 10 } },
       });
       assert.deepEqual(s.safety.ramp, [HARD.dailyComments, HARD.dailyComments, HARD.dailyComments]);
-      assert.deepEqual(s.safety.ramp, [200, 200, 200]);
+      assert.deepEqual(s.safety.ramp, [300, 300, 300]);
       assert.equal(s.safety.perTargetDay, 2);
       assert.equal(s.safety.perTargetWeek, 14);
       assert.equal(s.safety.accountsPerDay, HARD.accountsPerDay);
@@ -264,8 +264,8 @@ describe("store.js", () => {
       const s = await store.getSettings();
       assert.equal(s.timezone, "Asia/Dhaka");
       const saved = await store.saveSettings({ safety: { ramp: [400, 400, 400] } });
-      assert.deepEqual(saved.safety.ramp, [200, 200, 200]);
-      assert.deepEqual((await store.getSettings()).safety.ramp, [200, 200, 200]);
+      assert.deepEqual(saved.safety.ramp, [300, 300, 300]);
+      assert.deepEqual((await store.getSettings()).safety.ramp, [300, 300, 300]);
     });
 
     test("state / secrets / targets accessors", async () => {

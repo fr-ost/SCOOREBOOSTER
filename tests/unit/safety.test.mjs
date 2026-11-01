@@ -54,7 +54,7 @@ describe("safety.js", () => {
       assert.equal(safety.dailyLimit(s, { firstStartedAt: T0 }, T0 + 8 * DAY), 15);
       const raw = { safety: { ramp: [999, 999, 999] } };
       assert.equal(safety.dailyLimit(raw, { firstStartedAt: T0 }, T0), HARD.dailyComments);
-      assert.equal(HARD.dailyComments, 200);
+      assert.equal(HARD.dailyComments, 300);
       assert.equal(safety.dailyLimit({ safety: { ramp: [] } }, { firstStartedAt: T0 }, T0), 0);
     });
     test("generationLimit / likeLimit", () => {
@@ -229,7 +229,7 @@ describe("safety.js", () => {
       assert.equal(d.safety.perTargetDay, 2);
       assert.equal(d.safety.accountsPerDay, 100);
       assert.equal(d.safety.activeHours.enabled, false);
-      assert.equal(safety.likeLimit(d), 200);
+      assert.equal(safety.likeLimit(d), HARD.dailyLikes);
       assert.equal(safety.activeHours(d, ts).inside, true);
     });
     test("2 per account, then the per-account cap", () => {

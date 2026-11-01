@@ -72,7 +72,7 @@ describe("data: sanitizeSettings keeps the shape of the defaults", () => {
     resetStorage();
     const saved = await store.saveSettings({ models: [{ name: "no-id-model", prices: { input: 1 } }], modelsRev: 99, safety: { ramp: [999, 1, 2] } });
     const stored = rawGet(K.settings);
-    assert.deepEqual(stored.safety.ramp, [200, 1, 2]);
+    assert.deepEqual(stored.safety.ramp, [300, 1, 2]);
     assert.ok(stored.models[0].id, "the generated model id is stored");
     assert.equal((await store.getSettings()).models[0].id, saved.models[0].id, "the id stays the same on every read");
   });

@@ -35,7 +35,8 @@ try {
   const pGina = M.addPost("gina", "Thread on why most token unlock schedules are designed backwards and what to do instead.", 3);
 
   // 1 comment per account and likes off here: this test checks the per-account cap and plain replies.
-  await setup(H, { learning: { abTesting: false }, safety: { perTargetDay: 1, like: { enabled: false } } }); // tone defaults are checked below
+  // Targets that follow me stay on the list here (removal is checked at the end), so "never commented on" is tested.
+  await setup(H, { learning: { abTesting: false }, safety: { perTargetDay: 1, like: { enabled: false } }, follow: { removeFollowers: false } }); // tone defaults are checked below
   let r = await H.msg("start");
   assert(r && r.ok === false && /target/i.test(r.error), "start refuses without targets: " + (r && r.error));
   r = await H.msg("targetsUpsert", { rows: ["@bigbob"], defaults: { group: "B", tier: 1 } });
@@ -241,6 +242,19 @@ try {
   st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" && s.stopReason === "budget_reached" ? s : null; }, "stop on budget", 60000);
   assert(st.stopReason === "budget_reached", "AUTO-STOP when the monthly budget is reached");
   await H.settings({ budget: { monthlyUsd: 0 } });
+
+  // ---- remove targets that already follow me (the default) ----
+  await H.settings({ follow: { removeFollowers: true } });
+  await H.msg("resume");
+  const gone = await H.waitFor(async () => {
+    const t = await H.store("sx.targets");
+    if (!t.frank && !t.gina) return t;
+    await H.runNow();
+    await sleep(2000);
+    return null;
+  }, "followers removed from the targets", 90000, 1000);
+  assert(!gone.frank && !gone.gina && gone.alice, "targets that already follow me (never commented on) are removed; the others stay");
+  assert(/already follow you/.test(JSON.stringify(await H.store("sx.logs"))), "the removal is logged");
 
   log(`\nPhase 1 e2e: ${passCount()} checks passed`);
 } catch (e) {

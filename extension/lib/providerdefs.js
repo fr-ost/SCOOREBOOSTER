@@ -57,6 +57,11 @@ export const PROVIDER_DEFS = {
     keyHelp: "https://twitterscore.io/api/prices",
     keyNote: "Optional: without a key ScoreX reads the free public profile page (score + the first 3 smart followers).",
     dailyCap: 100, // be polite to the site: the public page and the browser-tab mode are read like a person would
+    listLimit: 100, // API pages hold up to 100 smart followers
+    // Your own score never spends API requests: the free public page, then a browser tab when the site's bot check
+    // blocks the direct read. The paid API is used only for smart followers (the smart-follower database).
+    ownModes: ["public", "page"],
+    smartMode: "api",
     notFound: "(?:page|account|user) (?:was )?not found|doesn't exist|no data for this account",
     modes: {
       public: {
@@ -79,8 +84,10 @@ export const PROVIDER_DEFS = {
         hosts: ["https://twitterscore.io/*"],
         score: { kind: "json", url: "https://twitterscore.io/api/v1/get_twitter_score?username={handle}&api_key={key}", headers: { "X-API-Key": "{key}" }, value: { path: ["twitter_score", "data.twitter_score", "score"] } },
         smartFollowers: {
-          kind: "json", url: "https://twitterscore.io/api/v1/top_followers_paginate?username={handle}&page=1&size=20&api_key={key}", headers: { "X-API-Key": "{key}" },
-          list: { path: ["top_followers", "data.top_followers", "followers", "data"], fields: { handle: ["username", "screen_name"], name: ["name"], score: ["twitter_score", "score"], followers: ["followers_count"] }, limit: 20 },
+          // Paged ({page}, {size} up to 100): the smart-follower database (lib/smartdb.js) walks every page.
+          kind: "json", url: "https://twitterscore.io/api/v1/top_followers_paginate?username={handle}&page={page}&size={size}&api_key={key}", headers: { "X-API-Key": "{key}" },
+          list: { path: ["top_followers", "data.top_followers", "followers", "data.followers", "data", "results"], fields: { handle: ["username", "screen_name", "twitter_username"], name: ["name", "display_name"], score: ["twitter_score", "score"], followers: ["followers_count", "followers"], bio: ["description", "bio"], tags: ["tags", "categories", "category"] }, limit: 100 },
+          total: { path: ["total", "data.total", "count", "total_count", "meta.total"] },
         },
       },
     },
@@ -88,6 +95,7 @@ export const PROVIDER_DEFS = {
 
   ethos: {
     id: "ethos",
+    ownOnly: true, // only your own score (once a day): never asked about other accounts or smart followers
     name: "Ethos",
     site: "https://ethos.network",
     about: "Free credibility score (0-2800) from reviews and vouches on Ethos. No follower data.",
@@ -104,6 +112,7 @@ export const PROVIDER_DEFS = {
 
   moni: {
     id: "moni",
+    ownOnly: true, // only your own score (once a day): never asked about other accounts or smart followers
     name: "Moni",
     site: "https://moni.ai",
     about: "Moni Score and the account's 'smarts' (smart followers) from Moni Discover.",

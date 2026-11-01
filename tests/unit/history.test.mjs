@@ -197,14 +197,14 @@ describe("history.js", () => {
     });
     const csv = h.toCsvText([r, { createdAt: Date.UTC(2026, 9, 28), status: HS.SKIPPED, target: "@bar", results: {} }]);
     const lines = csv.split("\r\n");
-    assert.equal(lines[0], "created,posted,target,group,tier,post_link,model,reasoning,preset,tone,input_tokens,cached_tokens,output_tokens,reasoning_tokens,cost_usd,comment,status,reason,reply_link,liked_post,reply_likes,reply_replies,author_replied,followed_back");
-    assert.equal(h.CSV_COLUMNS.length, 24);
-    assert.ok(lines[1].startsWith("2026-10-29T06:00:00.000Z,2026-10-29T07:00:00.000Z,foo,B,1,https://x.com/foo/status/1,gpt-6.1-sol,high,high,witty,1000,200,100,40,0.012346,"), lines[1]);
+    assert.equal(lines[0], "created,posted,target,group,tier,post_link,post_text,model,reasoning,preset,tone,input_tokens,cached_tokens,output_tokens,reasoning_tokens,cost_usd,comment,status,reason,reply_link,liked_post,reply_likes,reply_replies,reply_views,author_replied,followed_back");
+    assert.equal(h.CSV_COLUMNS.length, 26);
+    assert.ok(lines[1].startsWith("2026-10-29T06:00:00.000Z,2026-10-29T07:00:00.000Z,foo,B,1,https://x.com/foo/status/1,,gpt-6.1-sol,high,high,witty,1000,200,100,40,0.012346,"), lines[1]);
     assert.ok(csv.includes('"\'=HYPERLINK(""evil"") says ""hi"", then\nnew line"'), csv);
     assert.equal(lines.length, 3); // the comment's \n stays inside its quoted cell
-    assert.ok(lines[1].endsWith(",posted,'-bad,,yes,3,0,yes,"), lines[1]);
+    assert.ok(lines[1].endsWith(",posted,'-bad,,yes,3,0,,yes,"), lines[1]);
     const last = lines[lines.length - 1];
-    assert.equal(last, "2026-10-28T00:00:00.000Z,,'@bar,,,,,,,,0,0,0,0,0.000000,,skipped,,,,,,,");
+    assert.equal(last, "2026-10-28T00:00:00.000Z,,'@bar,,,,,,,,,0,0,0,0,0.000000,,skipped,,,,,,,,");
   });
 });
 

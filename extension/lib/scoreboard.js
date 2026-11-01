@@ -13,6 +13,7 @@ import { K } from "./constants.js";
 import { load, update, withLock, getSettings, getSecrets, getTargets, updateTargets, updateCandidates, getBlacklist, log, resetCount } from "./store.js";
 import { providerDefs, pickMode, modeNeeds, runCapability, CAPS } from "./providers.js";
 import { combinedScore } from "./scores.js";
+import { upsertRows, countRows } from "./smartdb.js";
 import { now, DAY, HOUR, sleep, dayKey, normalizeHandle, clamp, num } from "./util.js";
 
 const CAP_CHECKS = 150;
@@ -65,13 +66,14 @@ export async function providerStates() {
   return out;
 }
 
-async function ready(id, cap, { settings, secrets, defs }) {
+// want: a mode for this purpose (TwitterScore: the public page / tab for your own score, the API for smart followers).
+async function ready(id, cap, { settings, secrets, defs }, want = null) {
   const def = defs[id];
   if (!def) return { ok: false, error: "unknown", message: "Unknown provider" };
   const cfg = (settings.providers && settings.providers[id]) || {};
   if (!cfg.enabled) return { ok: false, error: "disabled", message: `${def.name} is off (Scores tab)` };
   const key = def.keyName ? secrets[def.keyName] || "" : "";
-  const mode = pickMode(def, cfg.mode, !!key);
+  const mode = want && def.modes[want] && (want !== "api" || key) ? want : pickMode(def, cfg.mode, !!key);
   if (!mode) return { ok: false, error: "no_mode", message: def.keyName ? `Add your ${def.name} API key (Scores tab)` : `${def.name} has no usable mode` };
   if (!def.modes[mode][cap]) return { ok: false, error: "unsupported", message: `${def.name} cannot do that${mode === "api" ? " with an API key" : ""}` };
   if (!(await granted(def, mode))) return { ok: false, error: "permission", message: `Allow ScoreX to reach ${def.name}: turn it off and on in the Scores tab` };
@@ -82,10 +84,11 @@ async function ready(id, cap, { settings, secrets, defs }) {
 // job and a one-off check from the popup no longer fire together), and the request is reserved against today's cap
 // inside the scoreboard lock, so two calls at once can never both pass a cap that only one of them fits under.
 // The settings are read again for every call: a provider turned off while a job runs is not asked again.
-async function call(id, cap, handle, ctx) {
+async function call(id, cap, handle, ctx, vars, want = null) {
   return withLock("sx.provider." + id, async () => {
     const settings = await getSettings();
-    const r = await ready(id, cap, { ...ctx, settings });
+    if (!want && cap === "smartFollowers" && ctx.defs[id] && ctx.defs[id].smartMode) want = ctx.defs[id].smartMode;
+    const r = await ready(id, cap, { ...ctx, settings }, want);
     if (!r.ok) return r;
     const today = dayKey(now(), settings.timezone);
     let allowed = false;
@@ -105,7 +108,7 @@ async function call(id, cap, handle, ctx) {
     if (wait > 0) await sleep(wait);
     if (stale(ctx)) return { ...RESET, provider: id }; // nothing is awaited between this check and the request
     lastCall.set(id, now());
-    const res = await runCapability(r.def, r.mode, cap, handle, { key: r.key, fetchImpl: ctx.fetchImpl, readPage: ctx.readPage });
+    const res = await runCapability(r.def, r.mode, cap, handle, { key: r.key, fetchImpl: ctx.fetchImpl, readPage: ctx.readPage, vars });
     return { ...res, provider: id, mode: r.mode };
   });
 }
@@ -133,7 +136,7 @@ export async function refreshOwn({ force = false, only = null, ...extra } = {}) 
     const cur = (board.own || {})[def.id];
     if (!force && cur && cur.at && now() - cur.at < 20 * HOUR) { results[def.id] = { ok: true, cached: true, score: cur.score, max: cur.max != null ? cur.max : null, url: cur.url || "" }; continue; }
     if (!force && cur && cur.errorAt && OWN_NEXT_DAY.includes(cur.errorCode) && now() - cur.errorAt < 20 * HOUR) { results[def.id] = { ok: false, cached: true, error: cur.errorCode, message: cur.error || "", url: cur.url || "" }; continue; }
-    const r = await call(def.id, "score", me, ctx);
+    const r = await ownScore(def, me, ctx);
     if (stale(ctx)) return { ok: false, error: RESET.message, results };
     results[def.id] = r;
     const d = dayKey(now(), ctx.settings.timezone);
@@ -156,11 +159,28 @@ export async function refreshOwn({ force = false, only = null, ...extra } = {}) 
   return { ok: true, results };
 }
 
+// Your own score on one provider. A provider with ownModes (TwitterScore) never spends its API on it: the public page
+// first, and when the site's bot check blocks that, the same page in a browser tab (a real browser passes the check).
+async function ownScore(def, me, ctx) {
+  const modes = Array.isArray(def.ownModes) && def.ownModes.length ? def.ownModes.filter((m) => def.modes[m]) : [null];
+  let r = null;
+  for (const m of modes) {
+    r = await call(def.id, "score", me, ctx, undefined, m);
+    if (r.ok || stale(ctx) || !["blocked", "permission", "unsupported", "no_mode"].includes(r.error)) return r;
+  }
+  if (modes.includes("page") && r && r.error === "permission")
+    return { ...r, error: "blocked", message: `${def.name}'s site blocks direct reads (bot check). Allow the browser-tab mode: Scores > Providers > ${def.name}, turn it off and on (Chrome asks for access once)` };
+  return r;
+}
+
+export const OTHERS_OFF = "Score checks of other accounts are off: Moni, Ethos and TwitterScore only check your own score (once a day), and TwitterScore's API only reads smart followers. Turn on 'Check other accounts' in Scores if you want to spend requests on this.";
+
 // Score of any account on every enabled provider.
 export async function checkScores(handle, extra = {}) {
   const h = normalizeHandle(handle);
   if (!h) return { ok: false, error: "Enter a valid @handle" };
   const ctx = await context(extra);
+  if (!ctx.settings.scores.checkOthers && h !== normalizeHandle(ctx.settings.account.handle)) return { ok: false, error: OTHERS_OFF };
   const list = enabledWith(ctx, "score");
   if (!list.length) return { ok: false, error: "Turn on at least one score provider first" };
   const results = {};
@@ -200,8 +220,9 @@ export async function smartFollowersOf(handle, { providers = null, maxAgeMs = 3 
   const h = normalizeHandle(handle);
   if (!h) return { ok: false, error: "Enter a valid @handle" };
   const ctx = await context(extra);
-  const list = enabledWith(ctx, "smartFollowers").filter((d) => !providers || providers.includes(d.id));
-  if (!list.length) return { ok: false, error: "Turn on a provider that shows smart followers first (Scores tab)" };
+  // Moni and Ethos are kept for your own score; smart followers come from TwitterScore's API (and Sorsa if you use it).
+  const list = enabledWith(ctx, "smartFollowers").filter((d) => !d.ownOnly && (!providers || providers.includes(d.id)));
+  if (!list.length) return { ok: false, error: "Turn on TwitterScore with your API key first (Scores > Providers): smart followers come from its API" };
   const cached = ((await getBoard()).smart || {})[h];
   const results = {};
   for (const def of list) {
@@ -310,6 +331,7 @@ export async function refreshTargetScores(handles, providerId, { maxAgeMs = TARG
   const ctx = await context(extra);
   const def = ctx.defs[providerId];
   if (!def) return { ok: false, error: "Unknown provider" };
+  if (!ctx.settings.scores.checkOthers) return { ok: false, error: OTHERS_OFF, updated: 0, failed: 0 };
   const blend = ctx.settings.scores.blendSorsa;
   const targets = await getTargets();
   const list = (handles && handles.length ? handles.map(normalizeHandle) : Object.keys(targets)).filter((h) => h && Object.hasOwn(targets, h) && targets[h]);
@@ -352,4 +374,50 @@ function capMap(map, cap) {
   if (keys.length <= cap) return;
   keys.sort((a, b) => (map[a].at || 0) - (map[b].at || 0));
   for (const k of keys.slice(0, keys.length - cap)) delete map[k];
+}
+
+// Smart-follower database (lib/smartdb.js): every page of TwitterScore's paid API (top_followers_paginate) for each
+// account, up to maxPages pages of `size` rows. Needs TwitterScore on in API mode with your key; each page is one
+// request against TwitterScore's daily cap (raise it in Scores > Providers for big sweeps). A page shorter than `size`,
+// the reported total, or a page that repeats the last one ends an account. Pause-free: Cancel stops it.
+export async function buildSmartDb(handles, { size = 100, maxPages = 50, ...extra } = {}) {
+  const list = [...new Set((handles || []).map(normalizeHandle).filter(Boolean))].slice(0, 500);
+  if (!list.length) return { ok: false, error: "Enter at least one @handle" };
+  const ctx = await context(extra);
+  const cfg = (ctx.settings.providers && ctx.settings.providers.twitterscore) || {};
+  if (!cfg.enabled) return { ok: false, error: "Turn on TwitterScore with your API key first (Scores > Providers)" };
+  if (!ctx.secrets.twitterscoreKey) return { ok: false, error: "Add your TwitterScore API key first (Scores > Providers)" };
+  const per = clamp(Math.round(num(size, 100)), 10, 100);
+  const pagesMax = clamp(Math.round(num(maxPages, 50)), 1, 1000);
+  let pages = 0, added = 0, updated = 0, done = 0, lastError = "", failStreak = 0;
+  for (const h of list) {
+    if (extra.shouldStop && (await extra.shouldStop())) break;
+    let prevFirst = null, got = 0;
+    for (let page = 1; page <= pagesMax; page++) {
+      if (extra.shouldStop && (await extra.shouldStop())) break;
+      if (extra.onProgress) await extra.onProgress({ done, total: list.length, current: `@${h} · page ${page}`, updated: added });
+      const r = await call("twitterscore", "smartFollowers", h, ctx, { page, size: per });
+      if (stale(ctx)) return { ok: false, error: "Reset", pages, added, updated };
+      if (!r.ok) {
+        if (r.error === "not_found") break;
+        lastError = r.message || r.error || "error";
+        if (FATAL.includes(r.error)) return { ok: false, error: lastError, pages, added, updated, accounts: done };
+        if (++failStreak >= FAIL_STREAK) return { ok: false, error: `TwitterScore: ${failStreak} failures in a row, stopped (${lastError})`, pages, added, updated, accounts: done };
+        break;
+      }
+      failStreak = 0;
+      if (r.mode !== "api") return { ok: false, error: "The database needs your TwitterScore API key (Scores > Providers) - the free page only shows 3", pages, added, updated };
+      pages++;
+      const rows = r.list || [];
+      if (!rows.length || (prevFirst && rows[0].handle === prevFirst)) break; // empty, or the API ignored the page number
+      prevFirst = rows[0].handle;
+      const u = await upsertRows(h, rows);
+      added += u.added; updated += u.updated; got += rows.length;
+      if (rows.length < per || (Number.isFinite(r.total) && r.total > 0 && got >= r.total)) break;
+    }
+    done++;
+  }
+  if (extra.onProgress) await extra.onProgress({ done, total: list.length, current: "", updated: added });
+  log("info", `Smart follower database: ${pages} TwitterScore pages, ${added} new and ${updated} updated accounts`);
+  return { ok: true, accounts: done, pages, added, updated, total: await countRows() };
 }

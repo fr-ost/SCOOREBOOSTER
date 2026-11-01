@@ -4,8 +4,8 @@
 // or can be forced with useMemoryDb().
 
 const DB_NAME = "scorex";
-const DB_VERSION = 2;
-export const STORES = Object.freeze({ history: "history", events: "events", kv: "kv" });
+const DB_VERSION = 3;
+export const STORES = Object.freeze({ history: "history", events: "events", kv: "kv", smartdb: "smartdb" });
 
 function openIdb() {
   return new Promise((resolve, reject) => {
@@ -20,6 +20,8 @@ function openIdb() {
         s.createIndex("postId", "postId");
       }
       if (!db.objectStoreNames.contains(STORES.kv)) db.createObjectStore(STORES.kv, { keyPath: "id" });
+      // Smart-follower database (lib/smartdb.js): one row per account, id = lowercase handle.
+      if (!db.objectStoreNames.contains(STORES.smartdb)) db.createObjectStore(STORES.smartdb, { keyPath: "id" });
       if (!db.objectStoreNames.contains(STORES.events)) {
         const e = db.createObjectStore(STORES.events, { keyPath: "id", autoIncrement: true });
         e.createIndex("ts", "ts");

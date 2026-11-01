@@ -6,6 +6,7 @@ import { ALARM, MSG, STATUS, STOP, K } from "../lib/constants.js";
 import { ensureDefaults, getSettings, getSecrets, getTargets, getState, patchState, updateCandidates, log, load, save } from "../lib/store.js";
 import * as engine from "../lib/engine.js";
 import * as T from "../lib/targets.js";
+import * as SDB from "../lib/smartdb.js";
 import { onContentReady, onTabRemoved } from "../lib/tabs.js";
 import { runDiscovery, cancelDiscovery, candidatesToTargets } from "../lib/discovery.js";
 import { testModel, buildInstructions, buildInput, generate } from "../lib/generator.js";
@@ -228,7 +229,7 @@ const handlers = {
   previewPrompt: (m) => previewPrompt(m.handle),
 
   sorsaTest: () => testSorsa(),
-  sorsaRefresh: (m) => refreshScores(m.handles || []),
+  sorsaRefresh: async (m) => ((await getSettings()).scores.checkOthers ? refreshScores(m.handles || []) : { ok: false, error: SB.OTHERS_OFF }),
 
   // ---- score providers (Scores tab) ----
   scoresState: async () => ({ ok: true, providers: await SB.providerStates(), board: await SB.getBoard() }),
@@ -243,6 +244,12 @@ const handlers = {
   smartSweep: (m) => startScoreJob("sweep", "Smart followers", (ctl) => SB.sweepSmartFollowers((m.handles || []).map(String), ctl)),
   targetScores: (m) => startScoreJob("targets", "Target scores", (ctl) => SB.refreshTargetScores((m.handles || []).map(String), String(m.provider || ""), ctl), { provider: String(m.provider || "") || null }),
   scoreJobCancel: async () => { if (scoreJob) scoreJob.cancel = true; return { ok: true }; },
+
+  // ---- smart-follower database (TwitterScore paid API; Discover > Database) ----
+  smartDbBuild: (m) => startScoreJob("smartdb", "Smart follower database", (ctl) => SB.buildSmartDb((m.handles || []).map(String), { size: m.size, maxPages: m.maxPages, ...ctl }), { provider: "twitterscore" }),
+  smartDbList: async () => { const rows = await SDB.listRows(); return { ok: true, rows, count: rows.length }; },
+  smartDbRemove: async (m) => ({ ok: true, removed: await SDB.removeRows(Array.isArray(m.handles) ? m.handles.map(String) : []) }),
+  smartDbClear: async () => { await SDB.clearRows(); return { ok: true }; },
 
   // ---- Tone "Try it": write a sample reply to a pasted post (never posted; the real cost is recorded) ----
   sampleReply: async (m) => {

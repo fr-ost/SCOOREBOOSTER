@@ -429,7 +429,7 @@ describe("engine fixes (review round 1)", () => {
       state: { pendingRefresh: pend, followBadgeOkAt: t0 - MIN, followersScanAt: t0 - MIN },
     });
     followEnv([{ handle: "u1", followsYou: true }]);
-    const settings = sanitizeSettings(baseSettings);
+    const settings = sanitizeSettings({ ...baseSettings, genRev: 2, follow: { checksPerRun: 4, followFirst: false } });
     const kinds = [];
     for (let i = 0; i < 3; i++) kinds.push((await engine._test.backgroundStep({ tabId: 3, settings, me: ME })).did);
     assert.deepEqual(kinds, ["refresh", "follow", "refresh"]);

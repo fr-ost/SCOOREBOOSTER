@@ -108,7 +108,7 @@ describe("data round 2: providers, scoreboard, import", () => {
 
   test("DATA2-2: unknown accounts neither stop a target-score run nor get asked again (TwitterScore page, Sorsa API)", async () => {
     const tg = () => ({ amy: { handle: "amy", score: null }, ben: { handle: "ben", score: null }, cat: { handle: "cat", score: null }, carol: { handle: "carol", score: null } });
-    await S.saveSettings(S.sanitizeSettings({ providers: { twitterscore: { enabled: true, dailyCap: 100 }, sorsa: { enabled: true, mode: "api", dailyCap: 100 } } }));
+    await S.saveSettings(S.sanitizeSettings({ scores: { checkOthers: true }, providers: { twitterscore: { enabled: true, dailyCap: 100 }, sorsa: { enabled: true, mode: "api", dailyCap: 100 } } }));
     await S.setSecrets({ sorsaKey: "sorsa-key-123456" });
     await S.save({ [K.targets]: tg() });
     let calls = 0;
@@ -131,7 +131,7 @@ describe("data round 2: providers, scoreboard, import", () => {
 
   // ---------------------------------------------------------------- DATA2-3
   test("DATA2-3: Reset everything stops a running target-score job before its next request", async () => {
-    await S.saveSettings(S.sanitizeSettings({ providers: { ethos: { enabled: true, dailyCap: 500 } } }));
+    await S.saveSettings(S.sanitizeSettings({ scores: { checkOthers: true }, providers: { ethos: { enabled: true, dailyCap: 500 } } }));
     const tg = {}; for (let i = 0; i < 10; i++) tg["acct" + i] = { handle: "acct" + i, score: null };
     await S.save({ [K.targets]: tg });
     let resetDone = false;
@@ -149,7 +149,7 @@ describe("data round 2: providers, scoreboard, import", () => {
   });
 
   test("DATA2-3: a smart-follower search running during Reset everything does not write its candidates back", async () => {
-    await S.saveSettings(S.sanitizeSettings({ providers: { sorsa: { enabled: true, mode: "api", dailyCap: 100 } } }));
+    await S.saveSettings(S.sanitizeSettings({ scores: { checkOthers: true }, providers: { sorsa: { enabled: true, mode: "api", dailyCap: 100 } } }));
     await S.setSecrets({ sorsaKey: "sorsa-key-123456" });
     let resetNow; const gate = new Promise((r) => (resetNow = r));
     let calls = 0;
@@ -170,13 +170,13 @@ describe("data round 2: providers, scoreboard, import", () => {
   });
 
   test("DATA2-3: a provider turned off while a target-score job runs is not asked again", async () => {
-    await S.saveSettings(S.sanitizeSettings({ providers: { ethos: { enabled: true, dailyCap: 500 } } }));
+    await S.saveSettings(S.sanitizeSettings({ scores: { checkOthers: true }, providers: { ethos: { enabled: true, dailyCap: 500 } } }));
     const tg = {}; for (let i = 0; i < 6; i++) tg["acct" + i] = { handle: "acct" + i, score: null };
     await S.save({ [K.targets]: tg });
     let calls = 0;
     const fetchImpl = async () => {
       calls++;
-      if (calls === 2) await S.saveSettings(S.sanitizeSettings({ providers: { ethos: { enabled: false } } })); // you turn Ethos off
+      if (calls === 2) await S.saveSettings(S.sanitizeSettings({ scores: { checkOthers: true }, providers: { ethos: { enabled: false } } })); // you turn Ethos off
       return json(200, { score: 1400, profileId: 3 });
     };
     const r = await SB.refreshTargetScores([], "ethos", { fetchImpl, ...FAST });
@@ -220,7 +220,9 @@ describe("data round 2: providers, scoreboard, import", () => {
     const T0 = Date.UTC(2026, 8, 1, 6, 0);
     let clock = T0;
     _setClock(() => clock);
-    let ts = 0, ethos = 0;
+    let ts = 0, ethos = 0, tabs = 0;
+    // The bot check blocks the direct read; the browser tab is tried next (blocked here too) - never the API.
+    const readPage = async () => { tabs++; return { ok: false, error: "blocked", message: "Blocked by the site's bot check" }; };
     const fetchImpl = async (url) => {
       clock += 1000; // the answer arrives a second later
       if (/twitterscore/.test(url)) { ts++; return html(403, "<!doctype html><title>Just a moment...</title><div>challenge-platform</div>"); }
@@ -228,15 +230,16 @@ describe("data round 2: providers, scoreboard, import", () => {
     };
     for (let i = 0; i < 6; i++) { // the scores alarm: every 240 minutes
       clock = T0 + i * 4 * HOUR;
-      await SB.refreshOwn({ fetchImpl, ...FAST });
+      await SB.refreshOwn({ fetchImpl, readPage, ...FAST });
     }
     assert.equal(ts, 1, "the blocking site is asked once in 20 hours");
+    assert.equal(tabs, 1, "and the browser tab once after the bot check");
     assert.equal(ethos, 6, "a network error is retried at the next refresh");
     assert.equal(rawGet(K.scoreboard).own.twitterscore.errorCode, "blocked");
     clock = T0 + 24 * HOUR;
-    await SB.refreshOwn({ fetchImpl, ...FAST });
+    await SB.refreshOwn({ fetchImpl, readPage, ...FAST });
     assert.equal(ts, 2, "asked again the next day");
-    await SB.refreshOwn({ force: true, only: ["twitterscore"], fetchImpl, ...FAST });
+    await SB.refreshOwn({ force: true, only: ["twitterscore"], fetchImpl, readPage, ...FAST });
     assert.equal(ts, 3, "Refresh now / Test always ask");
   });
 });

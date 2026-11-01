@@ -34,7 +34,7 @@ export function createMock(opts = {}) {
     lists: { "1234567890": [] }, // list id -> member handles (empty = all authors)
     openai: { mode: "ok", calls: [], comments: null, checkPass: true, failFirst: 0 },
     sorsa: { calls: [], scores: {}, top: {} }, // top: handle -> [{ username, display_name, score, followers_count }]
-    // twitterscore: scores handle -> 0..1000; smart: handle -> [{ handle, score }]; mode: ok | blocked (bot check) | js (panel filled by JS)
+    // twitterscore: scores handle -> 0..1000; smart: handle -> [{ handle, score }]; mode: ok | blocked (bot check) | botcheck (fetch blocked, browser tab passes) | js (panel filled by JS)
     twitterscore: { calls: [], scores: {}, smart: {}, mode: "ok", apiKey: "ts-test" },
     ethos: { calls: [], scores: {} }, // handle -> score (missing = no Ethos profile)
     moni: { calls: [], scores: {}, smarts: {} }, // smarts: handle -> [handles]
@@ -315,7 +315,8 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           }
           const m2 = u.pathname.match(/^\/twitter\/([A-Za-z0-9_]{1,15})\/?$/);
           if (m2) {
-            if (TS.mode === "blocked") return send(403, "<!doctype html><title>Just a moment...</title><div>challenge-platform</div>", "text/html");
+            // "botcheck": like Cloudflare, a direct (fetch) read is challenged, a real browser tab gets the page.
+            if (TS.mode === "blocked" || (TS.mode === "botcheck" && req.headers["sec-fetch-mode"] !== "navigate")) return send(403, "<!doctype html><title>Just a moment...</title><div>challenge-platform</div>", "text/html");
             const h = m2[1].toLowerCase();
             if (TS.scores[h] == null) return send(404, "<!doctype html><title>Not found</title><h1>Account not found</h1>", "text/html");
             const rows = (TS.smart[h] || []).slice(0, 3).map((x) => `<a class="row" href="/twitter/${x.handle}/"><span>@${x.handle}</span> <b>${x.score}</b></a>`).join("");

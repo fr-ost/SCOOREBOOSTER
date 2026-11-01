@@ -186,6 +186,7 @@ export const CSV_COLUMNS = [
   { key: "group", label: "group" },
   { key: "tier", label: "tier" },
   { key: "postUrl", label: "post_link" },
+  { key: "postText", label: "post_text", get: (r) => String(r.postText || "").slice(0, 1000) },
   { key: "modelName", label: "model" },
   { key: "effort", label: "reasoning" },
   { key: "preset", label: "preset" },
@@ -202,6 +203,7 @@ export const CSV_COLUMNS = [
   { key: "liked", label: "liked_post", get: (r) => (r.liked ? "yes" : "") },
   { key: "likes", label: "reply_likes", get: (r) => (r.results && r.results.likes != null ? r.results.likes : "") },
   { key: "replies", label: "reply_replies", get: (r) => (r.results && r.results.replies != null ? r.results.replies : "") },
+  { key: "views", label: "reply_views", get: (r) => (r.results && r.results.views != null ? r.results.views : "") },
   { key: "authorReplied", label: "author_replied", get: (r) => (r.results && r.results.authorReplied ? "yes" : "") },
   { key: "followedBack", label: "followed_back", get: (r) => (r.results && r.results.followedBack ? "yes" : "") },
 ];

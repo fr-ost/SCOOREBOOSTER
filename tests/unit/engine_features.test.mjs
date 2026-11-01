@@ -218,7 +218,7 @@ describe("engine features (worker tab)", () => {
     await setBadge({ status: STATUS.RUNNING, reachAlert: { message: "Your replies are reaching far fewer people", action: "notify" } }, 0);
     assert.equal(env.badges.at(-1), "!");
     await setBadge({ status: STATUS.RUNNING, reachAlert: null }, 0);
-    assert.equal(env.badges.at(-1), "ON");
+    assert.equal(env.badges.at(-1), "0", "running: the badge counts replies posted in the last 24 h");
   });
 });
 

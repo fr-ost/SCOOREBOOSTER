@@ -9,6 +9,7 @@
 
 import { K, HS } from "../../lib/constants.js";
 import * as history from "../../lib/history.js";
+import { toXlsx } from "../../lib/xlsx.js";
 import { aggregate, performance, budgetStatus } from "../../lib/costs.js";
 import { funnel as funnelOf, daysToFollowBack, conversionBy, dailySeries, topResponders, authorReplies } from "../../lib/analytics.js";
 import { MAIN_TONE, followStatus, FS } from "../../lib/targets.js";
@@ -89,7 +90,8 @@ export default {
 
     function setP(patch) {
       Object.assign(p, patch);
-      ctx.setParams({ view: p.view === "ov" ? null : p.view, r: p.range === "30" ? null : p.range, t: p.tier || null });
+      // Explicit values (#comments opens with view=comments and all time; a cleared value would fall back to those).
+      ctx.setParams({ view: p.view, r: p.range, t: p.tier || null });
       markAll();
       show();
     }
@@ -303,9 +305,11 @@ export default {
     const COLUMNS = [
       { key: "createdAt", label: "Date", render: (r) => h("span", { class: "nowrap mono small", title: r.postedAt ? "Posted " + fmtDateTime(r.postedAt) : "Created " + fmtDateTime(r.createdAt) }, fmtDateTime(r.createdAt)) },
       { key: "target", label: "Target", render: (r) => h("span", { class: "cell-handle" }, xLink(r.target), tierBadge(r.tier)) },
-      { key: "comment", label: "Comment", sort: false, className: "col-text", render: (r) => { const u = safeUrl(r.replyUrl); return h("div", { class: "cell-text", title: r.comment || "" }, u ? link(u, r.comment || "(reply)") : r.comment || h("span", { class: "muted" }, "-")); } },
+      // Where the comment went: the post (its first words), linked to the post on X.
+      { key: "post", label: "Post", sort: false, className: "col-text col-wide-only", render: (r) => { const u = safeUrl(r.postUrl); const txt = truncate(String(r.postText || ""), 90) || "(post)"; return h("div", { class: "cell-text small", title: r.postText || "" }, u ? link(u, txt) : h("span", { class: "muted" }, txt)); } },
+      { key: "comment", label: "Comment", sort: false, className: "col-text", render: (r) => { const u = safeUrl(r.replyUrl); return h("div", { class: "cell-text", title: r.comment || "" }, r.comment || h("span", { class: "muted" }, "-"), u ? h("div", null, link(u, h("span", { class: "nowrap small" }, "Open your reply ", icon("external")))) : null); } },
       { key: "status", label: "Status", render: (r) => h("div", { class: "status-cell" }, statusBadge(r.status, r.reason), r.reason ? h("span", { class: "reason-text" }, truncate(String(r.reason), 90)) : null) },
-      { key: "results", label: "Results", sort: (r) => num(r.results && r.results.likes) + 5 * num(r.results && r.results.replies) + (r.results && r.results.followedBack ? 100 : 0), render: resultsChips },
+      { key: "results", label: "Outcome", sort: (r) => num(r.results && r.results.likes) + 5 * num(r.results && r.results.replies) + (r.results && r.results.followedBack ? 100 : 0), render: resultsChips },
     ];
     function drawComments() {
       const pane = panes.comments;
@@ -390,6 +394,12 @@ export default {
         download(`scorex-history-${stamp()}.csv`, history.toCsvText(rows), "text/csv");
         toast(`Exported ${rows.length} rows`, { type: "success" });
       }, { iconName: "download", size: "sm", id: "historyExportBtn" });
+      const exportXlsxBtn = btn("Export XLSX", () => {
+        if (!rows.length) { toast("Nothing to export with these filters.", { type: "warn" }); return; }
+        const table = [history.CSV_COLUMNS.map((c) => c.label), ...rows.map((r) => history.CSV_COLUMNS.map((c) => (c.get ? c.get(r) : r[c.key] == null ? "" : r[c.key])))];
+        download(`scorex-history-${stamp()}.xlsx`, toXlsx(table, "History"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        toast(`Exported ${rows.length} rows`, { type: "success" });
+      }, { iconName: "download", size: "sm", id: "historyExportXlsxBtn" });
       const resetBtn = btn("Reset filters", () => {
         Object.assign(f, { from: "", to: "", status: "", model: "", target: "", outcome: "", text: "" });
         fFrom.value = fTo.value = fText.value = fTarget.value = ""; fStatus.value = fModel.value = fOutcome.value = "";
@@ -422,8 +432,8 @@ export default {
         h("div", { class: "res-filters" },
           h("div", { class: "filters-grid" },
             labeled("From", fFrom), labeled("To", fTo), labeled("Status", fStatus), labeled("Model", fModel), labeled("Target", fTarget), labeled("Outcome", fOutcome), labeled("Search", fText), targetList),
-          h("div", { class: "toolbar" }, summary, h("span", { class: "spacer" }), resetBtn, exportBtn)),
-        section({ wide: true, title: "Comments", hint: "Newest first. Click a row for the model, tokens, cost and quality notes." }, tableHost),
+          h("div", { class: "toolbar" }, summary, h("span", { class: "spacer" }), resetBtn, exportBtn, exportXlsxBtn)),
+        section({ wide: true, title: "Comments", hint: "Every comment ScoreX wrote, newest first: the post it answered, your reply, what happened and how it did. Click a row for the full post, model, tokens, cost and quality notes. Export CSV or XLSX saves all of it (links included)." }, tableHost),
         totals, retention,
         advanced({ key: "history.clear", title: "Clear history", desc: "Delete old records (recent posts and the open queue are kept for the safety limits)" },
           section({ title: "Danger zone", hint: "The open review queue and comments posted in the last 8 days are kept; the cost totals shown here reset. The monthly budget ledger is kept." }, clearBtn)));

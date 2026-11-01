@@ -91,6 +91,9 @@ export function pickList(spec, json) {
       name: typeof item === "object" ? String(pluck(item, f.name || ["name", "display_name"]) || "").slice(0, 80) : "",
       score: typeof item === "object" ? toNumber(pluck(item, f.score || ["score"])) : null,
       followers: typeof item === "object" ? toNumber(pluck(item, f.followers || ["followers_count", "followers"])) : null,
+      // Optional extras a list spec may name (the TwitterScore API gives a bio and tags).
+      ...(f.bio && typeof item === "object" ? { bio: String(pluck(item, f.bio) || "").replace(/\s+/g, " ").slice(0, 300) } : {}),
+      ...(f.tags && typeof item === "object" ? { tags: [].concat(pluck(item, f.tags) || []).map((t) => String(t && typeof t === "object" ? t.name || t.title || "" : t).slice(0, 40)).filter(Boolean).slice(0, 8) } : {}),
     });
     if (out.length >= (spec.limit || 50)) break;
   }

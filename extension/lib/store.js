@@ -156,7 +156,8 @@ export const DEFAULT_SETTINGS = {
     blacklist: true, // removed targets go to the blacklist (never re-added by import or discovery)
     scanEveryHours: 2, // how often your newest followers are scanned for follow-backs
     recheckHours: 72, // profile re-check of the accounts you comment on
-    checksPerRun: 4, // profile visits per idle check
+    checksPerRun: 10, // profile visits per idle check
+    removeFollowers: true, // a target found to already follow you is taken off the list (followed-back ones stay)
     followFirst: true, // follow a target you do not follow before (or while) commenting on it
     followsPerDay: 40, // follow-first: accounts followed per 24 h (HARD.dailyFollows at most)
   },
@@ -171,7 +172,7 @@ export const DEFAULT_SETTINGS = {
   budget: { monthlyUsd: 0, warnAtPct: 80 }, // 0 = no limit
 
   safetyRev: 2, // revision of the safety defaults these settings have seen
-  genRev: 1, // revision of the reply-generation defaults these settings have seen (1 = UniqueFarm voice + Human preset)
+  genRev: 2, // revision of the reply-generation defaults these settings have seen (1 = UniqueFarm voice + Human preset)
   safety: {
     ramp: [200, 200, 200], // daily comment limit: week 1, week 2, week 3+ (each clamped to HARD.dailyComments)
     gapMin: { min: 2, max: 6 }, // random minutes between comments
@@ -231,6 +232,7 @@ export const DEFAULT_SETTINGS = {
     sorsaEnabled: false, // legacy switch, kept in sync with providers.sorsa.enabled
     blendSorsa: 0.5, // weight of Sorsa in the combined rank when available
     autoRefreshOwn: true, // refresh your own scores about once a day while any provider is on
+    checkOthers: false, // score checks of other accounts (Check any account, target scores): off, they spend requests
   },
   // Score providers (lib/providerdefs.js): all OFF until you turn them on in the Scores tab.
   // { [id]: { enabled, mode: "auto" | "api" | "public" | "page", dailyCap } }
@@ -445,7 +447,8 @@ export function sanitizeSettings(raw) {
   fo.blacklist = fo.blacklist !== false;
   fo.scanEveryHours = clamp(num(fo.scanEveryHours, 2), 1, 24);
   fo.recheckHours = clamp(num(fo.recheckHours, 72), 12, 336);
-  fo.checksPerRun = clamp(Math.round(num(fo.checksPerRun, 4)), 1, 8);
+  fo.checksPerRun = clamp(Math.round(num(fo.checksPerRun, 10)), 1, 25);
+  fo.removeFollowers = fo.removeFollowers !== false;
   fo.followFirst = fo.followFirst !== false;
   fo.followsPerDay = clamp(Math.round(num(fo.followsPerDay, 40)), 0, HARD.dailyFollows);
 
@@ -502,6 +505,7 @@ export function sanitizeSettings(raw) {
   s.scores.sorsaEnabled = !!(s.providers.sorsa && s.providers.sorsa.enabled);
   s.scores.blendSorsa = clamp(num(s.scores.blendSorsa, 0.5), 0, 1);
   s.scores.autoRefreshOwn = s.scores.autoRefreshOwn !== false;
+  s.scores.checkOthers = s.scores.checkOthers === true;
 
   const dv = s.discovery;
   dv.languages = (Array.isArray(dv.languages) ? dv.languages : String(dv.languages || "").split(/[\s,;]+/)).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
@@ -554,7 +558,9 @@ export function sanitizeSettings(raw) {
     const pm = raw.presetMatrix || {};
     if (pm.B1 === "high" && pm.B2 === "balanced" && s.presets.human) { s.presetMatrix.B1 = "human"; s.presetMatrix.B2 = "human"; }
   }
-  s.genRev = 1;
+  // genRev 2: faster follow checks (10 profile visits per check instead of 4) for settings still on the old default.
+  if (raw && !(Number(raw.genRev) >= 2) && raw.follow && Number(raw.follow.checksPerRun) === 4) s.follow.checksPerRun = 10;
+  s.genRev = 2;
   for (const k of ["A1", "A2", "B1", "B2"]) if (!s.presets[s.presetMatrix[k]]) s.presetMatrix[k] = DEFAULT_SETTINGS.presetMatrix[k];
   if (!s.presets[s.quality.checkerPreset]) s.quality.checkerPreset = "cheap";
   return s;

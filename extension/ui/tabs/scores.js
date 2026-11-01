@@ -60,6 +60,12 @@ export function needsFor(defs, p, pref) {
   const def = defs && defs[p.id];
   if (!def) return p.needs || { origins: [], permissions: [] };
   const modes = def.modes || {};
+  // A provider with modes per purpose (TwitterScore: page / browser tab for your own score, API for smart followers)
+  // asks once for everything those modes need, so the bot-check fallback to the tab works without another prompt.
+  if (Array.isArray(def.ownModes) && (!pref || pref === "auto") && (!p.modePref || p.modePref === "auto")) {
+    const all = [...def.ownModes, def.smartMode].filter((m) => m && modes[m]).map((m) => modeNeeds(def, m));
+    return { origins: [...new Set(all.flatMap((n) => n.origins))], permissions: [...new Set(all.flatMap((n) => n.permissions))] };
+  }
   const mode = pickMode(def, pref || p.modePref || "auto", !!p.hasKey) || (modes.api ? "api" : Object.keys(modes)[0]);
   return mode ? modeNeeds(def, mode) : { origins: [], permissions: [] };
 }
@@ -453,8 +459,17 @@ export default {
           h("span", { class: "small muted" }, fmtAgo(c.at))))),
       ] : []);
     }
+    const othersOff = h("p", { class: "small muted", id: "checkOthersOff" }, "Off: Moni, Ethos and TwitterScore only check your own score (once a day), and TwitterScore's API only reads smart followers. Turn this on to spend requests on other accounts.");
+    const syncOthers = () => {
+      const on = !!ctx.settings.scores.checkOthers;
+      checkInput.disabled = checkBtn.disabled = !on;
+      othersOff.hidden = on;
+    };
     const checkSec = section({ wide: true, id: "scoreCheck", title: "Check any account", hint: "1 request per connected site" },
+      ctx.field({ path: "scores.checkOthers", type: "toggle", label: "Check other accounts (spends requests)", id: "checkOthers" }), othersOff,
       h("div", { class: "filterbar check-row" }, checkInput, checkBtn), checkOut, recentHost);
+    syncOthers();
+    ctx.on("settings", syncOthers);
 
     // ------------------------------------------------ Target scores (coverage + refresh job)
     const coverHost = h("div", { class: "cover", id: "targetScores" });
@@ -481,7 +496,8 @@ export default {
         const left = usageLeft(p), r = readiness(p);
         const n = Math.min(need.length, left);
         let why = "";
-        if (running) why = "Another score job is running.";
+        if (!ctx.settings.scores.checkOthers) why = "Score checks of other accounts are off (Check any account above).";
+        else if (running) why = "Another score job is running.";
         else if (!["ready", "error"].includes(r.kind)) why = r.kind === "cap" ? "Daily request cap reached." : r.label + ".";
         else if (!need.length) why = "Every target has a recent score.";
         const label = !need.length ? "Up to date" : n < need.length ? `Refresh ${n} of ${need.length} · cap` : `Refresh ${need.length} stale · ${plural(need.length, "request")}`;

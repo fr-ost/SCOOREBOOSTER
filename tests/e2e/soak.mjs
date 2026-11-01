@@ -83,8 +83,15 @@ try {
   const r = await H.msg("targetsImport", { text: [...TARGETS, ...FOLLOWERS].join("\n"), defaults: { tier: 2 } });
   assert(r.ok && r.added === TARGETS.length + FOLLOWERS.length, "imported 15 targets");
   assert((await H.msg("start")).ok, "engine started");
-  const t0 = await H.untilChecked([...TARGETS, ...FOLLOWERS], 300000);
-  assert(FOLLOWERS.every((h) => t0[h].rel.followsYou === true) && TARGETS.every((h) => t0[h].rel.followsYou === false), "follow check: 3 follow me, 12 don't");
+  // Accounts that follow me are removed from the targets once checked (the default), or stay marked "follows you".
+  const t0 = await H.waitFor(async () => {
+    const t = await H.store("sx.targets");
+    if (TARGETS.every((h) => t[h] && t[h].rel.followsYou != null) && FOLLOWERS.every((h) => !t[h] || t[h].rel.followsYou != null)) return t;
+    await H.runNow();
+    await sleep(2500);
+    return null;
+  }, "follow check of the 15 targets", 300000, 1000);
+  assert(FOLLOWERS.every((h) => !t0[h] || t0[h].rel.followsYou === true) && TARGETS.every((h) => t0[h].rel.followsYou === false), "follow check: 3 follow me (removed from the targets), 12 don't");
 
   for (let c = 1; c <= CYCLES; c++) {
     log(`cycle ${c}/${CYCLES}`);

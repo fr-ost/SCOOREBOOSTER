@@ -14,7 +14,7 @@ const res = (status, body) => ({ status, ok: status >= 200 && status < 300, text
 const FAST = { gapMs: 0 };
 
 async function setup(providers, secrets = {}) {
-  await S.saveSettings(S.sanitizeSettings({ providers }));
+  await S.saveSettings(S.sanitizeSettings({ scores: { checkOthers: true }, providers }));
   if (Object.keys(secrets).length) await S.setSecrets(secrets);
 }
 
@@ -117,12 +117,15 @@ describe("data: scoreboard", () => {
   });
 
   test("smart followers: asking one provider keeps the other providers' cached lists", async () => {
-    await setup({ sorsa: { enabled: true }, moni: { enabled: true } }, { sorsaKey: "sorsa-key-1", moniKey: "moni-key-1" });
-    const fetchImpl = async (url) => (url.includes("sorsa") ? res(200, { users: [{ username: "alpha", score: 10 }] }) : res(200, { items: [{ meta: { userUrl: "https://x.com/beta" } }], totalCount: 1 }));
+    await setup({ sorsa: { enabled: true }, twitterscore: { enabled: true }, moni: { enabled: true } }, { sorsaKey: "sorsa-key-1", twitterscoreKey: "ts-key-1", moniKey: "moni-key-1" });
+    const urls = [];
+    const fetchImpl = async (url) => { urls.push(url); return url.includes("sorsa") ? res(200, { users: [{ username: "alpha", score: 10 }] }) : res(200, { top_followers: [{ username: "beta", twitter_score: 300 }] }); };
     await SB.smartFollowersOf("bigvc", { fetchImpl, ...FAST });
     await SB.smartFollowersOf("bigvc", { providers: ["sorsa"], maxAgeMs: 0, fetchImpl, ...FAST });
     const cached = rawGet(K.scoreboard).smart.bigvc.results;
-    assert.ok(cached.sorsa && cached.moni, JSON.stringify(Object.keys(cached)));
+    assert.ok(cached.sorsa && cached.twitterscore, JSON.stringify(Object.keys(cached)));
+    assert.ok(!cached.moni && !urls.some((u) => /moni/.test(u)), "Moni is only for your own score");
+    assert.ok(urls.some((u) => /twitterscore\.io\/api\/v1\/top_followers_paginate/.test(u)), "TwitterScore smart followers come from its API");
   });
 
   test("sweeps: candidates stay at the newest 2,000, repeat finds count as recent, targets added meanwhile are skipped", async () => {

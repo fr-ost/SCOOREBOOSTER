@@ -22,7 +22,10 @@
       const hit = await D.waitFor(() => {
         const s = X.pageState();
         if (s.state !== "ok" && s.state !== "loading") return { stop: s.state };
-        for (const k of keys) if (D.q(k)) return { key: k };
+        // User cells count only inside the main column: the sidebar's "Who to follow" box has user cells too, and it
+        // renders before your followers list does (a list "read" then would be the 3 suggestions, never followers).
+        const primary = D.q("primaryColumn");
+        for (const k of keys) if (k === "userCell" ? primary && D.q(k, primary) : D.q(k)) return { key: k };
         return null;
       }, timeout, 400);
       if (!hit) return { ok: false, timeout: true };
@@ -43,9 +46,11 @@
       const keys = [].concat(m.keys || []).filter((k) => typeof k === "string").slice(0, 40);
       const counts = {};
       for (const k of keys) { try { counts[k] = D.qa(k).length; } catch (_) { counts[k] = -1; } }
-      const cells = D.qa("userCell");
-      const badgeCells = cells.filter((c) => !!D.q("followsYouBadge", c)).length;
-      return { ok: true, counts, me: X.myHandle(), url: location.href, cells: cells.length, badgeCells };
+      // Follower rows: main column only (never the sidebar's "Who to follow" cells), read the way the follow scan reads
+      // them (the badge element, or a line that is exactly "Follows you" right after the handle).
+      const users = D.q("primaryColumn") ? S.scrapeUsers(400).users : [];
+      const badgeCells = users.filter((u) => u.followsYou).length;
+      return { ok: true, counts, me: X.myHandle(), url: location.href, cells: users.length, badgeCells, badgeElements: users.filter((u) => u.badge).length };
     },
     async clearComposer() { return A.clearComposer(); },
     async closeComposer() { return A.closeComposer(); },

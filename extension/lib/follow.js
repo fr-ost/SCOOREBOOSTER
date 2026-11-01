@@ -96,14 +96,21 @@ async function scanFollowers(tabId, settings, me, deep, stopped = async () => fa
   if (!w.ok) return { ok: false, soft: "followers list did not render" };
   await sleep(humanDelay(1500, 3000));
   const followers = new Set(), others = new Set();
-  const scrolls = deep ? 12 : 2;
-  let stale = 0;
+  const scrolls = deep ? 40 : 2; // a deep scan reads far down your followers list (new targets found at once)
+  let stale = 0, waits = 0;
   for (let i = 0; i <= scrolls; i++) {
     const u = await send(tabId, CMD.SCRAPE_USERS, { limit: 400 }, 15000);
     const v2 = pageVerdict(u.page, settings);
     if (v2 && v2.stop) return { stop: v2.stop, detail: v2.detail };
     const before = followers.size + others.size;
     for (const x of (u && u.users) || []) (x.followsYou ? followers : others).add(x.handle);
+    // Nothing read yet: the list fills in after the page frame, so wait (no scroll) up to 3 times before judging it.
+    if (!(followers.size + others.size) && waits < 3) {
+      waits++; i--;
+      await sleep(humanDelay(1500, 2500));
+      if (await stopped()) return { aborted: true };
+      continue;
+    }
     stale = followers.size + others.size === before ? stale + 1 : 0;
     if (stale >= 2 || i === scrolls) break; // end of the list (or nothing new is loading)
     await sleep(humanDelay(1200, 2800));
@@ -340,4 +347,20 @@ export async function followFirstStep({ tabId, settings, me, shouldStop }) {
   await recordFollow(pick.handle, r.ok ? (r.pending ? "pending" : r.already ? "already" : "followed") : "missing");
   await patchState({ nextFollowGapMin: randInt(3, 8) });
   return { did: "follow_first" };
+}
+
+// Targets found to already follow you are taken off the list (settings.follow.removeFollowers): they never get
+// comments anyway. Accounts that followed back after your replies stay (your results), and so does anyone you have
+// commented on. Queued replies for removed targets are dropped by the engine.
+export async function pruneFollowers(settings) {
+  if (!settings.follow.removeFollowers) return 0;
+  const gone = [];
+  await updateTargets((all) => {
+    for (const [h, t] of Object.entries(all)) {
+      if (t && followStatus(t) === FS.FOLLOWS && !(t.stats && t.stats.comments > 0)) { gone.push(h); delete all[h]; }
+    }
+    return all;
+  });
+  if (gone.length) log("info", `Removed ${gone.length} target${gone.length === 1 ? "" : "s"} that already follow you: @${gone.slice(0, 5).join(", @")}${gone.length > 5 ? ` and ${gone.length - 5} more` : ""}`);
+  return gone.length;
 }

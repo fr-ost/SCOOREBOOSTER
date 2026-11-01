@@ -181,7 +181,7 @@ describe("round 3: Reset everything during a score job's write", () => {
   test("R3B-2: a target-score write whose read came before the reset does not bring the deleted targets back", async () => {
     resetStorage();
     useMemoryDb();
-    await S.saveSettings(S.sanitizeSettings({ providers: { ethos: { enabled: true, dailyCap: 500 } } }));
+    await S.saveSettings(S.sanitizeSettings({ scores: { checkOthers: true }, providers: { ethos: { enabled: true, dailyCap: 500 } } }));
     const tg = {};
     for (let i = 0; i < 4; i++) tg["acct" + i] = { handle: "acct" + i, score: null };
     await S.save({ [K.targets]: tg });

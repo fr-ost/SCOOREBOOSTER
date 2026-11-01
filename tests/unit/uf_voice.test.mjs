@@ -23,7 +23,7 @@ describe("UniqueFarm voice: settings", () => {
     assert.equal(toneText("delta", s), VOICE_PRESETS.delta.text);
     assert.equal(s.prompt.useImages, true);
     assert.equal(s.prompt.temperature, 1.0);
-    assert.equal(s.genRev, 1);
+    assert.equal(s.genRev, 2);
     assert.ok(VOICE_SYSTEM.startsWith("You write replies on X like a real human"));
     assert.ok(BOT_PHRASES.includes("sounds like") && BOT_PHRASES.includes("game changer"));
     assert.ok(NEVER_START.includes("i think"));
@@ -33,7 +33,7 @@ describe("UniqueFarm voice: settings", () => {
     const old = sanitizeSettings({ prompt: { tone: LEGACY_DEFAULT_TONE_PROMPT }, presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" }, safetyRev: 2 });
     assert.equal(old.prompt.tone, DEFAULT_VOICE);
     assert.deepEqual([old.presetMatrix.B1, old.presetMatrix.B2], ["human", "human"]);
-    assert.equal(old.genRev, 1);
+    assert.equal(old.genRev, 2);
     const mine = sanitizeSettings({ prompt: { tone: "lowercase. blunt. one detail." }, presetMatrix: { B1: "cheap", B2: "balanced" } });
     assert.equal(mine.prompt.tone, "lowercase. blunt. one detail.");
     assert.deepEqual([mine.presetMatrix.B1, mine.presetMatrix.B2], ["cheap", "balanced"]);

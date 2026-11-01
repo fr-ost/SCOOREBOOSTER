@@ -91,13 +91,18 @@ so the list stays where it was. Light and dark themes (Settings); narrow windows
 | **Today** | Engine state and **Run a check now**, the day's rhythm and counters vs limits, the setup steps until ScoreX is ready, this week's figures (comments, follow-backs, cost, your main score), replies waiting for review (expiring first), **Needs you** (reach alert, authors who answered your replies, page-load budget near its cap, targets close to their give-up day, new candidates, budget, health) and the activity log in plain words. After a safety stop a banner offers **Review stop...**: you confirm that you checked your account before ScoreX resumes. |
 | **Review** | Keyboard-first queue: **J/K** move, **A** approve, **E** edit, **S** skip, **R** regenerate, **O** open the post, **Z** undo (5 s), **?** lists the keys. Sort by expiring first, newest or priority. Approve is disabled for accounts that follow you now. **Approve all** asks whether to keep your unsaved edits. Approved replies show when they will post, with Cancel. |
 | **Targets** | Status chips with counts (Commenting, Checking, Followed back, Follow you, Off, Not found), search (**/**), tier and **High value** filters, a Columns menu, and bulk actions (tier, tone, preset, on/off, re-check, fetch scores, blacklist, remove). Click a row (or press Enter) for the target drawer: profile, scores, value and follow-back chance with the reason, the timeline (every comment and its results, follow checks, the planned give-up day) and per-account settings. **Add targets** and **Edit rules** (follow rules, check frequency, value ranking) open as sheets; the blacklist is a sub-view. |
-| **Discover** | Find new targets: smart followers of big accounts (score sites), followers or following of an account, common follows, people search. Shows the big accounts already swept and a candidates table with per-site scores, overlap ("listed by 3 of 5"), filter verdicts and **Add N as Tier X**. |
+| **Discover** | Find new targets: smart followers of big accounts (score sites), followers or following of an account, common follows, people search. Shows the big accounts already swept and a candidates table with per-site scores, overlap ("listed by 3 of 5"), filter verdicts and **Add N as Tier X**. **Smart follower database**: every smart follower TwitterScore's paid API lists for the accounts you enter (all pages, merged across runs), searchable, **Add as Tier 1 / 2**, **Export CSV / XLSX**. |
 | **Scores** | Your score on each connected site (tier, 7- and 30-day change, history chart with follow-back ticks), **Follow-backs that count**, **Check any account**, score coverage of your targets with a refresh job (progress and Cancel), and the providers setup (on/off, mode, key, daily cap, usage, Test, overrides). |
+| **History** | Every comment ScoreX wrote, all time, newest first: date, target, the post it answered (linked), your reply (with **Open your reply**), status with the reason (posted, skipped, failed...) and the outcome (likes, replies, views, author replied, followed back). Filters, a details drawer, **Export CSV / XLSX** (links and post text included). The same list as Results > Comments. |
 | **Results** | **Overview** (funnel, activity, which tones, models and tiers bring follow-backs), **Comments** (every attempt with filters, a drawer with model, tokens, cost and quality notes, CSV export, history retention) and **Spend** (budget, daily cost, totals and performance per model). Ranges 7 d / 30 d / All. |
 | **Tone** | Your Tone prompt, **Try it**, **Learn from my edits** with this week's edit rate, extra rules, built-in and custom tones, A/B tests and suggestions. |
 | **Models & costs** | API key, model list with **editable model names** and the **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort, fallback models, preset per tier, quality checker, cost estimator, budget. |
 | **Safety** | Risk report, reach alert, **Safety profile** (Careful / Standard / Max / Custom), daily limits and ramp, gaps and breaks, active hours (off by default), like before replying, typing speed, skip rules, **X page loads** in the last 24 hours (with an optional cap), the **reply reach monitor**, adaptive watching and the list of auto-stop reasons. |
 | **Settings** | **Diagnostics** first (quick check, live X test, copy a redacted report), then account, watching, comment window, review expiry, learning and conversation alerts, cleanup, worker tab, selector overrides, theme, backup export / import, reset. |
+
+The **extension icon** shows how many replies were posted in the last 24 hours while ScoreX runs (green number),
+a red **!** after a safety stop or reach alert, **II** while paused, and otherwise the number of replies waiting for
+review.
 
 The **popup** shows the status, the main action and the next reply to review (approve or skip it there). On an
 X profile page it adds a **This profile** card: target status, scores from your connected sites, **Check
@@ -172,8 +177,8 @@ voice and the Human preset once. Anything you had changed stays as it was.
 
 | Rule | Default | Hard cap |
 |---|---|---|
-| Comments per 24 hours (rolling) | 200 (set lower week 1 / week 2 numbers for a ramp) | 200 |
-| Different accounts per 24 hours | 100 | 200 |
+| Comments per 24 hours (rolling) | 200 (set lower week 1 / week 2 numbers for a ramp) | 300 |
+| Different accounts per 24 hours | 100 | 300 |
 | Same account | 2 per 24 hours, 14 per 7 days | 2 / 14 |
 | Gap between comments | random 2-6 min | never below 2 min |
 | Long breaks | after every 10-15 comments, 8-15 min | - |
@@ -251,8 +256,10 @@ ScoreX only comments on accounts that **don't follow you**. Import a list of 100
 2. ScoreX reads your own followers list (`x.com/0x_nation/followers`, newest first): every account there with
    X's "Follows you" badge follows you. After new targets were added it reads deeper; later it reads your
    newest followers every 2 hours, which is where follow-backs show up.
-3. Targets that were not in that list get a profile visit (the "Follows you" badge next to their name), a
-   few per check, so 100 new targets take about an hour to check.
+3. Targets that were not in that list get a profile visit (the "Follows you" badge next to their name), 10 per
+   check by default (Edit rules, up to 25), every 40-90 s while new targets wait.
+   **Remove targets that already follow you** (Edit rules, on): an account found to follow you (and never
+   commented on) is removed from the target list right after the check.
 4. **Follows you** -> never commented on. **Not following** -> comments start.
 5. **Followed back** (seen in your followers list, or on a profile re-check every 3 days) -> no more comments.
    Replies still waiting in the queue for that account are dropped. You get a notification.
@@ -269,6 +276,9 @@ every 3-8 minutes, at most 40 a day by default (hard cap 100). A protected accou
 that already follow you are not touched. Note: with Cleanup on, accounts you followed are unfollowed after its
 days without a follow-back; keep those days at or above the give-up days if you want the follow to last while
 ScoreX is still replying.
+
+Only your followers list in the main column counts: the sidebar's "Who to follow" suggestions are never read as
+followers (the live X test in Settings > Diagnostics reads the list the same way).
 
 Safety check: if X shows your followers list without any "Follows you" badge, the badge markup has changed
 and every account would look like a non-follower, so ScoreX stops ("X page changed") instead of commenting.
@@ -287,16 +297,33 @@ Provider keys are stored like the OpenAI key (the extension's IndexedDB) and are
 | **TwitterScore** (twitterscore.io) | score out of 1000; the first 3 smart followers (free profile page) | not needed (paid API optional) | the free public page; *browser tab* mode reads the rendered page in a background tab; API mode (your key) lists every smart follower |
 | **Sorsa** (sorsa.io, formerly TweetScout) | Sorsa Score with tiers (Noted / Credible / Significant / Supreme); the 20 highest-score followers | needed: 100 free requests, then paid | API v3 (`api.sorsa.io`) |
 | **Ethos** (ethos.network) | credibility score out of 2800 | not needed | free public API |
-| **Moni** (getmoni.io) | Moni score; smart followers | free key (a few hundred requests a month) | API |
+| **Moni** (getmoni.io) | Moni score (your own) | free key (a few hundred requests a month) | API |
 
+* **What requests are spent on**: Moni, Ethos and TwitterScore check **your own score only**, about once every
+  24 hours. TwitterScore's own-score check never uses the API: it reads the free public page, and when the site's
+  bot check blocks that ("Blocked by the site's bot check") it reads the same page in a background browser tab,
+  which a real browser passes. Chrome asks once for the tab access when you turn TwitterScore on (already on:
+  turn it off and on). **TwitterScore's API key is spent only on smart followers** (Discover and the smart
+  follower database). Checking other accounts' scores is **off** (Scores > Check any account > *Check other
+  accounts*): Check any account, target scores and Sorsa target refreshes send nothing until you turn it on.
+* **A key that doesn't work**: a refused key (401 / 403, or an error answer about the key) shows "Your
+  TwitterScore API key doesn't work - get a new key (twitterscore.io/api/prices) and paste it in Scores >
+  Providers". TwitterScore requests are sent at most 50 a minute (its limit is 60).
 * **Your scores**: refreshed about once a day (or with *Refresh now*), with a daily history for the chart and
   the 7- and 30-day changes.
-* **Check any account**: scores from every enabled provider, then *Add as target* or *Show smart followers*.
+* **Check any account** (off by default, see above): scores from every enabled provider, then *Add as target* or
+  *Show smart followers*.
 * **Smart followers -> targets** (Discover): pick big accounts, for example your Tier 1 targets. ScoreX asks each
-  enabled provider for their smart followers, merges the lists, skips accounts that already follow you, your
+  smart-follower provider (TwitterScore's API, and Sorsa if you use it; never Moni or Ethos) for their smart followers, merges the lists, skips accounts that already follow you, your
   targets and the blacklist, and shows the rest as candidates with their scores. Accounts listed under several
   big accounts rank higher. Nothing is added or followed until you choose.
-* **Target scores**: fetch provider scores for your targets (a background job with progress and Cancel).
+* **Smart follower database** (Discover, needs TwitterScore's API key): enter big accounts (or fill in your Tier 1
+  targets), choose pages per account (100 accounts a page) and build. Every page is one API request; an account
+  stops at its last page. Rows are merged across runs (TwitterScore, followers, bio, tags, whose smart follower
+  they are, first and last seen). Raise TwitterScore's daily cap in Scores > Providers for big sweeps (a free
+  trial has 2,000 requests in total).
+* **Target scores** (off by default, see above): fetch provider scores for your targets (a background job with
+  progress and Cancel).
 * **Daily request caps** per provider protect your free quotas and the sites; requests are paced and cached
   (your own score 20 h, smart-follower lists 3 days, target scores 7 days). **Check** always asks each enabled
   site again (1 request per site, as its button says); the last check of an account stays visible without a new

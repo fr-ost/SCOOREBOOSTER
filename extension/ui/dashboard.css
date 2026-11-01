@@ -883,6 +883,7 @@ svg.meter { display: block; }
 .col-chev { width: 28px; text-align: right; color: var(--text-3); font-size: 16px; padding-left: 0 !important; }
 .col-actions { width: 1%; white-space: nowrap; }
 .col-text { min-width: 220px; max-width: 320px; }
+@media (max-width: 760px) { .table .col-wide-only { display: none; } } /* narrow: the post stays in the row's drawer */
 .cell-text { white-space: normal; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .cell-handle { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
 .cell-name { display: inline-block; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; }

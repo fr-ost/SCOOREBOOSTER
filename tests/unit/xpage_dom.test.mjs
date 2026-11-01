@@ -118,6 +118,29 @@ ${cell("fan1", { badge: true, bio: "a" })}${cell("fan2", { badge: true })}${cell
     } finally { await p.close(); }
   });
 
+  test("followers page: the sidebar's 'Who to follow' cells never satisfy the wait or the self-test; the list does once it renders", async () => {
+    const SIDEBAR = `<div data-testid="sidebarColumn"><aside><h2>Who to follow</h2>${cell("sugg1")}${cell("sugg2")}${cell("sugg3")}</aside></div>`;
+    const p = await open("https://x.com/0x_nation/followers", `${NAV}<main role="main"><div data-testid="primaryColumn"><div id="list"></div></div></main>${SIDEBAR}`);
+    try {
+      // Only the 3 suggestions are on the page: the wait does not match them, and the self-test sees no follower rows.
+      assert.equal((await p.call({ sx: "waitFor", keys: ["userCell"], timeoutMs: 1500 })).ok, false);
+      let t = await p.call({ sx: "selfTest", keys: ["userCell", "followsYouBadge"] });
+      assert.equal(t.cells, 0, "sidebar cells are not follower rows");
+      // The followers list renders (one badge element, one renamed badge with the exact text).
+      const waiting = p.call({ sx: "waitFor", keys: ["userCell", "emptyState"], timeoutMs: 5000 });
+      await p.page.evaluate((html) => { setTimeout(() => { document.getElementById("list").innerHTML = html; }, 600); },
+        cell("fan1", { badge: true }) + cell("fan2", { badgeText: true }) + cell("fan3", { badge: true }));
+      const w = await waiting;
+      assert.equal(w.ok && w.key, "userCell");
+      t = await p.call({ sx: "selfTest", keys: ["userCell", "followsYouBadge"] });
+      assert.equal(t.cells, 3);
+      assert.equal(t.badgeCells, 3, "badge element or its exact text");
+      assert.equal(t.badgeElements, 2);
+      const u = await p.call({ sx: "scrapeUsers", limit: 400 });
+      assert.deepEqual(u.users.map((x) => x.handle), ["fan1", "fan2", "fan3"], "the follow scan reads the main column only");
+    } finally { await p.close(); }
+  });
+
   // ---------- page state ----------
 
   test("XP-7: a follower's bio saying 'this page doesn't exist' does not make the page 'not found'", async () => {

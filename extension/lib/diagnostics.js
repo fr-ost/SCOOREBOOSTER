@@ -8,7 +8,7 @@ import { getSettings, log, patchState } from "./store.js";
 import { workerTab, navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
 import { withLease, stop } from "./engine.js";
-import { now } from "./util.js";
+import { now, sleep } from "./util.js";
 
 const PAGES = [
   {
@@ -51,7 +51,12 @@ export async function runSelfTest() {
         await stop(v.stop, v.detail || "Seen during the self-test").catch(() => {});
         return { ok: true, checks, stop: v.stop, at: now() };
       }
-      const r = await send(tabId, CMD.SELF_TEST, { keys: p.keys }, 15000);
+      let r = await send(tabId, CMD.SELF_TEST, { keys: p.keys }, 15000);
+      // Your followers list can still be filling in: read it again (twice at most) before judging the badge.
+      for (let i = 0; p.id === "followers" && i < 2 && r && r.ok && (r.cells < 3 || !r.badgeCells); i++) {
+        await sleep(2500);
+        r = await send(tabId, CMD.SELF_TEST, { keys: p.keys }, 15000);
+      }
       if (!r || !r.ok) { add(p.id, p.label, false, "The page could not be read (the content script did not answer)"); continue; }
       if (p.id === "home") {
         add("account", "Logged-in account", r.me ? r.me.toLowerCase() === me : false, r.me ? `@${r.me}${r.me.toLowerCase() === me ? "" : ` (ScoreX expects @${me})`}` : "Could not read which account is logged in");
@@ -60,8 +65,9 @@ export async function runSelfTest() {
       if (p.id === "followers") {
         if (r.counts && r.counts.emptyState > 0 && !r.cells) add(p.id, p.label, true, "Nobody follows you yet (nothing to check)");
         else if (!r.cells) add(p.id, p.label, false, "No follower rows found - X may have changed the list");
-        else if (!r.badgeCells) add(p.id, p.label, false, `${r.cells} followers shown but no "Follows you" badge - follow tracking would not be safe`);
-        else add(p.id, p.label, true, `${r.cells} followers read, "Follows you" badge found on ${r.badgeCells}`);
+        else if (!r.badgeCells && r.cells >= 3) add(p.id, p.label, false, `${r.cells} followers shown but no "Follows you" badge - follow tracking would not be safe`);
+        else if (!r.badgeCells) add(p.id, p.label, true, `Only ${r.cells} follower${r.cells === 1 ? "" : "s"} shown, too few to judge the "Follows you" badge (the follow check reads the list again later)`);
+        else add(p.id, p.label, true, `${r.cells} followers read, "Follows you" badge found on ${r.badgeCells}${r.badgeElements === 0 ? " (as text: X renamed the badge element, still readable)" : ""}`);
         continue;
       }
       if (p.id === "home" && r.counts && !r.counts.tweet && r.counts.emptyState) { add(p.id, p.label, true, "Your timeline is empty (nothing to read)"); continue; }

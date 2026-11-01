@@ -18,7 +18,7 @@ import { postReply } from "./poster.js";
 import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
-import { followStep, badgeTrusted, followRoom, wantsFollow, recordFollow, followFirstStep } from "./follow.js";
+import { followStep, badgeTrusted, followRoom, wantsFollow, recordFollow, followFirstStep, pruneFollowers } from "./follow.js";
 import { conversationsStep } from "./conversations.js";
 import { catchUpCandidates, catchUpMaxAgeMin } from "./catchup.js";
 import { cancelDiscovery } from "./discovery.js";
@@ -278,7 +278,9 @@ export function followCounts(all, blacklist = {}) {
 export async function refreshBadge() {
   const st = await getState();
   const open = await H.byStatus(HS.PENDING_REVIEW).catch(() => []);
-  await setBadge(st, open.length);
+  // Replies posted in the last 24 h (the window the daily limit uses), shown on the icon while running.
+  const posted = (await H.since(now() - DAY).catch(() => [])).filter((r) => r.status === HS.POSTED).length;
+  await setBadge(st, open.length, posted);
 }
 
 // ---------- control ----------
@@ -637,7 +639,7 @@ async function tickBody(settings, secrets, reason = "timer") {
   // come back a bit sooner (still a few profiles per 1.5-3 minutes).
   const st2 = await getState();
   let delay = nextCheckMs(settings, st2);
-  if (bg && bg.did === "follow" && bg.checkingLeft > 0) delay = Math.min(delay, humanDelay(90 * 1000, 180 * 1000));
+  if (bg && bg.did === "follow" && bg.checkingLeft > 0) delay = Math.min(delay, humanDelay(40 * 1000, 90 * 1000));
   if (bg && bg.did === "refresh" && (st2.pendingRefresh || []).length) delay = Math.min(delay, humanDelay(90 * 1000, 180 * 1000));
   const open2 = await H.openQueue();
   const counts2 = await computeCounts(settings, now());
@@ -895,6 +897,7 @@ async function postOne(rec, { tabId, settings, me, counts }) {
       return all;
     });
     log("info", `Posted a reply to @${rec.target}${r.liked ? " (and liked the post)" : ""}`);
+    await refreshBadge(); // the icon counts posted replies
     return "posted";
   }
   if (r.stop) {
@@ -928,11 +931,11 @@ async function backgroundStep({ tabId, settings, me }) {
   const shouldStop = async () => !(await stillRunning());
   const st = await getState();
   const pending = Array.isArray(st.pendingRefresh) && st.pendingRefresh.length > 0;
-  if (pending && st.lastBackground !== "refresh" && badgeTrusted(st, now())) return refreshStep({ tabId, settings, shouldStop });
+  if (pending && st.lastBackground !== "refresh" && badgeTrusted(st, now())) { const rr = await refreshStep({ tabId, settings, shouldStop }); await pruneFollowers(settings); return rr; }
   const r = await routineBackground({ tabId, settings, me, shouldStop });
   if (r && r.stop) return r;
   if (r && r.did) { if (st.lastBackground !== "routine") await patchState({ lastBackground: "routine" }); return r; }
-  if (pending && !(await shouldStop())) return refreshStep({ tabId, settings, shouldStop });
+  if (pending && !(await shouldStop())) { const rr = await refreshStep({ tabId, settings, shouldStop }); await pruneFollowers(settings); return rr; }
   return null;
 }
 
@@ -940,6 +943,7 @@ async function backgroundStep({ tabId, settings, me }) {
 async function routineBackground({ tabId, settings, me, shouldStop }) {
   {
     const r = await withPurpose("follow", () => followStep({ tabId, settings, me, shouldStop }));
+    await pruneFollowers(settings);
     if (r && r.stop) return r;
     if (r && r.did) return r;
   }

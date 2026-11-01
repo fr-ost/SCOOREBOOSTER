@@ -40,7 +40,17 @@ try {
   r = await H.msg("scoresRefreshOwn", {});
   assert(r.results.sorsa.cached, "a refresh within 20 hours uses the stored score (no extra request)");
 
-  // ---- score check of another account ----
+  // ---- score checks of other accounts: off by default, nothing is sent ----
+  const before = M.twitterscore.calls.length + M.sorsa.calls.length;
+  r = await H.msg("scoreCheck", { handle: "@BigVC" });
+  assert(r && r.ok === false && /other accounts are off/.test(r.error || ""), "checking another account's score is off by default: " + (r && r.error));
+  r = await H.msg("targetScores", { handles: ["bigvc"], provider: "sorsa" });
+  const offJob = await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.status !== "running" ? b.job : null; }, "target-score job ends", 20000);
+  assert(/other accounts are off/.test(offJob.error || ""), "target scores are off too: " + offJob.error);
+  assert(M.twitterscore.calls.length + M.sorsa.calls.length === before, "no request was sent");
+  await H.settings({ scores: { checkOthers: true } });
+
+  // ---- score check of another account (switched on) ----
   r = await H.msg("scoreCheck", { handle: "@BigVC" });
   assert(r.ok && r.handle === "bigvc" && r.results.twitterscore.score === 900, "score check of @bigvc");
   r = await H.msg("scoreCheck", { handle: "nobody_here" });
@@ -78,6 +88,21 @@ try {
   r = await H.msg("smartFollowers", { handle: "bigvc", fresh: true });
   assert(r.results.twitterscore.list.length === 4, "TwitterScore API lists every smart follower (not just the free 3)");
 
+  // ---- your own TwitterScore score never spends the API; a bot check falls back to the browser tab ----
+  await H.settings({ providers: { twitterscore: { mode: "auto" } } });
+  const apiCalls = () => M.twitterscore.calls.filter((c) => c.startsWith("/api/")).length;
+  let api0 = apiCalls();
+  r = await H.msg("scoresRefreshOwn", { force: true, only: ["twitterscore"] });
+  assert(r.results.twitterscore.ok && r.results.twitterscore.score === 233 && r.results.twitterscore.mode === "public", "own TwitterScore score from the free page, with a key saved: " + JSON.stringify(r.results.twitterscore));
+  assert(apiCalls() === api0, "no API request for your own score");
+  M.twitterscore.mode = "botcheck";
+  r = await H.msg("scoresRefreshOwn", { force: true, only: ["twitterscore"] });
+  assert(r.results.twitterscore.ok && r.results.twitterscore.score === 233 && r.results.twitterscore.mode === "page", "bot check on the direct read -> read in a browser tab: " + JSON.stringify(r.results.twitterscore));
+  assert(apiCalls() === api0, "still no API request");
+  r = await H.msg("smartFollowers", { handle: "bigvc", fresh: true });
+  assert(r.results.twitterscore.list.length === 4 && apiCalls() === api0 + 1, "smart followers use the API (mode Auto, key saved)");
+  M.twitterscore.mode = "ok";
+
   // ---- Ethos (free, no key) and Moni (your free key) ----
   M.ethos.scores["0x_nation"] = 1460;
   M.moni.scores["0x_nation"] = 37;
@@ -90,9 +115,9 @@ try {
   assert(M.ethos.calls.some((c) => /scorex@/.test(c)), "Ethos requests identify the app (X-Ethos-Client)");
   r = await H.msg("scoreCheck", { handle: "beta" });
   assert(/no Ethos profile/.test(r.results.ethos.error || ""), "an account without an Ethos profile is not shown with Ethos' default score: " + r.results.ethos.error);
+  const moniCalls = M.moni.calls.length;
   r = await H.msg("smartFollowers", { handle: "bigvc", fresh: true });
-  assert(JSON.stringify(r.results.moni.list.map((x) => x.handle)) === JSON.stringify(["alpha", "epsilon"]), "Moni smarts read from profile links, the account itself excluded");
-  assert(!r.results.ethos, "Ethos is not asked for smart followers (it has none)");
+  assert(!r.results.moni && !r.results.ethos && M.moni.calls.length === moniCalls, "Moni and Ethos are kept for your own score: never asked for smart followers");
 
   // ---- smart-follower search -> candidates ----
   await H.settings({ providers: { twitterscore: { mode: "public" } } });
