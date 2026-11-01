@@ -228,13 +228,18 @@ text that does not match.
 
 **Auto-stop**: ScoreX stops immediately, shows a desktop notification and a red **!** badge, and does **not**
 retry when it sees: a captcha / verification page, X's "this request looks like it might be automated" or any
-unusual-activity warning, a rate-limit message ("over the daily limit", "Something went wrong" three times in a
-row), a locked or restricted account, the login page, a different logged-in account (or one ScoreX cannot read
-on 3 page loads in a row), a dialog or notice ScoreX does not know (for example a new "label AI content"
-question: it is never clicked, and its text is shown with the stop), 2 posting failures in a row, a page whose
-posts can no longer be read (X changed its markup), a rejected OpenAI key, exhausted OpenAI quota, the monthly
-budget, or a reach collapse when the reach monitor is set to *Stop*. **Resume is always manual**: press
-**Review stop...**, check your account on x.com, tick the box and resume.
+unusual-activity warning, a rate-limit message (including "unable to follow more people"), a locked or restricted
+account, the login page, a different logged-in account, a dialog or notice ScoreX does not know (for example a new
+"label AI content" question: it is never clicked, and its text is shown with the stop), a rejected OpenAI key,
+exhausted OpenAI quota, the monthly budget, or a reach collapse when the reach monitor is set to *Stop*. **Resume is
+always manual**: press **Review stop...**, check your account on x.com, tick the box and resume.
+
+**Errors** (Settings > Safety > Errors): ScoreX's own failures - posts that do not go through several times in a
+row, watch pages that keep failing or show no posts (X changed its markup), "Something went wrong" pages three times
+in a row, the X tab not opening, an account name it cannot read, internal errors - do **not** stop it by default.
+They go to the activity log and ScoreX moves on to the next task by itself (no stop, no pop-up), waiting a little
+longer after each failure in a row. Turn on **Stop and notify me when errors repeat** to get the stops back (after
+the number of failed posts you set). X's own warnings in the paragraph above always stop, whatever this is set to.
 
 **Account check before every action**: right before each like, reply and unfollow click the page checks again
 that it is logged in as your account. If the account cannot be read, nothing is clicked or typed and the reply
@@ -297,10 +302,15 @@ ScoreX only comments on accounts that **don't follow you**. Import a list of 100
    Targets screen (**Edit rules**).
 
 **Follow them first** (Targets > Edit rules, on): a reply from someone who does not follow you is easy to ignore, so
-ScoreX follows a target you don't follow before replying to it: on the post page right before the reply (the
-author's own "Follow @handle" button, never a suggestion or an ad), or from the profile while idle, one account
-every 3-8 minutes, at most 40 a day by default (hard cap 100). A protected account gets a follow request. Accounts
-that already follow you are not touched. Note: with Cleanup on, accounts you followed are unfollowed after its
+ScoreX **follows an account before it likes or replies to it**. For an account you don't follow it opens the profile
+first (the one page where X always shows Follow / Following), checks whether you already follow it, clicks Follow if
+not, and waits until X shows "Following"; only then does it open the post, like it and reply. If the follow does not
+go through (no Follow button, X does not confirm), nothing is liked or typed: the reply waits, tries again, and is
+skipped after 3 tries. When today's follows are used up (100 a day by default, up to 300; X itself allows 400),
+replies to accounts you don't follow wait until there is room, and replies to accounts you follow go on. X refusing a
+follow ("unable to follow more people") is a rate-limit stop. While idle, ScoreX also follows targets ahead of time
+from their profiles, one every 3-8 minutes. A protected account gets a follow request. Accounts that already follow
+you are not touched. Note: with Cleanup on, accounts you followed are unfollowed after its
 days without a follow-back; keep those days at or above the give-up days if you want the follow to last while
 ScoreX is still replying.
 
