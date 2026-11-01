@@ -55,6 +55,7 @@ export function lockCard(lic, { compact = false } = {}) {
     h("div", { class: "lock-row" }, input, go),
     again ? h("div", { class: "lock-row" }, again) : null,
     msg,
+    h("p", { class: "lock-notice" }, "Sharing this without permission is strictly prohibited. A product of Unique Labs. Developed by Shahriar Ahmed."),
     compact ? null : h("p", { class: "lock-fine" }, "Only the key, a random install ID and the ScoreX version are sent to the license server. Ask your admin for a key, or for a reset when you move to a new computer."));
 }
 
