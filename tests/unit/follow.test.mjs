@@ -123,7 +123,7 @@ describe("Tone prompt and follow settings", () => {
     const s = sanitizeSettings({});
     assert.equal(s.prompt.tone, DEFAULT_TONE_PROMPT);
     assert.equal("styleExamples" in s.prompt, false);
-    assert.deepEqual(s.follow, { giveUpDays: 14, autoRemove: true, blacklist: true, scanEveryHours: 2, recheckHours: 72, checksPerRun: 10, removeFollowers: true, followFirst: true, followsPerDay: 40 });
+    assert.deepEqual(s.follow, { giveUpDays: 14, autoRemove: true, blacklist: true, scanEveryHours: 2, recheckHours: 72, checksPerRun: 10, removeFollowers: true, followFirst: true, followsPerDay: 100 });
     assert.deepEqual(s.learning.abTones, { A: [], B: [] });
     assert.equal("autoMoveToA" in s.learning, false);
   });
@@ -136,9 +136,12 @@ describe("Tone prompt and follow settings", () => {
 
   test("follow settings are clamped", () => {
     const f = sanitizeSettings({ follow: { giveUpDays: 1, scanEveryHours: 0, recheckHours: 1, checksPerRun: 99, autoRemove: 0, blacklist: false } }).follow;
-    assert.deepEqual(f, { giveUpDays: 3, autoRemove: true, blacklist: false, scanEveryHours: 1, recheckHours: 12, checksPerRun: 25, removeFollowers: true, followFirst: true, followsPerDay: 40 });
-    assert.equal(sanitizeSettings({ follow: { followsPerDay: 999 } }).follow.followsPerDay, 100, "hard cap");
-    assert.equal(sanitizeSettings({ follow: { followFirst: false } }).follow.followFirst, false);
+    assert.deepEqual(f, { giveUpDays: 3, autoRemove: true, blacklist: false, scanEveryHours: 1, recheckHours: 12, checksPerRun: 25, removeFollowers: true, followFirst: true, followsPerDay: 100 });
+    assert.equal(sanitizeSettings({ follow: { followsPerDay: 999 } }).follow.followsPerDay, 300, "hard cap");
+    assert.equal(sanitizeSettings({ genRev: 3, follow: { followFirst: false } }).follow.followFirst, false, "turning it off sticks");
+    assert.equal(sanitizeSettings({ genRev: 2, follow: { followFirst: false, followsPerDay: 40 } }).follow.followFirst, true, "settings from before follow-first became a hard rule: turned on once");
+    assert.equal(sanitizeSettings({ genRev: 2, follow: { followsPerDay: 40 } }).follow.followsPerDay, 100, "the old default cap moves to 100");
+    assert.equal(sanitizeSettings({ genRev: 2, follow: { followsPerDay: 25 } }).follow.followsPerDay, 25, "a cap you chose stays");
     assert.equal(sanitizeSettings({ follow: { autoRemove: false } }).follow.autoRemove, false);
     assert.equal(sanitizeSettings({ follow: { giveUpDays: 500 } }).follow.giveUpDays, 90);
   });

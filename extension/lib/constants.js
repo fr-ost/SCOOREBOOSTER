@@ -178,7 +178,7 @@ export const HARD = Object.freeze({
   dailyComments: 300,
   dailyLikes: 300, // likes only happen right before a comment, so they never exceed the comments
   dailyUnfollows: 30,
-  dailyFollows: 100, // follow-first: accounts followed per 24 h at most
+  dailyFollows: 300, // follow-first: accounts followed per 24 h at most (= accountsPerDay; X itself allows 400)
   minGapMin: 2, // never two comments closer than this
   perTargetDay: 2,
   perTargetWeek: 14,

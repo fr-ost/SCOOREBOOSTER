@@ -1,6 +1,7 @@
-// Follow first: a target you do not follow is followed before ScoreX replies to it (on its post page), or from its
-// profile in the background, within the daily follow cap. Already followed -> nothing; no button -> the reply still
-// goes out and the background step tries the profile later.
+// Follow first (a hard rule): before ScoreX likes or replies to an account you do not follow, it opens that account's
+// profile and follows it (or sees there that you already do). Nothing is liked or typed until X confirms. It cannot
+// follow (no button, X does not confirm, the daily follow cap is used up) -> no like and no reply to that account now:
+// the item waits and tries again. X refusing the follow (a warning / limit) stops the engine before anything else.
 import { resetStorage } from "./_chrome.mjs";
 import { install } from "./_engine_env.mjs";
 import { test, describe, before, after, beforeEach, afterEach } from "node:test";
@@ -8,19 +9,20 @@ import assert from "node:assert/strict";
 import { useMemoryDb } from "../../extension/lib/db.js";
 import * as H from "../../extension/lib/history.js";
 import * as engine from "../../extension/lib/engine.js";
-import { followFirstStep, followRoom, wantsFollow } from "../../extension/lib/follow.js";
+import { followFirstStep, followRoom, followRoomAt, wantsFollow } from "../../extension/lib/follow.js";
 import { getState, patchState, save, setSecrets, getTargets, getSettings, sanitizeSettings } from "../../extension/lib/store.js";
-import { K, HS, STATUS } from "../../extension/lib/constants.js";
+import { K, HS, STATUS, HARD } from "../../extension/lib/constants.js";
 import { newTarget, applyFollow } from "../../extension/lib/targets.js";
 import { _setClock, MIN, DAY } from "../../extension/lib/util.js";
 
 const ME = "0x_nation";
 const POST_ID = "1983000000000000001";
+const POST_URL = `https://x.com/alice/status/${POST_ID}`;
 const TEXT = "ngl the timing on this is what makes it work, the rest is noise";
 const base = {
-  mode: "auto", account: { handle: ME, verifyAccount: true },
+  mode: "auto", genRev: 3, account: { handle: ME, verifyAccount: true },
   watch: { strategy: "list", listUrls: ["https://x.com/i/lists/1234567890"], scrolls: 0, catchUp: { enabled: false } },
-  safety: { activeHours: { enabled: false }, breaks: { enabled: false }, readDelaySec: { min: 1, max: 1 }, typingCpm: { min: 550, max: 600 } },
+  safety: { activeHours: { enabled: false }, breaks: { enabled: false }, readDelaySec: { min: 1, max: 1 }, typingCpm: { min: 550, max: 600 }, like: { enabled: true } },
   learning: { enabled: false, conversations: { enabled: false } }, review: { notifyNew: false },
 };
 const notFollowing = (h, youFollow = false) => { const t = applyFollow(newTarget(h), false, Date.now() - DAY); t.rel.youFollow = youFollow; return t; };
@@ -41,8 +43,8 @@ describe("follow first", () => {
     env.addTab({ id: 3, url: "https://x.com/home", pinned: true, index: 0 });
     await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, workerTabFreshAt: Date.now(), followBadgeOkAt: Date.now(), followersScanAt: Date.now(), ...state });
   }
-  // A post page where the reply goes through; follow answers with `followAnswer`.
-  function postPage(followAnswer) {
+  // X: the profile answers the follow with `followAnswer`; the post page lets the reply through.
+  function xPages(followAnswer) {
     const box = { text: "" };
     env.content = async (msg, tab) => {
       const page = { ...env.page, url: tab.url };
@@ -51,6 +53,7 @@ describe("follow first", () => {
         case "scrapeTweets": return { ok: true, tweets: [], articleCount: 0, page };
         case "scrapeStatus": return { ok: true, focal: { id: POST_ID, text: "Most teams ship features.", liked: false }, focalIndex: 0, canReply: true, myReplies: [], page };
         case "follow": return { ...followAnswer, page };
+        case "like": return { ok: true, page };
         case "openComposer": return { ok: true, where: "inline", text: "", page };
         case "type": box.text = msg.text; return { ok: true, text: box.text, page };
         case "composerText": return { ok: true, text: box.text, page };
@@ -60,61 +63,89 @@ describe("follow first", () => {
       }
     };
   }
-  async function queued() {
-    const rec = await H.put(H.newRecord({ status: HS.QUEUED, target: "alice", group: "B", postId: POST_ID, postUrl: `https://x.com/alice/status/${POST_ID}`, comment: TEXT, attempts: 1, postCreatedAt: Date.now() - 5 * MIN, scheduledFor: 0 }));
+  async function queued(target = "alice") {
+    const rec = await H.put(H.newRecord({ status: HS.QUEUED, target, group: "B", postId: POST_ID, postUrl: POST_URL, comment: TEXT, attempts: 1, postCreatedAt: Date.now() - 5 * MIN, scheduledFor: 0 }));
     await patchState({ nextCommentAt: 0, lastCommentAt: 0, lastWatchAt: Date.now() });
     await engine.tick("alarm");
     return H.get(rec.id);
   }
-  const order = () => env.cmds().map((c) => c[0]).filter((c) => ["like", "follow", "openComposer", "submitReply"].includes(c));
+  const order = () => env.cmds().map((c) => c[0]).filter((c) => ["follow", "like", "openComposer", "submitReply"].includes(c));
+  const visited = () => env.navigations.map(([, u]) => u);
 
-  test("a target you do not follow is followed on its post page right before the reply; then it counts as followed", async () => {
+  test("not followed yet: its profile first, Follow, then the post - like and reply only after X confirms", async () => {
     await setup({ targets: { alice: notFollowing("alice") } });
-    postPage({ ok: true });
+    xPages({ ok: true });
     const r = await queued();
     assert.equal(r.status, HS.POSTED);
-    assert.deepEqual(order(), ["like", "follow", "openComposer", "submitReply"]);
+    assert.deepEqual(order(), ["follow", "like", "openComposer", "submitReply"], "follow before like and reply");
+    assert.deepEqual(visited().slice(0, 2), ["https://x.com/alice", POST_URL], "the profile, then the post");
+    assert.equal(env.cmds("follow")[0][1], "https://x.com/alice", "the follow is clicked on the profile page");
     const t = (await getTargets()).alice;
     assert.equal(t.rel.youFollow, true);
     assert.ok(t.rel.youFollowSince && t.rel.followedByScoreXAt);
-    const st = await getState();
-    assert.equal((st.followTimes || []).length, 1);
+    assert.equal(((await getState()).followTimes || []).length, 1);
   });
 
-  test("already followed: no follow click; the setting off or the daily cap reached: no follow either", async () => {
+  test("the profile shows you already follow: nothing is clicked or counted, and the reply goes on", async () => {
+    await setup({ targets: { alice: notFollowing("alice") } });
+    xPages({ ok: true, already: true });
+    assert.equal((await queued()).status, HS.POSTED);
+    assert.equal((await getTargets()).alice.rel.youFollow, true, "remembered: no profile visit next time");
+    assert.equal(((await getState()).followTimes || []).length, 0, "not a follow: the daily cap is untouched");
+  });
+
+  test("already following (known): no profile visit; the switch off: no follow either", async () => {
     await setup({ targets: { alice: notFollowing("alice", true) } });
-    postPage({ ok: true });
+    xPages({ ok: true });
     assert.equal((await queued()).status, HS.POSTED);
     assert.ok(!order().includes("follow"));
+    assert.ok(!visited().includes("https://x.com/alice"));
 
-    env.commands.length = 0; env.tabs.clear();
+    env.commands.length = 0; env.navigations.length = 0; env.tabs.clear();
     await setup({ settings: { follow: { followFirst: false } }, targets: { alice: notFollowing("alice") } });
-    postPage({ ok: true });
+    xPages({ ok: true });
     assert.equal((await queued()).status, HS.POSTED);
-    assert.ok(!order().includes("follow"));
-
-    env.commands.length = 0; env.tabs.clear();
-    await setup({ settings: { follow: { followsPerDay: 2 } }, targets: { alice: notFollowing("alice") }, state: { followTimes: [Date.now() - 1000, Date.now() - 2000] } });
-    postPage({ ok: true });
-    assert.equal((await queued()).status, HS.POSTED);
-    assert.ok(!order().includes("follow"), "cap reached");
+    assert.ok(!order().includes("follow"), "follow first switched off");
   });
 
-  test("no follow button on the post page: the reply still goes out, and the target is marked for the profile step tomorrow", async () => {
-    await setup({ targets: { alice: notFollowing("alice") } });
-    postPage({ ok: false, error: "follow_button_missing" });
-    assert.equal((await queued()).status, HS.POSTED);
-    const t = (await getTargets()).alice;
-    assert.notEqual(t.rel.youFollow, true);
-    assert.ok(t.rel.followTriedAt > 0);
+  test("daily follow cap used up: no like and no reply to an account you don't follow - it waits until the cap has room", async () => {
+    const ts = Date.now();
+    await setup({ settings: { follow: { followsPerDay: 2 } }, targets: { alice: notFollowing("alice") }, state: { followTimes: [ts - 1000, ts - 2000] } });
+    xPages({ ok: true });
+    const r = await queued();
+    assert.equal(r.status, HS.QUEUED, "still waiting, not posted");
+    assert.match(r.reason, /Waiting to follow @alice first/);
+    assert.ok(r.scheduledFor > ts + 20 * 3600e3, "until the oldest follow leaves the 24 h window");
+    assert.deepEqual(order(), [], "nothing liked, followed or typed");
+    assert.equal(visited().length, 0, "not even the post page was opened");
   });
 
-  test("an X warning after the follow click stops the engine before anything is typed", async () => {
+  test("Follow does not work (no button, X does not confirm): nothing liked or typed; tries again, then skips - never posted", async () => {
     await setup({ targets: { alice: notFollowing("alice") } });
-    postPage({ ok: false, state: "rate_limit", detail: "You are unable to follow more people at this time." });
+    xPages({ ok: false, error: "follow_button_missing" });
+    let r = await queued();
+    assert.equal(r.status, HS.QUEUED, "waits for another try");
+    assert.match(r.reason, /Will retry: following @alice first did not work/);
+    assert.deepEqual(order(), ["follow"], "no like, no reply");
+    assert.ok(!visited().includes(POST_URL), "the post page was not even opened");
+    for (let i = 0; i < 2; i++) {
+      await H.patch(r.id, { scheduledFor: 0 });
+      await patchState({ nextCommentAt: 0, lastCommentAt: 0, lastWatchAt: Date.now() });
+      await engine.tick("alarm");
+      r = await H.get(r.id);
+    }
+    assert.equal(r.status, HS.SKIPPED);
+    assert.match(r.reason, /Could not follow @alice first .* not commented/);
+    assert.ok(!order().includes("submitReply") && !order().includes("like"));
+    assert.equal((await getState()).status, STATUS.RUNNING, "not a stop: ScoreX goes on");
+  });
+
+  test("X refuses the follow (a warning / follow limit): the engine stops before anything is liked or typed", async () => {
+    await setup({ targets: { alice: notFollowing("alice") } });
+    xPages({ ok: false, state: "rate_limit", detail: "You are unable to follow more people at this time." });
     const r = await queued();
     assert.notEqual(r.status, HS.POSTED);
-    assert.ok(!order().includes("openComposer"));
+    assert.deepEqual(order(), ["follow"]);
     assert.equal((await getState()).status, STATUS.STOPPED);
   });
 
@@ -130,19 +161,23 @@ describe("follow first", () => {
     const settings = await getSettings();
     const r = await followFirstStep({ tabId: 3, settings, me: ME, shouldStop: async () => false });
     assert.equal(r.did, "follow_first");
-    assert.deepEqual(env.navigations.map(([, u]) => u), ["https://x.com/alice"]);
+    assert.deepEqual(visited(), ["https://x.com/alice"]);
     assert.equal(env.cmds("follow")[0][1], "https://x.com/alice");
     assert.equal((await getTargets()).alice.rel.youFollow, true);
-    // Right after: the 3-8 minute gap holds it back.
-    assert.equal(await followFirstStep({ tabId: 3, settings, me: ME, shouldStop: async () => false }), null);
+    assert.equal(await followFirstStep({ tabId: 3, settings, me: ME, shouldStop: async () => false }), null, "the 3-8 minute gap holds the next one back");
     assert.equal(wantsFollow((await getTargets()).fan, settings), false, "an account that follows you is not a follow-first target");
   });
 
-  test("followRoom: the rolling 24 h cap, never above the hard cap, 0 when the setting is off", () => {
+  test("followRoom / followRoomAt: the rolling 24 h cap, never above the hard cap, 0 when the switch is off", () => {
     const s = sanitizeSettings({ follow: { followsPerDay: 3 } });
     const ts = Date.now();
     assert.equal(followRoom(s, { followTimes: [ts - 1000, ts - 2 * DAY] }, ts), 2);
-    assert.equal(followRoom(sanitizeSettings({ follow: { followFirst: false } }), {}, ts), 0);
-    assert.equal(followRoom(sanitizeSettings({ follow: { followsPerDay: 500 } }), {}, ts), 100);
+    assert.equal(followRoom(sanitizeSettings({ genRev: 3, follow: { followFirst: false } }), {}, ts), 0);
+    assert.equal(followRoom(sanitizeSettings({ follow: { followsPerDay: 5000 } }), {}, ts), HARD.dailyFollows);
+    assert.equal(sanitizeSettings({}).follow.followsPerDay, 100, "default: as many follows as accounts a day");
+    const full = { followTimes: [ts - 3 * 3600e3, ts - 2 * 3600e3, ts - 1 * 3600e3] };
+    assert.equal(followRoomAt(s, { followTimes: [] }, ts), ts, "room now");
+    const at = followRoomAt(s, full, ts);
+    assert.ok(at >= ts - 3 * 3600e3 + DAY && at <= ts - 3 * 3600e3 + DAY + 6 * MIN, "when the oldest of the last 24 h leaves the window");
   });
 });

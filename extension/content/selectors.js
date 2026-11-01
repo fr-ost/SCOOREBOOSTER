@@ -91,7 +91,7 @@
     text: {
       // X's strongest warning; always stops the engine.
       automation: "looks like it might be automated|automated (?:behavior|activity)|unusual activity|suspicious activity|protect our users from spam|we can.t complete this action right now",
-      rateLimit: "rate limit|over the daily limit|you are over the limit|daily limit for (?:sending|posting)|too many requests|you.ve reached your limit|reached the limit|limit exceeded",
+      rateLimit: "rate limit|over the daily limit|you are over the limit|daily limit for (?:sending|posting)|too many requests|you.ve reached your limit|reached the limit|limit exceeded|unable to follow more people|can.t follow (?:any )?more (?:people|accounts)|follow limit",
       locked: "your account (?:has been|is) (?:temporarily )?(?:locked|suspended|restricted)|we.ve temporarily limited some of your account features|your account is (?:locked|suspended)",
       captcha: "verify you are (?:a )?human|are you a robot|prove (?:that )?you.re (?:not a robot|human)|authenticate your account|complete the challenge|solve this puzzle",
       errorPage: "something went wrong|try reloading|hmm\\.\\.\\.this page doesn.t exist",

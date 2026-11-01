@@ -46,8 +46,8 @@ describe("cross-module fixes (round 2)", () => {
   });
   afterEach(async () => { _setClock(null); await engine.pause().catch(() => {}); });
 
-  test("posting: an unreadable logged-in account puts the item back (no retry used, nothing typed) and 3 in a row stop the engine", async () => {
-    await setup(env, { targets: { alice: notFollowing("alice") } });
+  test("posting: an unreadable logged-in account puts the item back (no retry used, nothing typed) and 3 in a row stop the engine (Stop when errors repeat on)", async () => {
+    await setup(env, { settings: { safety: { stopOnErrors: true } }, targets: { alice: notFollowing("alice") } });
     env.page = { state: "ok", detail: "", me: "", hidden: false }; // X shows no readable account anywhere
     env.content = async (msg, tab) => {
       const page = { ...env.page, url: tab.url };

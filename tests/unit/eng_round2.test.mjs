@@ -28,7 +28,7 @@ const notFollowing = (h, o) => applyFollow(newTarget(h, o), false, Date.now() - 
 async function setup(env, { settings = {}, targets = {}, state = {} } = {}) {
   resetStorage();
   useMemoryDb();
-  await save({ [K.settings]: { ...baseSettings, ...settings, watch: { ...baseSettings.watch, ...(settings.watch || {}) } }, [K.targets]: targets });
+  await save({ [K.settings]: { ...baseSettings, ...settings, safety: { ...(baseSettings.safety || {}), ...(settings.safety || {}) }, watch: { ...baseSettings.watch, ...(settings.watch || {}) } }, [K.targets]: targets });
   await setSecrets({ openaiKey: "sk-test-1234567890abcdef" });
   env.addTab({ id: 3, url: "https://x.com/home", pinned: true, index: 0 });
   await patchState({ status: STATUS.RUNNING, firstStartedAt: Date.now() - 20 * DAY, startedAt: Date.now() - HOUR, workerTabId: 3, workerTabPinned: true, workerTabIndex: 0, workerTabFreshAt: Date.now(), followBadgeOkAt: Date.now(), followersScanAt: Date.now(), ...state });
@@ -156,8 +156,8 @@ describe("engine fixes (review round 2)", () => {
 
   // ---------------- ENG2-4 ----------------
 
-  test("ENG2-4: only 'Something went wrong' three times in a row is a rate-limit stop; other watch failures do not count toward it", async () => {
-    await setup(env, { settings: { watch: { strategy: "search" } }, targets: { alice: notFollowing("alice") } });
+  test("ENG2-4: only 'Something went wrong' three times in a row is a rate-limit stop; other watch failures do not count toward it (Stop when errors repeat on)", async () => {
+    await setup(env, { settings: { watch: { strategy: "search" }, safety: { stopOnErrors: true } }, targets: { alice: notFollowing("alice") } });
     let errorPage = false;
     env.content = async (msg, tab) => {
       const page = { ...env.page, state: errorPage ? "error_page" : "ok", detail: errorPage ? "Something went wrong. Try reloading." : "", url: tab.url };

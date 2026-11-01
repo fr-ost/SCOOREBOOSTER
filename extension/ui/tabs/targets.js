@@ -8,7 +8,7 @@
 // frequency live in the "Edit rules" sheet. Only accounts that don't follow you get comments; every change to a target
 // goes through a worker message.
 
-import { K, HS, PRESET_KEYS } from "../../lib/constants.js";
+import { K, HS, PRESET_KEYS, HARD } from "../../lib/constants.js";
 import { parseHandleList, normalizeHandle, toCsv, num, DAY } from "../../lib/util.js";
 import { parseImport, allToneKeys, followStatus, followDays, FS, FS_LABEL, MAIN_TONE } from "../../lib/targets.js";
 import * as history from "../../lib/history.js";
@@ -461,10 +461,10 @@ export default {
         title: "Follow rules", id: "rulesSheet", initialFocus: "#giveUpDays",
         onClose: () => { rulesSheet = null; },
         body: [
-          sec("Follow them first", "A reply from someone who does not follow you is easy to ignore. ScoreX follows a target you don't follow right before its first reply (on the post page), or from its profile while idle, 3-8 minutes apart.",
+          sec("Follow them first", "Before ScoreX likes or replies to an account you don't follow, it opens that account's profile and follows it - and checks there whether you already do. No like and no reply until X shows \"Following\". If it can't follow (no Follow button, X refuses, today's follow limit reached), that account gets no reply for now; it tries again later. While idle it also follows targets ahead of time, 3-8 minutes apart.",
             ctx.field({ path: "follow.followFirst", type: "toggle", label: "Follow targets I don't follow", id: "followFirst" }),
             h("div", { class: "form-row" },
-              ctx.field({ path: "follow.followsPerDay", type: "number", label: "Follows per 24 hours", min: 0, max: 100, id: "followsPerDay", hint: "0-100; X limits accounts that follow fast, so keep it modest" }))),
+              ctx.field({ path: "follow.followsPerDay", type: "number", label: "Follows per 24 hours", min: 0, max: HARD.dailyFollows, id: "followsPerDay", hint: `0-${HARD.dailyFollows}. Replies to accounts you don't follow wait while this is used up, so keep it at least your "different accounts / day". X itself allows 400 a day.` }))),
           sec("When nobody follows back", "Accounts that follow you are never commented on, and comments stop as soon as someone follows back. The day counter starts with the first comment.",
             h("div", { class: "form-row" }, giveUp), autoRemove, blacklist),
           sec("Who goes first", null,

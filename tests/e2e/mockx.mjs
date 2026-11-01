@@ -29,6 +29,8 @@ export function createMock(opts = {}) {
     replies: [], // our posted replies { id, inReplyTo, text, at }
     likes: [],
     unfollows: [],
+    follows: [], // handles followed through the profile's Follow button
+    followMode: "ok", // ok | limit (X refuses with a toast) | ignore (the click does nothing)
     followers: {}, // handle -> [handles]
     following: {},
     lists: { "1234567890": [] }, // list id -> member handles (empty = all authors)
@@ -202,6 +204,14 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
   document.addEventListener('click', function(e){
     var like=e.target.closest('[data-testid="like"]');
     if(like){ var art=like.closest('article'); fetch('/__mock/like',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:art.getAttribute('data-mock-id')})}).then(function(r){return r.json();}).then(function(j){ if(j.toast){toast('<span>'+j.toast+'</span>');return;} like.setAttribute('data-testid','unlike'); }); }
+    var fo=e.target.closest('[data-testid$="-follow"]');
+    if(fo && !fo.closest('[data-testid="UserCell"]')){
+      fetch('/__mock/follow',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({handle:location.pathname.split('/')[1]})}).then(function(r){return r.json();}).then(function(j){
+        if(j.toast){ toast('<span>'+j.toast+'</span>'); return; }
+        if(j.ignored) return;
+        fo.setAttribute('data-testid', fo.getAttribute('data-testid').replace(/-follow$/,'-unfollow')); fo.textContent='Following';
+      });
+    }
     var un=e.target.closest('[data-testid$="-unfollow"]');
     if(un && !un.closest('[data-testid="UserCell"]')){
       var d=document.createElement('div'); d.setAttribute('role','dialog'); d.innerHTML='<div data-testid="confirmationSheetDialog"><button data-testid="confirmationSheetConfirm">Unfollow</button><button data-testid="confirmationSheetCancel">Cancel</button></div>';
@@ -389,6 +399,15 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           M.likes.push(j.id);
           const p = M.posts.find((x) => x.id === j.id);
           if (p) p.liked = true;
+          return send(200, { ok: true });
+        }
+        if (url.pathname === "/__mock/follow" && req.method === "POST") {
+          const j = JSON.parse(body);
+          const h = String(j.handle).toLowerCase();
+          if (M.followMode === "limit") return send(200, { toast: "You are unable to follow more people at this time." });
+          if (M.followMode === "ignore") return send(200, { ignored: true });
+          M.follows.push(h);
+          if (M.users[h]) M.users[h].iFollow = true;
           return send(200, { ok: true });
         }
         if (url.pathname === "/__mock/unfollow" && req.method === "POST") {

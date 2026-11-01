@@ -4,7 +4,7 @@
 
 import { STATUS, MODE, HS, STOP, STOP_LABEL, ALARM, K, HARD, OPEN_STATUSES } from "./constants.js";
 import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, getBlacklist, log, load, save } from "./store.js";
-import { now, DAY, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration, normalizeHandle, sleep } from "./util.js";
+import { now, DAY, HOUR, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration, normalizeHandle, sleep } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
 import { effectiveMode, dailyLimit, generationLimit, likeLimit, accountsLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart, watchCadence, riskReport } from "./safety.js";
@@ -18,7 +18,7 @@ import { postReply } from "./poster.js";
 import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
-import { followStep, badgeTrusted, followRoom, wantsFollow, recordFollow, followFirstStep, pruneFollowers } from "./follow.js";
+import { followStep, badgeTrusted, followRoom, followRoomAt, wantsFollow, recordFollow, followFirstStep, pruneFollowers } from "./follow.js";
 import { conversationsStep } from "./conversations.js";
 import { catchUpCandidates, catchUpMaxAgeMin } from "./catchup.js";
 import { cancelDiscovery } from "./discovery.js";
@@ -33,6 +33,25 @@ function abortBackground() { for (const j of backgroundJobs) j.abort = true; bac
 export const backgroundAbort = { requested: false };
 
 const SAFETY_STOPS = new Set(Object.values(STOP).filter((s) => s !== STOP.USER));
+// ScoreX's own failures - not X telling you something. They stop the engine only with Settings > Safety > "Stop when
+// errors repeat" on (safety.stopOnErrors, off by default). Off: logged in the activity (at most every 30 min per kind),
+// no stop, no notification, and ScoreX goes on with the next task (each caller backs off first). X's own signals -
+// captcha, "unusual activity" warning, rate limit, locked, logged out, wrong account, an unknown prompt - always stop.
+export const ERROR_STOPS = new Set([STOP.POST_FAILURES, STOP.DOM_CHANGED, STOP.TAB_UNAVAILABLE, STOP.INTERNAL, STOP.ACCOUNT_UNKNOWN]);
+export const stopsOnErrors = (settings) => !!(settings && settings.safety && settings.safety.stopOnErrors);
+async function errorNote(reason, detail) {
+  const st = await getState();
+  const last = (st.errorLogAt && st.errorLogAt[reason]) || 0;
+  if (now() - last < 30 * MIN) return;
+  await patchState((x) => ({ errorLogAt: { ...(x.errorLogAt || {}), [reason]: now() } }));
+  log("warn", `${STOP_LABEL[reason] || reason}${detail ? ": " + detail : ""} - carrying on (stopping on errors is off)`);
+}
+// Stop for `reason`, unless it is one of ScoreX's own failures and stopping on errors is off. Returns true when stopped.
+async function errorStop(settings, reason, detail) {
+  if (!ERROR_STOPS.has(reason) || stopsOnErrors(settings)) { await stop(reason, detail); return true; }
+  await errorNote(reason, detail);
+  return false;
+}
 // A safety stop (captcha, X warning, rate limit...) not reviewed yet (same rule as the dashboard's isSafetyStop): only
 // resume() - the dashboard's "Review stop..." - ends it, and until then nothing drives the X tab (no discovery; re-checks
 // wait for the resume).
@@ -436,8 +455,10 @@ async function expireQueue(settings, ts = now()) {
 async function stopIfAccountUnknown(settings) {
   if (!settings.account.verifyAccount || !settings.account.handle) return false;
   if (((await getState()).accountUnknownStreak || 0) < ACCOUNT_UNKNOWN_MAX) return false;
-  await stop(STOP.ACCOUNT_UNKNOWN, `Could not read which X account is logged in on ${ACCOUNT_UNKNOWN_MAX} pages in a row (expected @${settings.account.handle})`);
-  return true;
+  if (await errorStop(settings, STOP.ACCOUNT_UNKNOWN, `Could not read which X account is logged in on ${ACCOUNT_UNKNOWN_MAX} pages in a row (expected @${settings.account.handle})`)) return true;
+  // Carrying on: nothing is liked or typed while the account is unknown anyway; count again after a pause.
+  await patchState({ accountUnknownStreak: 0, nextCommentAt: now() + humanDelay(5 * MIN, 10 * MIN) });
+  return false;
 }
 
 // Room for `need` more X page loads under settings.safety.maxPageLoads24h (left = Infinity without a cap).
@@ -497,7 +518,11 @@ async function tickBody(settings, secrets, reason = "timer") {
   if (tabId == null) {
     const n = (state.tabErrors || 0) + 1;
     await patchState({ tabErrors: n });
-    if (n >= 3) { await stop(STOP.TAB_UNAVAILABLE, "Could not open or reach the x.com tab 3 times in a row"); return null; }
+    if (n >= 3) {
+      if (await errorStop(settings, STOP.TAB_UNAVAILABLE, "Could not open or reach the x.com tab 3 times in a row")) return null;
+      await patchState({ tabErrors: 0 });
+      return { delay: randInt(5, 10) * MIN, why: "retry tab" };
+    }
     return { delay: randInt(2, 4) * MIN, why: "retry tab" };
   }
   if (state.tabErrors) await patchState({ tabErrors: 0 });
@@ -559,7 +584,12 @@ async function tickBody(settings, secrets, reason = "timer") {
     if (room.left < 1) return budgetWait(room, ts);
     const targets = await getTargets();
     const w = await withPurpose("watch", () => watchOnce(tabId, settings, targets, ts));
-    if (w.stop) { await stop(w.stop, `${w.detail || ""} (while checking ${w.source || "posts"})`); return null; }
+    if (w.stop) {
+      if (await errorStop(settings, w.stop, `${w.detail || ""} (while checking ${w.source || "posts"})`)) return null;
+      const pause = humanDelay(10 * MIN, 20 * MIN);
+      await patchState({ lastWatchAt: now(), watchRetryAt: now() + pause });
+      return { delay: pause, why: "watch page problem - waiting" };
+    }
     // Pause/Stop pressed during the check. A watch page X already loaded still counts toward the hard minimum interval.
     if (w.aborted) { if (w.loaded) await patchState({ lastWatchAt: now() }); return null; }
     if (await stopIfAccountUnknown(settings)) return null;
@@ -574,8 +604,20 @@ async function tickBody(settings, secrets, reason = "timer") {
       const backoff = humanDelay(2 * MIN, 5 * MIN);
       await patchState({ softErrors: n, errorPageStreak: errorPages, lastWatchAt: now(), watchRetryAt: now() + backoff });
       log("warn", `Watch check failed (${w.soft || "unknown"})`, w.detail || "");
-      if (errorPages >= 3) { await stop(STOP.RATE_LIMIT, "X kept showing 'Something went wrong' (often a temporary rate limit)"); return null; }
-      if (n >= 5) { await stop(STOP.DOM_CHANGED, "Watch pages failed 5 times in a row"); return null; }
+      if (errorPages >= 3) {
+        // Repeated "Something went wrong" pages (no explicit X warning): with stopping on errors off, wait it out.
+        if (stopsOnErrors(settings)) { await stop(STOP.RATE_LIMIT, "X kept showing 'Something went wrong' (often a temporary rate limit)"); return null; }
+        const pause = humanDelay(15 * MIN, 30 * MIN);
+        await patchState({ errorPageStreak: 0, watchRetryAt: now() + pause });
+        await errorNote(STOP.RATE_LIMIT, "X kept showing 'Something went wrong' - waiting 15-30 min");
+        return { delay: pause, why: "X error pages - waiting" };
+      }
+      if (n >= 5) {
+        if (await errorStop(settings, STOP.DOM_CHANGED, "Watch pages failed 5 times in a row")) return null;
+        const pause = humanDelay(10 * MIN, 20 * MIN);
+        await patchState({ softErrors: 0, watchRetryAt: now() + pause });
+        return { delay: pause, why: "watch failing - waiting" };
+      }
       return { delay: backoff, why: "retry after soft error" };
     }
     const emptyStreak = w.visibleEmpty ? (state.emptyStreak || 0) + 1 : 0;
@@ -585,11 +627,16 @@ async function tickBody(settings, secrets, reason = "timer") {
     const fresh = !!((w.posts && w.posts.length) || (w.waiting && w.waiting.length));
     const emptyWatchStreak = !w.source ? state.emptyWatchStreak || 0 : fresh ? 0 : (state.emptyWatchStreak || 0) + 1;
     await patchState({ softErrors: 0, errorPageStreak: 0, watchRetryAt: null, emptyStreak, hiddenEmptyStreak: hiddenStreak, emptyWatchStreak, ...(fresh ? { lastFreshAt: now() } : {}), lastWatchAt: now(), lastWatchSource: w.source, lastWatchScanned: w.scanned });
-    if (emptyStreak >= 4) { await stop(STOP.DOM_CHANGED, "No posts rendered on watch pages 4 times in a row - X may have changed its page"); return null; }
+    if (emptyStreak >= 4) {
+      if (await errorStop(settings, STOP.DOM_CHANGED, "No posts rendered on watch pages 4 times in a row - X may have changed its page")) return null;
+      const pause = humanDelay(10 * MIN, 20 * MIN);
+      await patchState({ emptyStreak: 0, workerTabFreshAt: 0, watchRetryAt: now() + pause }); // next check in a fresh tab
+      return { delay: pause, why: "no posts rendered - waiting" };
+    }
     // X rendered nothing in the background tab: Chrome throttles long-hidden tabs, so the next check starts in a fresh
     // tab (lib/tabs.js FRESH_TAB_MS). Only when that keeps happening is the owner told.
     if (hiddenStreak) await patchState({ workerTabFreshAt: 0 });
-    if (hiddenStreak === 3) await notify("sx-hidden", "ScoreX: X tab not rendering", "X showed no posts in its background tab 3 times, even in a fresh tab. Switch Settings > Worker tab and selectors > Worker tab to 'Separate window' and keep that window visible (not minimized).");
+    if (hiddenStreak === 3 && stopsOnErrors(settings)) await notify("sx-hidden", "ScoreX: X tab not rendering", "X showed no posts in its background tab 3 times, even in a fresh tab. Switch Settings > Worker tab and selectors > Worker tab to 'Separate window' and keep that window visible (not minimized).");
     if (w.posts.length) {
       counts = await computeCounts(settings, now());
       await handleFresh(w.posts, { settings, secrets, mode, counts, tabId, me });
@@ -630,7 +677,12 @@ async function tickBody(settings, secrets, reason = "timer") {
   let bg = null;
   if ((await stillRunning()) && (await pageRoom(settings, backgroundNeed(settings))).left >= backgroundNeed(settings)) {
     bg = await backgroundStep({ tabId, settings, me });
-    if (bg && bg.stop) { await stop(bg.stop, bg.detail); return null; }
+    if (bg && bg.stop) {
+      if (await errorStop(settings, bg.stop, bg.detail)) return null;
+      // Carrying on (e.g. the followers list showed no "Follows you" badge): that check waits 2 hours; follow tracking
+      // marks nobody as "doesn't follow you" meanwhile, so nobody new gets comments because of it.
+      await patchState({ followersScanRetryAt: now() + 2 * HOUR });
+    }
     if (await stopIfAccountUnknown(settings)) return null;
   }
 
@@ -684,8 +736,13 @@ export async function tick(reason = "alarm") {
   } catch (e) {
     log("error", "Tick failed: " + String((e && e.message) || e));
     const st = await patchState((s) => ({ internalErrors: (s.internalErrors || 0) + 1 }));
-    if (st.internalErrors >= 5) await stop(STOP.INTERNAL, String((e && e.message) || e));
-    else if (await stillRunning()) await scheduleTick(rerunRequested ? randInt(15, 30) * 1000 : randInt(2, 4) * MIN, rerunRequested ? "manual" : "retry after error");
+    const settingsNow = await getSettings().catch(() => null);
+    if (st.internalErrors >= 5 && (await errorStop(settingsNow, STOP.INTERNAL, String((e && e.message) || e)))) { /* stopped */ }
+    else if (await stillRunning()) {
+      const many = st.internalErrors >= 5;
+      if (many) await patchState({ internalErrors: 0 });
+      await scheduleTick(rerunRequested ? randInt(15, 30) * 1000 : many ? randInt(5, 10) * MIN : randInt(2, 4) * MIN, rerunRequested ? "manual" : "retry after error");
+    }
   } finally {
     ticking = false;
     await refreshBadge().catch(() => {});
@@ -776,7 +833,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
   let t = target;
   if (tabId != null) {
     const c = await ensureContext(target, tabId, settings, post);
-    if (c && c.stop) { await stop(c.stop, c.detail); return "stopped"; }
+    if (c && c.stop) { if (await errorStop(settings, c.stop, c.detail)) return "stopped"; return "skipped"; }
     if ((c && c.aborted) || !(await stillRunning())) return "stopped"; // Pause/Stop during the profile visit
     t = c;
     if (!isActive(t, settings)) { log("info", `Not commenting on @${t.handle}: follows you now`); return "skipped"; }
@@ -838,6 +895,20 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   }
   const allowLike = likeLimit(settings) > counts.likedToday;
   if (!(await stillRunning())) return "aborted";
+  // Follow first (poster.js): an account you do not follow is followed before anything is liked or typed. No room
+  // under the daily follow cap -> no like and no reply to it now: the item waits until the cap has room, and replies
+  // to accounts you already follow go on meanwhile.
+  const tgt = (await getTargets())[rec.target];
+  const mustFollow = !!(tgt && wantsFollow(tgt, settings));
+  if (mustFollow && followRoom(settings, state) <= 0) {
+    const until = followRoomAt(settings, state);
+    await H.patch(rec.id, (r) => (r.status === rec.status ? { scheduledFor: until, reason: `Waiting to follow @${rec.target} first (daily follow cap reached)` } : null));
+    if (!state.followCapLoggedAt || now() - state.followCapLoggedAt > HOUR) {
+      await patchState({ followCapLoggedAt: now() });
+      log("info", "Daily follow cap reached: replies to accounts you don't follow yet wait until it has room (Targets > Edit rules)");
+    }
+    return "moved";
+  }
   // Compare-and-set: only claim the item if it is still in the state we picked it in (the user may have
   // skipped or edited it a moment ago), and post the freshly read text.
   const prevStatus = rec.status;
@@ -849,9 +920,7 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   });
   if (!claimed) return "gone";
   const shouldStop = async () => !(await stillRunning());
-  // Follow first: a target you do not follow is followed on its post page right before the reply (within the cap).
-  const tgt = (await getTargets())[rec.target];
-  const pctx = { tabId, settings, me, allowLike, shouldStop, followFirst: !!(tgt && wantsFollow(tgt, settings) && followRoom(settings, state) > 0) };
+  const pctx = { tabId, settings, me, allowLike, shouldStop, followFirst: mustFollow };
   const r = await postReply(claimed, pctx);
   if (pctx.followResult) await recordFollow(rec.target, pctx.followResult);
   const ts = now();
@@ -871,6 +940,18 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     await H.patch(rec.id, { status: prevStatus, reason: STOP_LABEL[STOP.ACCOUNT_UNKNOWN], ...(r.liked ? { liked: true, likedAt: ts } : {}) });
     await patchState({ nextCommentAt: ts + humanDelay(2 * MIN, 4 * MIN) });
     if (await stopIfAccountUnknown(settings)) return "stopped";
+    return "retry";
+  }
+  if (r.followFailed) {
+    // Following first did not work (no Follow button, X did not confirm): nothing was liked or typed. The item tries
+    // again later; after 3 tries it is skipped - ScoreX never replies to an account it could not follow first.
+    const tries = (claimed.followTries || 0) + 1;
+    const last = tries >= 3;
+    await H.patch(rec.id, last
+      ? { status: HS.SKIPPED, followTries: tries, reason: `Could not follow @${rec.target} first (${r.reason}) - not commented` }
+      : { status: prevStatus, followTries: tries, scheduledFor: ts + humanDelay(8 * MIN, 15 * MIN), reason: `Will retry: following @${rec.target} first did not work (${r.reason})` });
+    await patchState({ nextCommentAt: ts + humanDelay(2 * MIN, 4 * MIN) });
+    log("warn", `Could not follow @${rec.target} first (${r.reason}) - not commented${last ? "" : "; will try again"}`);
     return "retry";
   }
   if (r.retry) {
@@ -900,13 +981,16 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     await refreshBadge(); // the icon counts posted replies
     return "posted";
   }
-  if (r.stop) {
+  if (r.stop && !(ERROR_STOPS.has(r.stop) && !stopsOnErrors(settings))) {
     // unsure: the stop came after the Reply click without a clear rejection, so the reply may be on X (counts
     // toward every limit, like an unconfirmed post).
     await H.patch(rec.id, { status: HS.FAILED, reason: STOP_LABEL[r.stop] || r.stop, liked: !!r.liked, likedAt: r.liked ? ts : null, ...(r.unsure ? { maybePosted: true, replyUrl: r.replyUrl || "" } : {}) });
     await stop(r.stop, r.detail);
     return "stopped";
   }
+  // One of ScoreX's own failures while posting (e.g. a page element not found) with stopping on errors off: it counts
+  // as a failed post below, and ScoreX goes on with the next one.
+  if (r.stop) { r.reason = `${STOP_LABEL[r.stop] || r.stop}${r.detail ? " (" + r.detail + ")" : ""}`; r.stop = null; }
   if (r.skip) {
     await H.patch(rec.id, { status: HS.SKIPPED, reason: r.reason, liked: !!r.liked, likedAt: r.liked ? ts : null });
     log("info", `Skipped posting to @${rec.target}: ${r.reason}`);
@@ -917,7 +1001,13 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   await H.patch(rec.id, { status: HS.FAILED, reason: r.reason || "post failed", liked: !!r.liked, likedAt: r.liked ? ts : null, maybePosted: !!r.unsure });
   await patchState({ consecutiveFailures: n, nextCommentAt: ts + humanDelay(3 * MIN, 6 * MIN) });
   log("warn", `Posting to @${rec.target} failed: ${r.reason}`);
-  if (n >= settings.safety.maxConsecutiveFailures) { await stop(STOP.POST_FAILURES, `${n} posting failures in a row (last: ${r.reason})`); return "stopped"; }
+  if (n >= settings.safety.maxConsecutiveFailures) {
+    if (await errorStop(settings, STOP.POST_FAILURES, `${n} posting failures in a row (last: ${r.reason})`)) return "stopped";
+    // Carrying on with the next reply, a little slower after each failure in a row (5, 10, 20, then 30 min) so a
+    // broken page is not hammered. A reply that goes through resets it.
+    const pause = Math.min(30, 5 * 2 ** Math.max(0, n - settings.safety.maxConsecutiveFailures)) * MIN;
+    await patchState({ nextCommentAt: ts + pause });
+  }
   return "failed";
 }
 
@@ -1156,7 +1246,7 @@ async function runRefreshJob(job) {
         if (job.abort) break;
         const h = job.queue.shift();
         const p = await refreshProfile(tabId, h, settings, { shouldStop: async () => job.abort });
-        if (p && p.stop) { job.queue.length = 0; await stop(p.stop, p.detail); return {}; }
+        if (p && p.stop) { job.queue.length = 0; await errorStop(settings, p.stop, p.detail); return {}; }
         if (p && p.aborted) { job.queue.unshift(h); break; }
         if (p && (p.budget || p.soft === "page_budget")) { job.queue.unshift(h); log("info", "Re-check paused: " + GATE_LABEL.footprint); return { keep: true }; }
         if (await stopIfAccountUnknown(settings)) { job.queue.length = 0; return {}; }

@@ -288,6 +288,15 @@ export function followRoom(settings, st, ts = now()) {
   if (!settings.follow.followFirst || !cap) return 0;
   return Math.max(0, cap - (st.followTimes || []).filter((t) => ts - t < DAY).length);
 }
+// When the daily follow cap has room again: the oldest follow of the last 24 h leaves the window (now when there is
+// room; an hour from now when the cap is 0).
+export function followRoomAt(settings, st, ts = now()) {
+  if (followRoom(settings, st, ts) > 0) return ts;
+  const cap = Math.min(Math.max(0, Number(settings.follow.followsPerDay) || 0), HARD.dailyFollows);
+  const recent = (st.followTimes || []).filter((t) => ts - t < DAY).sort((a, b) => a - b);
+  if (!cap || recent.length < cap) return ts + HOUR;
+  return recent[recent.length - cap] + DAY + randInt(1, 5) * MIN;
+}
 // Should this target be followed now? (you do not follow it, and no follow request is waiting)
 export function wantsFollow(t, settings) {
   const rel = (t && t.rel) || {};

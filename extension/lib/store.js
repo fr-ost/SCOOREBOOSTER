@@ -158,8 +158,8 @@ export const DEFAULT_SETTINGS = {
     recheckHours: 72, // profile re-check of the accounts you comment on
     checksPerRun: 10, // profile visits per idle check
     removeFollowers: true, // a target found to already follow you is taken off the list (followed-back ones stay)
-    followFirst: true, // follow a target you do not follow before (or while) commenting on it
-    followsPerDay: 40, // follow-first: accounts followed per 24 h (HARD.dailyFollows at most)
+    followFirst: true, // follow an account you do not follow BEFORE liking or replying to it (no reply until followed)
+    followsPerDay: 100, // follow-first: accounts followed per 24 h (HARD.dailyFollows at most); matches accounts per day
   },
 
   review: {
@@ -172,7 +172,7 @@ export const DEFAULT_SETTINGS = {
   budget: { monthlyUsd: 0, warnAtPct: 80 }, // 0 = no limit
 
   safetyRev: 2, // revision of the safety defaults these settings have seen
-  genRev: 2, // revision of the reply-generation defaults these settings have seen (1 = UniqueFarm voice + Human preset)
+  genRev: 3, // revision of the defaults these settings have seen (1 = UniqueFarm voice + Human preset, 2 = faster follow checks, 3 = follow first)
   safety: {
     ramp: [200, 200, 200], // daily comment limit: week 1, week 2, week 3+ (each clamped to HARD.dailyComments)
     gapMin: { min: 2, max: 6 }, // random minutes between comments
@@ -186,6 +186,9 @@ export const DEFAULT_SETTINGS = {
     typingCpm: { min: 170, max: 320 }, // characters per minute
     readDelaySec: { min: 3, max: 8 }, // "reading" the post before replying
     maxConsecutiveFailures: 2,
+    // Stop (and notify) when ScoreX's own errors repeat - failed posts, pages that do not load, X's page looking
+    // different. Off: they are logged and ScoreX goes on with the next task. X's warnings always stop (engine.js).
+    stopOnErrors: false,
     bringTabToFront: false,
     // Reply reach monitor: views of your checked replies as a proxy for replies X hides. Heuristics, not guarantees.
     // action when reach drops: "notify" | "review" (switch to Review mode) | "halve" (halve the daily limit) | "stop"
@@ -391,6 +394,7 @@ export function sanitizeSettings(raw) {
   sf.typingCpm = range(sf.typingCpm, 60, 600, 170, 320);
   sf.readDelaySec = range(sf.readDelaySec, 1, 120, 3, 8);
   sf.maxConsecutiveFailures = clamp(Math.round(num(sf.maxConsecutiveFailures, 2)), 1, HARD.maxPostFailures);
+  sf.stopOnErrors = sf.stopOnErrors === true;
   const re = sf.reach && typeof sf.reach === "object" ? sf.reach : {};
   sf.reach = {
     enabled: re.enabled !== false,
@@ -450,7 +454,7 @@ export function sanitizeSettings(raw) {
   fo.checksPerRun = clamp(Math.round(num(fo.checksPerRun, 10)), 1, 25);
   fo.removeFollowers = fo.removeFollowers !== false;
   fo.followFirst = fo.followFirst !== false;
-  fo.followsPerDay = clamp(Math.round(num(fo.followsPerDay, 40)), 0, HARD.dailyFollows);
+  fo.followsPerDay = clamp(Math.round(num(fo.followsPerDay, 100)), 0, HARD.dailyFollows);
 
   s.review.pendingMaxAgeMin = clamp(num(s.review.pendingMaxAgeMin, 180), 10, 24 * 60);
   s.review.approvedMaxAgeMin = clamp(num(s.review.approvedMaxAgeMin, 240), 10, 24 * 60);
@@ -560,7 +564,13 @@ export function sanitizeSettings(raw) {
   }
   // genRev 2: faster follow checks (10 profile visits per check instead of 4) for settings still on the old default.
   if (raw && !(Number(raw.genRev) >= 2) && raw.follow && Number(raw.follow.checksPerRun) === 4) s.follow.checksPerRun = 10;
-  s.genRev = 2;
+  // genRev 3: following first became a hard rule (no like, no reply before the account is followed): it is turned on
+  // once, and a follow cap still on the old default (40) moves to 100 so replies to new accounts are not held back.
+  if (raw && !(Number(raw.genRev) >= 3)) {
+    s.follow.followFirst = true;
+    if (raw.follow && Number(raw.follow.followsPerDay) === 40) s.follow.followsPerDay = Math.min(100, HARD.dailyFollows);
+  }
+  s.genRev = 3;
   for (const k of ["A1", "A2", "B1", "B2"]) if (!s.presets[s.presetMatrix[k]]) s.presetMatrix[k] = DEFAULT_SETTINGS.presetMatrix[k];
   if (!s.presets[s.quality.checkerPreset]) s.quality.checkerPreset = "cheap";
   return s;

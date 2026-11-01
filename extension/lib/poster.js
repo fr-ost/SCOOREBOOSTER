@@ -104,6 +104,7 @@ async function cleanup(tabId) {
  *   { ok:false, skip:true, reason }       -> post gone / replies restricted (not a failure)
  *   { ok:false, fail:true, reason }       -> counts toward "repeated post failures"
  *   { ok:false, retry:true, reason }      -> the page did not load/render; the item stays queued
+ *   { ok:false, retry:true, followFailed:true, reason } -> follow first did not work: nothing was liked or typed
  *   { ok:false, retry:true, soft:"account_unknown", reason:"account_unknown" }
  *                                         -> the logged-in account could not be verified; nothing was liked,
  *                                            typed or submitted after that (not a posting failure)
@@ -122,6 +123,24 @@ export async function postReply(rec, ctx) {
   const text = String(rec.comment || "").trim();
   if (!text) return { ok: false, skip: true, reason: "empty_comment" };
 
+  // 1) Follow first (ctx.followFirst: settings.follow.followFirst and you do not follow this account): before anything
+  //    is liked or typed, open the account's profile - the one page where X always shows "Follow" / "Following" for
+  //    it - and follow it unless it already shows Following. Not confirmed -> no like and no reply now: the item waits
+  //    and tries again (engine). The outcome is left in ctx.followResult for the engine.
+  if (ctx.followFirst) {
+    const f = await followFromProfile(tabId, rec.target, settings, want, stopped);
+    if (f.aborted) return { ok: false, aborted: true };
+    if (f.stop) return { ok: false, stop: f.stop, detail: f.detail };
+    if (f.budget) return { ok: false, retry: true, budget: true, reason: "page_budget", until: f.until };
+    if (f.soft) return accountUnknown(false);
+    if (f.gone) return { ok: false, skip: true, reason: "account_not_found" };
+    ctx.followResult = f.result;
+    if (!f.ok) return { ok: false, retry: true, followFailed: true, reason: "follow_first_" + f.reason };
+    await sleep(humanDelay(1200, 3200));
+    if (await stopped()) return { ok: false, aborted: true };
+  }
+
+  // 2) The post: read it, like it, reply.
   const nav = await navigate(tabId, rec.postUrl);
   // The X page-load budget refused it: nothing was loaded, the item waits (not a failure).
   if (nav.budget) return { ok: false, retry: true, budget: true, reason: "page_budget", until: nav.until };
@@ -173,22 +192,6 @@ export async function postReply(rec, ctx) {
     if (lk.state) return { ok: false, stop: stopFor(lk.state), detail: lk.detail || "X warning after like" };
     liked = !!(lk.ok && !lk.already);
     await sleep(humanDelay(900, 2600));
-  }
-
-  // Follow first (ctx.followFirst, from settings.follow.followFirst for a target you do not follow): the author's
-  // "Follow @handle" button on this page. Not there -> the background follow step does it from the profile, and the
-  // reply goes on either way. The outcome is left in ctx.followResult for the engine.
-  if (ctx.followFirst) {
-    if (await stopped()) return { ok: false, aborted: true, liked };
-    const fr = await send(tabId, CMD.FOLLOW, { handle: rec.target, expectMe: want || undefined }, 15000);
-    v = verdictOf(fr, settings);
-    if (v) return { ok: false, stop: v.stop, detail: v.detail, liked };
-    const arf = accountRefusal(fr, want);
-    if (arf && arf.stop) return { ok: false, stop: arf.stop, detail: arf.detail, liked };
-    if (arf) return accountUnknown(liked);
-    if (fr.state) return { ok: false, stop: stopFor(fr.state), detail: fr.detail || "X warning after follow", liked };
-    ctx.followResult = fr.ok ? (fr.pending ? "pending" : fr.already ? "already" : "followed") : "missing";
-    if (fr.ok && !fr.already) await sleep(humanDelay(900, 2200));
   }
 
   if (await stopped()) return { ok: false, aborted: true, liked };
@@ -283,6 +286,38 @@ export async function postReply(rec, ctx) {
   } finally {
     if (restore) await restore();
   }
+}
+
+// Follow an account from its profile page (x.com/<handle>): X always shows its "Follow" / "Following" button there,
+// unlike a post page, where it may only be in a sidebar that is not rendered in a narrow window. Already following
+// -> nothing is clicked. Returns { ok:true, result: "followed" | "already" | "pending" } | { ok:false, result:
+// "missing", reason } | { stop, detail } | { aborted } | { budget, until } | { soft: "account_unknown" } | { gone }.
+async function followFromProfile(tabId, handle, settings, want, stopped) {
+  if (await stopped()) return { aborted: true };
+  const nav = await navigate(tabId, `https://x.com/${handle}`, { purpose: "follow", timeoutMs: 45000 });
+  if (nav.aborted) return { aborted: true };
+  if (nav.budget) return { budget: true, until: nav.until };
+  if (!nav.ok) return { ok: false, result: "missing", reason: "profile_" + (nav.error || "not_loaded") };
+  const w = await waitForPage(tabId, ["profileUserName", "emptyState"], 20000);
+  const v = verdictOf(w, settings);
+  if (v) return { stop: v.stop, detail: v.detail };
+  const pv = pageVerdict(w.page, settings);
+  if (pv && pv.notFound) return { gone: true };
+  if (!w.ok) return { ok: false, result: "missing", reason: "profile_not_ready" };
+  const av = accountVerdict(w.page, want);
+  if (av && av.stop) return { stop: av.stop, detail: av.detail };
+  if (av) return { soft: "account_unknown" };
+  await sleep(humanDelay(1500, 3500)); // a look at the profile first, as a person would
+  if (await stopped()) return { aborted: true };
+  const fr = await send(tabId, CMD.FOLLOW, { handle, expectMe: want || undefined }, 20000);
+  const v2 = verdictOf(fr, settings);
+  if (v2) return { stop: v2.stop, detail: v2.detail };
+  const ar = accountRefusal(fr, want);
+  if (ar && ar.stop) return { stop: ar.stop, detail: ar.detail };
+  if (ar) return { soft: "account_unknown" };
+  if (fr.state) return { stop: stopFor(fr.state), detail: fr.detail || "X warning after follow" };
+  if (fr.ok) return { ok: true, result: fr.pending ? "pending" : fr.already ? "already" : "followed" };
+  return { ok: false, result: "missing", reason: fr.error || "follow_not_confirmed" };
 }
 
 // Stops that mean X refused the action outright (nothing was posted).

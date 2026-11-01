@@ -28,10 +28,10 @@ const TRIGGERS = [
   ["rate_limit", "X rate limit reached"],
   ["account_locked", "Account locked or restricted"],
   ["logged_out", "Logged out of X, or logged into a different account"],
-  ["account_unknown", "The logged-in account could not be verified several times in a row"],
+  ["account_unknown", "The logged-in account could not be verified several times in a row (only with \"Stop when errors repeat\" on)"],
   ["unknown_prompt", "X shows a prompt or notice ScoreX does not know (it never clicks it)"],
-  ["repeated_post_failures", "Repeated posting failures"],
-  ["dom_changed", "X page changed (selectors no longer match)"],
+  ["repeated_post_failures", "Repeated posting failures (only with \"Stop when errors repeat\" on)"],
+  ["dom_changed", "X page changed (selectors no longer match; only with \"Stop when errors repeat\" on)"],
   ["reach_drop", "Your replies' views fall sharply (only when the reach monitor is set to stop)"],
   ["openai_auth", "OpenAI key rejected or quota / billing problem"],
   ["budget_reached", "Monthly OpenAI budget reached"],
@@ -304,6 +304,12 @@ export default {
     }
 
     const tzOptions = timeZones(ctx.settings.timezone);
+    const errorsNote = h("p", { class: "field-hint", id: "errorsNote" });
+    const drawErrorsNote = () => {
+      errorsNote.textContent = ctx.settings.safety.stopOnErrors
+        ? `On: after ${ctx.settings.safety.maxConsecutiveFailures} failed posts in a row, or when pages keep failing, ScoreX stops and notifies you. Press Resume to continue.`
+        : "Off (the default): errors go to the activity log and ScoreX moves on to the next task by itself - no stop, no pop-up. After failed posts in a row it waits a little longer before the next one (5, 10, 20, then 30 minutes).";
+    };
 
     root.append(reachHost,
       riskHost,
@@ -329,6 +335,12 @@ export default {
           f({ path: "timezone", type: "select", label: "Time zone", options: tzOptions }))),
       section({ title: "Like before replying", hint: "Likes every post right before replying to it. No separate like limit: at most one like per comment." },
         f({ path: "safety.like.enabled", type: "toggle", label: "Like the post, then reply" })),
+      section({ title: "Errors", id: "errorsSec", hint: "When something of ScoreX's own fails: a reply that does not go through, a page that does not load, X's page looking different." },
+        f({ path: "safety.stopOnErrors", type: "toggle", label: "Stop and notify me when errors repeat", id: "stopOnErrors" }),
+        errorsNote,
+        h("div", { class: "form-row" },
+          f({ path: "safety.maxConsecutiveFailures", type: "number", label: "Stop after N failed posts in a row", min: 1, max: HARD.maxPostFailures, hint: `Used only while the switch above is on. Cap ${HARD.maxPostFailures}` })),
+        h("p", { class: "field-hint", id: "errorsAlways" }, "Always stops, whatever this is set to: X's own warnings - a captcha, \"unusual activity\", a rate limit, a locked account, being logged out or into another account, or a prompt ScoreX does not know. Carrying on after those is how accounts get restricted.")),
       section({ title: "Skip rules", hint: "Posts ScoreX never replies to." },
         h("div", { class: "toggle-grid" },
           f({ path: "safety.skip.ads", type: "toggle", label: "Ads / promoted posts" }),
@@ -352,7 +364,7 @@ export default {
           f({ path: "safety.reach.lowShare", type: "percent", label: "…or when ≥ this share is low", min: 10, max: 100, step: 5, suffix: "%", id: "reachLowShare", hint: "Share of checked replies under the views above (50% = half)" })),
         h("p", { class: "field-hint reach-caveat" }, "Views are a proxy - X does not tell you when it hides a reply.")),
 
-      advanced({ key: "safety.advanced", desc: "Breaks, per-account caps, typing and reading speed, failure limit, keyword lists, tab focus, watch cadence" },
+      advanced({ key: "safety.advanced", desc: "Breaks, per-account caps, typing and reading speed, keyword lists, tab focus, watch cadence" },
         section({ title: "Long breaks", hint: "Pauses after a few comments, like a person stepping away." },
           f({ path: "safety.breaks.enabled", type: "toggle", label: "Take long breaks" }),
           h("div", { class: "form-row" },
@@ -372,9 +384,7 @@ export default {
           h("div", { class: "form-row" },
             f({ path: "safety.adaptiveWatch.afterEmpty", type: "number", label: "Slow down after (empty checks)", min: 2, max: 50, id: "adaptiveAfter" }),
             f({ path: "safety.adaptiveWatch.maxIntervalMin", type: "number", label: "Longest wait between checks", min: 5, max: 60, suffix: "min", id: "adaptiveMax" }))),
-        section({ title: "Failures and tab focus" },
-          h("div", { class: "form-row" },
-            f({ path: "safety.maxConsecutiveFailures", type: "number", label: "Stop after N failed posts in a row", min: 1, max: HARD.maxPostFailures, hint: `Cap ${HARD.maxPostFailures}` })),
+        section({ title: "Tab focus" },
           f({ path: "safety.bringTabToFront", type: "toggle", label: "Bring the X tab to the front while posting", hint: "More reliable typing in background windows, but it takes focus." })),
         section({ title: "Keyword lists", hint: "Fine-tune the skip rules." },
           h("div", { class: "form-row" },
@@ -390,7 +400,7 @@ export default {
             h("div", null, h("span", null, label), STOP_LABEL[k] ? h("span", { class: "muted small" }, `Shown as: ${STOP_LABEL[k]}`) : null)))),
           h("p", { class: "muted small" }, "After a stop: open X in a normal tab, check the account, wait a while, then press \"Review stop…\" at the top and resume."))));
 
-    const drawAll = () => { drawStatus(); drawProfile(); drawFootprint(); drawReachStatus(); };
+    const drawAll = () => { drawStatus(); drawProfile(); drawFootprint(); drawReachStatus(); drawErrorsNote(); };
     drawAll(); drawRisk(); drawReachAlert(); drawWatch();
     ctx.on("settings", drawAll);
     ctx.on(K.state, () => { drawStatus(); drawReachAlert(); });

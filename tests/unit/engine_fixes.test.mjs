@@ -87,8 +87,8 @@ describe("engine fixes (review round 1)", () => {
     assert.equal((await getState()).accountUnknownStreak, 0);
   });
 
-  test("ENG-2: the engine stops (needs a manual resume) after 3 page loads in a row without a readable account", async () => {
-    await setup(env, { targets: { alice: notFollowing("alice") }, state: { accountUnknownStreak: 2, lastWatchAt: 0 } });
+  test("ENG-2: the engine stops (needs a manual resume) after 3 page loads in a row without a readable account (Stop when errors repeat on)", async () => {
+    await setup(env, { settings: { safety: { stopOnErrors: true } }, targets: { alice: notFollowing("alice") }, state: { accountUnknownStreak: 2, lastWatchAt: 0 } });
     env.page.me = null; // e.g. X's narrow layout keeps the profile link in a closed drawer
     env.content = async (msg) => (msg.sx === "waitFor" ? { ok: true, key: "tweet" } : msg.sx === "scrapeTweets" ? { ok: true, tweets: [], articleCount: 0 } : { ok: true });
     await engine.tick("alarm");
