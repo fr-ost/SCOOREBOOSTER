@@ -465,6 +465,8 @@ try {
     const fbText = (await fbRow.count()) ? await fbRow.innerText() : "";
     check((await fbRow.count()) === 1 && /3 comments · 6 days/.test(fbText) && /Does it handle \$ref/.test(fbText) && /300/.test(fbText) && /Follows you/.test(fbText), "History › Follow-backs: devrel_sam - 3 comments · 6 days, the last comment before it, TwitterScore 300, follows you (" + fbText.replace(/\s+/g, " ").slice(0, 160) + ")");
     check((await page.locator("#fbExportCsv").count()) === 1 && (await page.locator("#fbExportXlsx").count()) === 1 && /1/.test(await page.locator("#fbCount").innerText()), "Follow-backs: count and CSV / XLSX export");
+    const fbHeads = await page.locator("#followBacksTable thead th").allInnerTexts();
+    check(fbHeads.some((x) => /ScoreX rank/i.test(x)) && fbHeads.some((x) => /TwitterScore/i.test(x)), "Follow-backs: separate ScoreX rank and TwitterScore columns (" + fbHeads.join(" | ") + ")");
     await fbRow.click();
     check(await waitFor(page, () => !!document.querySelector("#targetDrawer"), null, 8000) && /targets/.test(page.url()), "a follow-back row opens that target's timeline");
     await page.keyboard.press("Escape");
@@ -657,6 +659,7 @@ try {
     await page.click("#addTargetsBtn");
     await page.waitForSelector("#addTargetsSheet #addHandles");
     check((await page.locator("#addGroup").count()) === 0 && (await page.locator("#addTier").count()) === 1, "Add targets sheet has a Tier select and no Group select");
+    check(/TwitterScore/.test(await page.locator("#addTargetsSheet #importHint").innerText()) && /500 or more goes to Tier 1/.test(await page.locator("#addTargetsSheet #importHint").innerText()), "the file import explains the automatic tiers from TwitterScore (500 or more: Tier 1)");
     await page.click("#addTargetsSubmit");
     check(await waitFor(page, () => !!document.querySelector(".toast-warn"), null, 3000), "empty Add shows a warning toast");
     await page.fill("#addHandles", "@new_target_x\nhttps://x.com/another_one");

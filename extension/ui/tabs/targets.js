@@ -10,7 +10,7 @@
 
 import { K, HS, PRESET_KEYS, HARD } from "../../lib/constants.js";
 import { parseHandleList, normalizeHandle, toCsv, num, DAY } from "../../lib/util.js";
-import { parseImport, allToneKeys, followStatus, followDays, FS, FS_LABEL, MAIN_TONE } from "../../lib/targets.js";
+import { parseImport, hasScores, autoTiers, T1_MIN_TWITTERSCORE, allToneKeys, followStatus, followDays, FS, FS_LABEL, MAIN_TONE } from "../../lib/targets.js";
 import * as history from "../../lib/history.js";
 import {
   h, clear, fill, btn, busy, toast, icon, announce, stableTable, tierBadge, followBadge, followDay, dayMeter, FS_COLOR, tag, statusSquare,
@@ -412,10 +412,21 @@ export default {
           const raw = await readFileText(fl);
           const parsed = parseImport(raw);
           if (!parsed.length) { toast("No handles found in that file.", { type: "warn" }); return; }
-          const ok = await confirmDialog(`Found ${plural(parsed.length, "account")} in ${fl.name}. Rows without a tier use tier ${tier.value}. ScoreX first checks who already follows you and only comments on accounts that don't. Import them?`, { title: "Import targets", okLabel: "Import" });
+          // TwitterScores in the file: tiers come from them (500 or more -> Tier 1), never from the Tier picker.
+          const auto = hasScores(parsed);
+          const tiered = autoTiers(parsed);
+          const t1 = tiered.filter((x) => x.tier === 1).length, noScore = tiered.filter((x) => x.twitterscore == null).length;
+          const what = auto
+            ? `Found ${plural(parsed.length, "account")} with TwitterScores in ${fl.name}. Tiers are set from the score: ${t1} to Tier 1 (${T1_MIN_TWITTERSCORE} or more), ${parsed.length - t1} to Tier 2 (below ${T1_MIN_TWITTERSCORE}${noScore ? `; ${noScore} without a score` : ""}). Accounts already in your targets move to the tier their score gives.`
+            : `Found ${plural(parsed.length, "account")} in ${fl.name}. Rows without a tier use tier ${tier.value}.`;
+          const ok = await confirmDialog(`${what} ScoreX first checks who already follows you and only comments on accounts that don't. Import them?`, { title: "Import targets", okLabel: "Import" });
           if (!ok) return;
           const r = await ctx.send("targetsImport", { text: raw, defaults: { tier: Number(tier.value), source: "import" } }, { label: "Import" });
-          if (r) { addedToast(r, `Imported ${num(r.parsed != null ? r.parsed : parsed.length)} rows: added`); if ((num(r.added) || num(r.updated)) && addSheet && addSheet.isOpen()) addSheet.close("added"); }
+          if (r) {
+            if (r.auto) toast(`Imported ${num(r.parsed)} rows: ${num(r.t1)} to Tier 1, ${num(r.t2)} to Tier 2 by TwitterScore (${num(r.added)} new, ${num(r.updated)} updated${num(r.blacklisted) ? `, ${num(r.blacklisted)} blacklisted skipped` : ""})`, { type: "success" });
+            else addedToast(r, `Imported ${num(r.parsed != null ? r.parsed : parsed.length)} rows: added`);
+            if ((num(r.added) || num(r.updated)) && addSheet && addSheet.isOpen()) addSheet.close("added");
+          }
         } catch (err) { toast("Could not read the file: " + ((err && err.message) || err), { type: "error" }); }
       });
       const importLabel = h("label", { class: "btn btn-sm", for: "importFile", tabindex: "0", onKeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); file.click(); } } }, icon("upload"), h("span", null, "Import file…"));
@@ -427,7 +438,7 @@ export default {
           h("div", { class: "toolbar toolbar-end" }, labeled("Tier", tier), submit, count)),
         h("div", { class: "stack-sm tg-add-file" },
           h("span", { class: "cap" }, "From a file"),
-          h("p", { class: "small muted" }, "CSV (handle, tier, tone, notes), JSON or a plain list. Rows without a tier use the Tier above."),
+          h("p", { class: "small muted", id: "importHint" }, `CSV or JSON with username and TwitterScore: the tier is set from the score automatically - ${T1_MIN_TWITTERSCORE} or more goes to Tier 1, below ${T1_MIN_TWITTERSCORE} to Tier 2 (no score: Tier 2). A file of usernames only (or handle, tier, tone, notes) uses the Tier above.`),
           h("div", { class: "toolbar" }, importLabel, file, btn("Export CSV", exportCsv, { iconName: "download", size: "sm", id: "exportTargetsBtn", title: "All targets with scores and stats", disabled: !list().length }))),
         h("p", { class: "small muted tg-add-note" }, "ScoreX first checks who already follows you and only comments on accounts that don't. ", h("a", { href: "#discover?view=find" }, "Find new targets on Discover"), "."));
     }

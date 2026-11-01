@@ -8,11 +8,13 @@
 // Reset everything clears it; backups carry it with the history. chrome.storage.local "sx.followbacks", newest first.
 //
 // Entry { id: "handle:at", handle, name, at, tier, comments, firstCommentAt, days, youFollowedFirst, followers, score,
-//         twitterscore, lastComment: { text, url, postUrl, at } | null, unfollowedAt | null }
+//         twitterscore, twitterscoreAt?, twitterscoreNone? (TwitterScore had no data), lastComment: { text, url,
+//         postUrl, at } | null, unfollowedAt | null }. TwitterScore is filled in through your TwitterScore API key
+//         (lib/scoreboard.js followBackScores).
 import { K, HS } from "./constants.js";
 import { load, update, getTargets } from "./store.js";
 import * as H from "./history.js";
-import { DAY, num, normalizeHandle } from "./util.js";
+import { DAY, num, normalizeHandle, now } from "./util.js";
 
 export const MAX_ENTRIES = 3000;
 export const entryId = (handle, at) => `${handle}:${at}`;
@@ -79,15 +81,32 @@ export function mergeEntries(log, targets, records) {
     if (!by.has(id)) by.set(id, makeEntry({ handle: r.target, tier: r.tier }, res.followBackAt, infoFromRecords(records, r.target, res.followBackAt)));
   }
   const list = [...by.values()];
-  for (const e of list) { // unfollowed after this follow-back (the target knows)
+  for (const e of list) { // unfollowed after this follow-back (the target knows); a TwitterScore the target has now
     const t = targets && Object.hasOwn(targets, e.handle) ? targets[e.handle] : null;
     const u = t && t.rel && t.rel.unfollowedYouAt;
     if (u && u > e.at && !e.unfollowedAt) e.unfollowedAt = u;
+    const ts = t && t.score && t.score.providers && t.score.providers.twitterscore;
+    if (e.twitterscore == null && ts && ts.score != null && Number.isFinite(Number(ts.score))) { e.twitterscore = Number(ts.score); delete e.twitterscoreNone; }
   }
   list.sort((a, b) => a.at - b.at);
   const seen = new Set();
   for (const e of list) { e.again = seen.has(e.handle); seen.add(e.handle); }
   return list.reverse();
+}
+
+// TwitterScore of follow-back accounts (lib/scoreboard.js followBackScores): an account TwitterScore had no data for
+// is asked again after this long.
+export const FB_TS_RETRY = 7 * DAY;
+// Follow-back accounts that still need a TwitterScore (one per account, newest follow-back first).
+export function followBackScoreNeeds(entries, ts = now()) {
+  const out = [], seen = new Set();
+  for (const e of (Array.isArray(entries) ? entries : []).slice().sort((a, b) => num(b && b.at, 0) - num(a && a.at, 0))) {
+    if (!e || !e.handle || seen.has(e.handle) || e.twitterscore != null) continue;
+    if (e.twitterscoreAt && ts - e.twitterscoreAt < FB_TS_RETRY) continue; // TwitterScore had no data lately
+    seen.add(e.handle);
+    out.push(e.handle);
+  }
+  return out;
 }
 
 // ---------- the stored record (service worker) ----------
@@ -165,6 +184,8 @@ export async function importEntries(list) {
       youFollowedFirst: !!e.youFollowedFirst, followers: numOrNull(e.followers), score: numOrNull(e.score), twitterscore: numOrNull(e.twitterscore),
       lastComment: lc ? { text: String(lc.text || "").slice(0, 280), url: /^https:\/\/(x|twitter)\.com\//.test(String(lc.url || "")) ? String(lc.url) : "", postUrl: /^https:\/\/(x|twitter)\.com\//.test(String(lc.postUrl || "")) ? String(lc.postUrl) : "", at: numOrNull(lc.at) } : null,
       unfollowedAt: numOrNull(e.unfollowedAt),
+      ...(numOrNull(e.twitterscoreAt) ? { twitterscoreAt: numOrNull(e.twitterscoreAt) } : {}),
+      ...(e.twitterscoreNone === true && numOrNull(e.twitterscore) == null ? { twitterscoreNone: true } : {}),
     });
   }
   let added = 0;

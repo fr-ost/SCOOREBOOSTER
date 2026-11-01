@@ -211,6 +211,21 @@ try {
   await H.msg("clearAlert");
   M.pageMode = "ok";
 
+  // ---- a CSV with TwitterScores sets the tiers itself; follow-backs get their TwitterScore through the API ----
+  r = await H.msg("targetsImport", { text: "Username,TwitterScore\nts_big,742.5\nts_small,120\nts_none,\n", defaults: { tier: 1 } });
+  const tgImp = await H.store("sx.targets");
+  assert(r.ok && r.auto && r.t1 === 1 && r.t2 === 2 && tgImp.ts_big.tier === 1 && tgImp.ts_small.tier === 2 && tgImp.ts_none.tier === 2 && tgImp.ts_big.score.providers.twitterscore.score === 742.5,
+    "CSV import with TwitterScores: 500 or more -> Tier 1, below (or none) -> Tier 2, the picked Tier 1 ignored, the score kept: " + JSON.stringify({ auto: r.auto, t1: r.t1, t2: r.t2 }));
+  await H.msg("targetsRemove", { handles: ["ts_big", "ts_small", "ts_none"] });
+  M.twitterscore.scores.fb_fan = 615;
+  await H.setStore({ "sx.followbacks": [{ id: "fb_fan:1", handle: "fb_fan", name: "", at: Date.now() - 3600e3, tier: 2, comments: 1, twitterscore: null, lastComment: null, unfollowedAt: null }] });
+  const tsCallsBefore = M.twitterscore.calls.length;
+  r = await H.msg("followBackScores");
+  const fbStored = await H.store("sx.followbacks");
+  const tsNew = M.twitterscore.calls.slice(tsCallsBefore);
+  assert(r.ok && r.fetched === 1 && fbStored.find((e) => e.handle === "fb_fan").twitterscore === 615 && tsNew.length >= 1 && tsNew.every((c) => /^\/api\/v1\/get_twitter_score\?username=fb_fan&/.test(c)),
+    "a follow-back without a TwitterScore gets it through the API key, and only follow-backs are asked: " + JSON.stringify(tsNew));
+
   // ---- privacy: only handles go out, keys never in logs ----
   const logs = JSON.stringify(await H.store("sx.logs"));
   assert(!/sorsa-test|ts-test/.test(logs), "provider keys never appear in the activity log");

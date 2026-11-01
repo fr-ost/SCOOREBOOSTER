@@ -199,12 +199,17 @@ const handlers = {
     const r = await T.upsert(m.rows || [], { ...(m.defaults || {}), myHandle: settings.account.handle }, !!m.overwrite);
     return { ok: true, ...r };
   },
+  // A file with TwitterScores (CSV / JSON) gets its tiers from the scores (500 or more -> Tier 1, else Tier 2) and the
+  // tier picked in the dialog does not apply; a file of usernames only uses the picked tier.
   targetsImport: async (m) => {
     const settings = await getSettings();
-    const rows = T.parseImport(m.text || "");
-    if (!rows.length) return { ok: false, error: "No valid handles found in the file" };
+    const parsed = T.parseImport(m.text || "");
+    if (!parsed.length) return { ok: false, error: "No valid handles found in the file" };
+    const auto = T.hasScores(parsed);
+    const rows = T.autoTiers(parsed);
     const r = await T.upsert(rows, { ...(m.defaults || {}), source: "import", myHandle: settings.account.handle }, false);
-    return { ok: true, ...r, parsed: rows.length };
+    const t1 = auto ? rows.filter((x) => x.tier === 1).length : 0;
+    return { ok: true, ...r, parsed: rows.length, auto, ...(auto ? { t1, t2: rows.length - t1, noScore: rows.filter((x) => x.twitterscore == null).length } : {}) };
   },
   targetPatch: async (m) => {
     const t = await T.patch(m.handle, m.patch || {});
@@ -272,6 +277,8 @@ const handlers = {
   scoreCheck: (m) => keepAlive(() => SB.checkScores(String(m.handle || ""))),
   smartFollowers: (m) => keepAlive(() => SB.smartFollowersOf(String(m.handle || ""), { maxAgeMs: m.fresh ? 0 : undefined })),
   smartSweep: (m) => startScoreJob("sweep", "Smart followers", (ctl) => SB.sweepSmartFollowers((m.handles || []).map(String), ctl)),
+  // History > Follow-backs: the TwitterScore of accounts that followed you back, through your TwitterScore API key.
+  followBackScores: () => keepAlive(() => SB.followBackScores()),
   targetScores: (m) => startScoreJob("targets", "Target scores", (ctl) => SB.refreshTargetScores((m.handles || []).map(String), String(m.provider || ""), ctl), { provider: String(m.provider || "") || null }),
   scoreJobCancel: async () => { if (scoreJob) scoreJob.cancel = true; return { ok: true }; },
 

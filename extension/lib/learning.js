@@ -17,6 +17,7 @@ import { valueDetails, learnedRates } from "./scores.js";
 import { checkReach, checkDelayMs } from "./reach.js";
 import * as H from "./history.js";
 import { recordFollowBack, syncFollowBacks } from "./followbacks.js";
+import { followBackScores } from "./scoreboard.js";
 import { now, DAY, HOUR, MIN, random, clamp, sleep, humanDelay, num } from "./util.js";
 
 const ATTRIBUTION_DAYS = 14; // a follow-back is credited to comments from the previous 14 days
@@ -198,6 +199,8 @@ export async function processFollowBacks(settings) {
     await notify("sx-fb-" + t.handle, "New follow-back", `@${t.handle} followed you back after your comments.`);
   }
   await syncFollowBacks().catch(() => {}); // "unfollowed later" and anything the record is still missing
+  // Their TwitterScore (History > Follow-backs), through your TwitterScore API key; runs on its own, never waited for.
+  if (fresh.length) followBackScores().catch(() => {});
   return fresh.length;
 }
 

@@ -549,6 +549,25 @@ export default {
     const fbSort = { key: "at", dir: "desc" };
     let fbRows = [];
     const fmtDays = (d) => { const n = Math.round(d); return d < 1 ? "same day" : `${n} day${n === 1 ? "" : "s"}`; };
+    // TwitterScore column: filled in through your TwitterScore API key, only for accounts that followed you back
+    // (lib/scoreboard.js followBackScores). Asked when this view shows rows without one, at most every 2 minutes.
+    let fbTs = null, fbTsAskedAt = 0;
+    function askFollowBackScores() {
+      if (!FB.followBackScoreNeeds(fbRows).length || Date.now() - fbTsAskedAt < 120000) return;
+      fbTsAskedAt = Date.now();
+      ctx.send("followBackScores", {}, { quiet: true, raw: true }).then((r) => {
+        const before = fbTs && fbTs.error;
+        fbTs = r || null;
+        if ((fbTs && fbTs.error) !== before && p.view === "followbacks") { dirty.followbacks = true; show(); }
+      });
+    }
+    const fmtTs = (v) => (Number.isInteger(Number(v)) ? fmtNum(Number(v)) : Number(v).toFixed(1));
+    function tsCell(e) {
+      if (e.twitterscore != null) return h("span", { class: "tnum", title: "TwitterScore (0-1000)" }, fmtTs(e.twitterscore));
+      if (e.twitterscoreNone) return h("span", { class: "muted small", title: "TwitterScore has no data for this account (asked again in a week)" }, "no data");
+      const off = fbTs && ["no_key", "disabled"].includes(fbTs.error);
+      return h("span", { class: "muted small", title: off ? fbTs.message || "" : "Fetched automatically through your TwitterScore API key" }, off ? "-" : "…");
+    }
     function drawFollowBacks() {
       const pane = panes.followbacks;
       if (loadErr) { fill(pane, h("div", { class: "banner banner-danger" }, "Could not read history: " + loadErr)); return; }
@@ -571,7 +590,8 @@ export default {
         { key: "after", label: "After", sort: (e) => num(e.comments) * 1e4 + num(e.days), render: (e) => h("div", { class: "small" }, `${e.comments || 0} comment${e.comments === 1 ? "" : "s"}${e.days != null ? " · " + fmtDays(e.days) : ""}`, e.youFollowedFirst ? h("div", null, badge("you followed first", "green", "ScoreX followed this account before it followed you back")) : null) },
         { key: "last", label: "Last comment before", sort: false, className: "col-text", render: (e) => { const lc = e.lastComment; if (!lc || !lc.text) return h("span", { class: "muted small" }, "-"); const u = safeUrl(lc.url); return h("div", { class: "cell-text small", title: lc.text }, u ? link(u, truncate(lc.text, 110)) : truncate(lc.text, 110)); } },
         { key: "followers", label: "Followers", align: "right", sort: (e) => num(e.followers), render: (e) => (e.followers == null ? "-" : fmtNum(e.followers)) },
-        { key: "score", label: "Score", align: "right", sort: (e) => num(e.twitterscore != null ? e.twitterscore : e.score), render: (e) => (e.twitterscore != null ? h("span", { title: "TwitterScore" }, fmtNum(e.twitterscore)) : e.score != null ? h("span", { title: "ScoreX rank" }, fmtNum(e.score)) : "-") },
+        { key: "score", label: "ScoreX rank", align: "right", sort: (e) => num(e.score, -1), render: (e) => (e.score != null ? h("span", { title: "ScoreX rank (0-100)" }, fmtNum(e.score)) : "-") },
+        { key: "twitterscore", label: "TwitterScore", align: "right", sort: (e) => num(e.twitterscore, -1), render: tsCell },
         { key: "now", label: "Now", sort: (e) => (e.unfollowedAt ? 0 : 1), render: (e) => (e.unfollowedAt ? h("span", { class: "small text-red", title: fmtDateTime(e.unfollowedAt) }, "Unfollowed " + fmtDay(e.unfollowedAt)) : h("span", { class: "small text-green" }, "Follows you")) },
       ];
       const exportCsv = btn("Export CSV", () => {
@@ -591,9 +611,13 @@ export default {
         onRowOpen: (e) => { if (Object.hasOwn(ctx.targets, e.handle)) ctx.navigate("targets?h=" + encodeURIComponent(e.handle)); else window.open("https://x.com/" + e.handle, "_blank", "noopener"); },
         empty: "No follow-backs yet. When an account you commented on follows you, it is recorded here: when, after how many comments, and the last comment before it.",
       }));
+      const tsOff = fbTs && ["no_key", "disabled"].includes(fbTs.error);
       fill(pane,
         h("div", { class: "toolbar" }, summary),
-        section({ wide: true, title: "Who followed back", hint: "Newest first. Kept even after a target is removed. Click a row for the account's timeline.", actions: h("div", { class: "toolbar" }, exportCsv, exportXlsx) }, tableHost));
+        section({ wide: true, title: "Who followed back", hint: "Newest first. Kept even after a target is removed. Click a row for the account's timeline. TwitterScore is filled in automatically through your TwitterScore API key.", actions: h("div", { class: "toolbar" }, exportCsv, exportXlsx) },
+          tsOff ? h("p", { class: "small muted", id: "fbTsNote" }, fbTs.message || "TwitterScore is not set up (Scores tab).", " ", h("a", { href: "#scores" }, "Open Scores")) : null,
+          tableHost));
+      askFollowBackScores();
     }
 
     const DRAW = { ov: drawOverview, comments: drawComments, followbacks: drawFollowBacks, spend: drawSpend };

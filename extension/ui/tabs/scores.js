@@ -459,7 +459,7 @@ export default {
           h("span", { class: "small muted" }, fmtAgo(c.at))))),
       ] : []);
     }
-    const othersOff = h("p", { class: "small muted", id: "checkOthersOff" }, "Off: Moni, Ethos and TwitterScore only check your own score (once a day), and TwitterScore's API only reads smart followers. Turn this on to spend requests on other accounts.");
+    const othersOff = h("p", { class: "small muted", id: "checkOthersOff" }, "Off: Moni, Ethos and TwitterScore only check your own score (once a day), and TwitterScore's API only reads smart followers and the score of accounts that followed you back (History > Follow-backs). Turn this on to spend requests on other accounts.");
     const syncOthers = () => {
       const on = !!ctx.settings.scores.checkOthers;
       checkInput.disabled = checkBtn.disabled = !on;

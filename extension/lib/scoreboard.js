@@ -14,6 +14,7 @@ import { load, update, withLock, getSettings, getSecrets, getTargets, updateTarg
 import { providerDefs, pickMode, modeNeeds, runCapability, CAPS, fill } from "./providers.js";
 import { combinedScore } from "./scores.js";
 import { upsertRows, countRows } from "./smartdb.js";
+import { syncFollowBacks, followBackScoreNeeds } from "./followbacks.js";
 import { now, DAY, HOUR, sleep, dayKey, normalizeHandle, clamp, num } from "./util.js";
 
 const CAP_CHECKS = 150;
@@ -108,7 +109,7 @@ async function call(id, cap, handle, ctx, vars, want = null) {
     if (!allowed) return { ok: false, error: "cap", message: `${r.def.name}: daily request cap reached (${r.cap})` };
     const spec = r.def.modes[r.mode][cap];
     const gap = ctx.gapMs != null ? ctx.gapMs : clamp(num(r.def.minIntervalMs, spec.kind === "tab" ? 4000 : 1200), 250, 60000);
-    const wait = (lastCall.get(id) || 0) + gap - now();
+    const wait = Math.min(gap, (lastCall.get(id) || 0) + gap - now()); // never more than the gap (a clock set back)
     if (wait > 0) await sleep(wait);
     if (stale(ctx)) return { ...RESET, provider: id }; // nothing is awaited between this check and the request
     lastCall.set(id, now());
@@ -177,7 +178,7 @@ async function ownScore(def, me, ctx) {
   return r;
 }
 
-export const OTHERS_OFF = "Score checks of other accounts are off: Moni, Ethos and TwitterScore only check your own score (once a day), and TwitterScore's API only reads smart followers. Turn on 'Check other accounts' in Scores if you want to spend requests on this.";
+export const OTHERS_OFF = "Score checks of other accounts are off: Moni, Ethos and TwitterScore only check your own score (once a day), and TwitterScore's API only reads smart followers and the score of accounts that followed you back. Turn on 'Check other accounts' in Scores if you want to spend requests on this.";
 
 // Score of any account on every enabled provider.
 export async function checkScores(handle, extra = {}) {
@@ -371,6 +372,71 @@ export async function refreshTargetScores(handles, providerId, { maxAgeMs = TARG
   if (updated) log("info", `${def.name}: updated ${updated} target score${updated === 1 ? "" : "s"}`);
   if (!updated && failed) return { ok: false, error: `${def.name}: no target score could be updated (${lastError})`, updated, failed };
   return { ok: true, updated, failed };
+}
+
+// ---------- TwitterScore of the accounts that followed you back (History > Follow-backs) ----------
+// Asked through TwitterScore's paid API only (your key - never the public page), and only for accounts that followed
+// you back and have no TwitterScore yet: the score a target already carries is copied without a request. This is the
+// one place other accounts' scores are fetched while "Check other accounts" is off - you asked for it for the accounts
+// that followed you back. An account TwitterScore has no data for is asked again after a week (followbacks.js
+// FB_TS_RETRY). The score goes on the follow-back entries (twitterscore, twitterscoreAt; twitterscoreNone: no data) and
+// on the target, if it still is one. Runs one at a time; started when a follow-back is recorded and when the
+// Follow-backs page opens.
+export const FB_TS_MAX = 50; // accounts asked per run (follow-backs are few; a later run takes the rest)
+let fbScoresRun = null;
+export function followBackScores(extra = {}) {
+  if (!fbScoresRun) fbScoresRun = runFollowBackScores(extra).finally(() => { fbScoresRun = null; });
+  return fbScoresRun;
+}
+async function runFollowBackScores({ max = FB_TS_MAX, ...extra } = {}) {
+  const ctx = await context(extra);
+  const id = "twitterscore";
+  const def = ctx.defs[id];
+  if (!def || !def.modes || !def.modes.api) return { ok: false, error: "unsupported", message: "TwitterScore's API is not available" };
+  const cfg = (ctx.settings.providers && ctx.settings.providers[id]) || {};
+  if (!cfg.enabled) return { ok: false, error: "disabled", message: "Turn TwitterScore on in Scores to fill the TwitterScore column" };
+  if (!(def.keyName && ctx.secrets[def.keyName])) return { ok: false, error: "no_key", message: "Add your TwitterScore API key in Scores to fill the TwitterScore column" };
+  await syncFollowBacks({ fromHistory: true }).catch(() => 0);
+  const [entries, targets] = await Promise.all([load(K.followbacks, []), getTargets()]);
+  const need = followBackScoreNeeds(entries, now());
+  let fetched = 0, copied = 0, none = 0, failed = 0, lastError = "";
+  for (const h of need.slice(0, max)) {
+    if (extra.shouldStop && (await extra.shouldStop())) break;
+    const t = Object.hasOwn(targets, h) ? targets[h] : null;
+    const known = t && t.score && t.score.providers && t.score.providers[id];
+    let score = known && known.score != null ? Number(known.score) : null, missing = false;
+    if (score != null) copied++;
+    else {
+      const r = await call(id, "score", h, ctx, {}, "api");
+      if (stale(ctx)) return { ...RESET, fetched, copied, none, failed };
+      if (r.ok && r.score != null) { score = Number(r.score); fetched++; }
+      else if (!r.ok && r.error === "not_found") { missing = true; none++; }
+      else {
+        failed++; lastError = r.message || r.error || "error";
+        if (FATAL.includes(r.error) || failed >= FAIL_STREAK) break;
+        continue;
+      }
+      await updateTargets((all) => {
+        const x = Object.hasOwn(all, h) ? all[h] : null;
+        if (!x) return all;
+        const before = x.score && x.score.providers && x.score.providers[id];
+        if (missing && before && before.score != null) return all;
+        x.score = x.score && typeof x.score === "object" ? x.score : {};
+        x.score.providers = { ...(x.score.providers || {}), [id]: { score: missing ? null : score, max: missing ? null : def.max || 1000, at: now() } };
+        return all;
+      });
+    }
+    const at = now();
+    await update(K.followbacks, [], (list) => (Array.isArray(list) ? list : []).map((e) => {
+      if (!e || e.handle !== h || e.twitterscore != null) return e;
+      const next = { ...e, twitterscore: score, twitterscoreAt: at };
+      if (missing) next.twitterscoreNone = true; else delete next.twitterscoreNone;
+      return next;
+    }));
+  }
+  if (fetched) log("info", `TwitterScore: fetched the score of ${fetched} account${fetched === 1 ? "" : "s"} that followed you back`);
+  if (failed && !fetched && !copied && !none) return { ok: false, error: lastError, fetched, copied, none, failed, left: need.length };
+  return { ok: true, fetched, copied, none, failed, left: Math.max(0, need.length - fetched - copied - none), ...(lastError ? { lastError } : {}) };
 }
 
 function capMap(map, cap) {

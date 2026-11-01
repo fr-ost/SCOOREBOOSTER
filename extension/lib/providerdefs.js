@@ -67,7 +67,8 @@ export const PROVIDER_DEFS = {
     dailyCap: 100, // be polite to the site: the public page and the browser-tab mode are read like a person would
     listLimit: 100, // API pages hold up to 100 smart followers
     // Your own score never spends API requests: the free public page, then a browser tab when the site's bot check
-    // blocks the direct read. The paid API is used only for smart followers (the smart-follower database).
+    // blocks the direct read. The paid API is used only for smart followers (the smart-follower database) and the
+    // score of accounts that followed you back (History > Follow-backs, lib/scoreboard.js followBackScores).
     ownModes: ["public", "page"],
     smartMode: "api",
     // API requests are paid for in your TwitterScore plan, so ScoreX's daily cap does not hold them back (they are still

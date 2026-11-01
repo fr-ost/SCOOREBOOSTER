@@ -92,8 +92,27 @@ export function sanitizePatch(patch) {
   return out;
 }
 
-// Parse a pasted list / CSV / JSON into rows { handle, group?, tier?, tone?, notes? }.
-// CSV columns (header optional): handle,group,tier,tone,notes
+// Column / field names that hold an account's TwitterScore in an imported file, compared without case, spaces, "_"
+// or "-": twitterscore, twitter_score, "TwitterScore score", twitterscore_score (ScoreX's own export), ts, score.
+const SCORE_NAMES = new Set(["twitterscore", "twitterscorescore", "twitterscores", "tscore", "ts", "tsscore", "score"]);
+const scoreKey = (k) => String(k || "").toLowerCase().replace(/[\s_-]/g, "");
+const isScoreName = (k) => SCORE_NAMES.has(scoreKey(k));
+// A TwitterScore from a file cell ("742", "742.5", "1,000"): a number >= 0, or null.
+export function importScore(v) {
+  if (v === null || v === undefined || v === "" || typeof v === "object" || typeof v === "boolean") return null;
+  const n = typeof v === "number" ? v : Number(String(v).trim().replace(/,/g, ""));
+  return Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
+}
+// The TwitterScore among a row's fields (a twitterscore-named one before "score" / "ts").
+function rowScore(obj) {
+  const keys = Object.keys(obj || {}).filter((k) => k !== "handle" && isScoreName(k)).sort((a, b) => (scoreKey(a).startsWith("twitter") ? 0 : 1) - (scoreKey(b).startsWith("twitter") ? 0 : 1));
+  for (const k of keys) { const s = importScore(obj[k]); if (s != null) return s; }
+  return null;
+}
+
+// Parse a pasted list / CSV / JSON into rows { handle, group?, tier?, tone?, notes?, twitterscore? }.
+// CSV columns (header optional): handle,group,tier,tone,notes - or any header with handle/username and a
+// TwitterScore column (Username,TwitterScore,...), or header-less "handle,score" lines.
 export function parseImport(text) {
   const raw = String(text || "").trim();
   if (!raw) return [];
@@ -105,28 +124,48 @@ export function parseImport(text) {
       for (const item of data) {
         if (typeof item === "string") { const h = normalizeHandle(item); if (h) rows.push({ handle: h }); continue; }
         const h = normalizeHandle(item && (item.handle || item.username || item.screen_name));
-        if (h) rows.push({ handle: h, group: item.group, tier: item.tier, tone: item.tone, notes: item.notes, name: item.name });
+        if (!h) continue;
+        const score = rowScore(item);
+        rows.push({ handle: h, group: item.group, tier: item.tier, tone: item.tone, notes: item.notes, name: item.name, ...(score != null ? { twitterscore: score } : {}) });
       }
       return dedupeRows(rows);
     } catch (_) { /* fall through to text */ }
   }
   const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  // CSV = a header row, or rows whose 2nd cell is empty or a group/tier value ("foo,A,1"). A plain
-  // "alice, bob, carol" list is NOT CSV (it would otherwise import only "alice").
+  // CSV = a header row, rows whose 2nd cell is empty or a group/tier value ("foo,A,1"), or header-less "handle,score"
+  // rows. A plain "alice, bob, carol" list is NOT CSV (it would otherwise import only "alice").
   const isHeader = (l) => splitCsv(l).some((c) => /^(handle|username|group|tier)$/i.test(c.trim()));
-  const looksCsv = isHeader(lines[0]) || lines.some((l) => /^(?:@?\w{1,15}|https?:\S+)\s*,\s*(?:a|b|1|2)?\s*(?:,|$)/i.test(l));
+  const scoreLine = (l) => { const c = splitCsv(l); return c.length >= 2 && !!normalizeHandle(c[0]) && importScore(c[1]) != null && /^\s*[\d.,]+\s*$/.test(c[1]); };
+  const scored = lines.filter(scoreLine);
+  const handleScore = !isHeader(lines[0]) && scored.length >= Math.ceil(lines.length * 0.6) && scored.some((l) => importScore(splitCsv(l)[1]) > 2);
+  const looksCsv = handleScore || isHeader(lines[0]) || lines.some((l) => /^(?:@?\w{1,15}|https?:\S+)\s*,\s*(?:a|b|1|2)?\s*(?:,|$)/i.test(l));
   if (!looksCsv) return parseHandleList(raw).map((handle) => ({ handle }));
   const rows = [];
-  let cols = ["handle", "group", "tier", "tone", "notes"];
+  let cols = handleScore ? ["handle", "twitterscore"] : ["handle", "group", "tier", "tone", "notes"];
   lines.forEach((line, i) => {
     const cells = splitCsv(line);
-    if (i === 0 && cells.some((c) => /^(handle|username|group|tier)$/i.test(c.trim()))) { cols = cells.map((c) => c.trim().toLowerCase()); return; }
+    if (i === 0 && !handleScore && cells.some((c) => /^(handle|username|group|tier)$/i.test(c.trim()))) { cols = cells.map((c) => c.trim().toLowerCase()); return; }
     const row = {};
     cols.forEach((c, j) => { if (cells[j] != null && cells[j] !== "") row[c === "username" ? "handle" : c] = cells[j].trim(); });
     row.handle = normalizeHandle(row.handle);
-    if (row.handle) rows.push(row);
+    if (!row.handle) return;
+    const score = rowScore(row);
+    for (const k of Object.keys(row)) if (k !== "handle" && isScoreName(k)) delete row[k];
+    if (score != null) row.twitterscore = score;
+    rows.push(row);
   });
   return dedupeRows(rows);
+}
+
+// Automatic tiers for a file that carries TwitterScores (CSV / JSON import): TwitterScore 500 or more -> Tier 1,
+// below 500 -> Tier 2, a row without a score -> Tier 2; the tier you pick does not apply. A file without any score (a
+// list of usernames) is returned as it is: the tier you pick applies, as when you paste usernames.
+export const T1_MIN_TWITTERSCORE = 500;
+export const hasScores = (rows) => (rows || []).some((r) => r && r.twitterscore != null);
+export const tierForScore = (score) => (score != null && Number(score) >= T1_MIN_TWITTERSCORE ? 1 : 2);
+export function autoTiers(rows) {
+  if (!hasScores(rows)) return rows;
+  return rows.map((r) => ({ ...r, tier: tierForScore(r.twitterscore), autoTier: true }));
 }
 function splitCsv(line) {
   const out = []; let cur = ""; let q = false;
@@ -144,7 +183,15 @@ function dedupeRows(rows) {
 }
 function rowTier(v, def) { const n = Number(String(v || "").replace(/\D/g, "")); return n === 1 || n === 2 ? n : def; }
 
-// Add or update targets. rows: [{handle, tier?, tone?, notes?}] or handles. defaults: {tier, source}.
+// A TwitterScore that came with an imported row: kept as the target's TwitterScore (Targets, Follow-backs).
+function setImportedScore(t, r) {
+  const score = importScore(r && r.twitterscore);
+  if (!t || score == null) return;
+  t.score = t.score && typeof t.score === "object" ? t.score : {};
+  t.score.providers = { ...(t.score.providers || {}), twitterscore: { score, max: 1000, at: now(), from: "import" } };
+}
+
+// Add or update targets. rows: [{handle, tier?, tone?, notes?, twitterscore?}] or handles. defaults: {tier, source}.
 // Existing targets keep their stats; tier/tone are overwritten only if given explicitly in a row or
 // `overwrite` is true. A "group" column is ignored: who follows you is always checked on X.
 // Blacklisted handles are never added (counted in `blacklisted`).
@@ -161,11 +208,13 @@ export async function upsert(rows, defaults = {}, overwrite = false) {
       if (!cur && Object.hasOwn(black, r.handle)) { blacklisted++; continue; }
       if (!cur) {
         all[r.handle] = newTarget(r.handle, { tier, tone: r.tone || defaults.tone || "", notes: r.notes || "", name: r.name || "", source: defaults.source || "manual" });
+        setImportedScore(all[r.handle], r);
         added++;
       } else {
         if (overwrite || r.tier) cur.tier = tier;
         if (r.tone) cur.tone = r.tone;
         if (r.notes) cur.notes = r.notes;
+        setImportedScore(cur, r);
         updated++;
       }
     }
