@@ -94,7 +94,8 @@ try {
   st = await waitStopped("rate_limit", 120000);
   assert(st.stopReason === "rate_limit", "AUTO-STOP on X rate limit message");
 
-  // ---- repeated post failures (composer clears but the reply never appears) ----
+  // ---- repeated post failures (composer clears but the reply never appears), with "Stop when errors repeat" on ----
+  await H.settings({ safety: { stopOnErrors: true } });
   M.replyMode = "drop";
   M.addUser("dave", { followers: 30000 }); M.addUser("erin", { followers: 20000 });
   await H.msg("targetsUpsert", { rows: ["dave", "erin"], defaults: { tier: 2 } });

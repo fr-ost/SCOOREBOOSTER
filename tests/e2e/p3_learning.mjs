@@ -136,7 +136,8 @@ try {
   assert(handles.includes("dave") && !handles.includes("erin") && !handles.includes("frank"), "preview: whitelist and tier-1 protection respected (" + handles.join(",") + ")");
   await H.patchState({ lastUnfollowAt: 0 });
   await H.runNow();
-  await H.waitFor(async () => M.unfollows.includes("dave"), "dave unfollowed", 150000);
+  // Cleanup takes a background turn of its own: keep the checks coming (the idle follow-ahead step may use one).
+  await H.waitFor(async () => { if (M.unfollows.includes("dave")) return true; await H.runNow(); await sleep(3000); return null; }, "dave unfollowed", 150000, 1000);
   const d = (await H.store("sx.targets")).dave;
   assert(d.rel.youFollow === false && d.enabled === false, "unfollowed target is updated and disabled");
   assert(!M.unfollows.includes("erin") && !M.unfollows.includes("frank"), "whitelisted and tier-1 accounts were not unfollowed");
