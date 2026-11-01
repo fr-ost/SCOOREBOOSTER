@@ -22,6 +22,8 @@ import * as SB from "../lib/scoreboard.js";
 import { runSelfTest } from "../lib/diagnostics.js";
 import { closeStaleReaderTab } from "../lib/pagereader.js";
 import { markDone as conversationDone } from "../lib/conversations.js";
+import * as LIC from "../lib/license.js";
+import { notify } from "../lib/notify.js";
 
 const EXT_ORIGIN = chrome.runtime.getURL("");
 
@@ -46,13 +48,34 @@ chrome.runtime.onStartup.addListener(async () => {
 });
 
 chrome.alarms.onAlarm.addListener((a) => {
-  if (a.name === ALARM.TICK) engine.tick("alarm");
-  else if (a.name === ALARM.WATCHDOG) engine.watchdog();
-  else if (a.name === ALARM.SCORES) {
-    autoRefreshScores().catch((e) => log("warn", "Score refresh failed: " + e.message));
-    maintainHistory().catch((e) => log("warn", "History retention failed: " + e.message));
-  }
+  licensedNow().then((ok) => {
+    if (!ok) return; // locked: nothing is watched, written or posted
+    if (a.name === ALARM.TICK) engine.tick("alarm");
+    else if (a.name === ALARM.WATCHDOG) engine.watchdog();
+    else if (a.name === ALARM.SCORES) {
+      autoRefreshScores().catch((e) => log("warn", "Score refresh failed: " + e.message));
+      maintainHistory().catch((e) => log("warn", "History retention failed: " + e.message));
+    }
+  });
 });
+
+// ---------- license (lib/license.js) ----------
+// Every alarm and every request from the dashboard / popup goes through the license first. The server is asked at
+// most every 6 hours (LIC.verify); between checks this only reads chrome.storage.
+async function licensedNow() {
+  const st = await LIC.verify().catch(() => ({ ok: false, message: "License check failed" }));
+  if (!st.ok) await onLocked(st);
+  return !!st.ok;
+}
+// Locked while running (revoked, reset, 3 days offline): pause, say why once.
+async function onLocked(st) {
+  const s = await getState();
+  if (s.status !== STATUS.RUNNING) return;
+  await engine.pause().catch(() => {});
+  log("warn", "ScoreX paused: " + (st.message || "the license is not active"));
+  notify("sx-license", "ScoreX is locked", st.message || "The license is not active on this browser.").catch(() => {});
+}
+const LICENSE_FREE = new Set(["licenseState", "licenseActivate", "licenseCheck", "licenseRemove"]);
 
 // History retention (settings.history), at most about once a day; rides on the 4-hourly scores alarm.
 async function maintainHistory() {
@@ -109,6 +132,7 @@ chrome.notifications.onClicked.addListener((id) => {
 
 // Every worker start: drop a lease left by a killed worker and re-arm alarms (cheap and idempotent).
 engine.onWorkerStart().catch(() => {});
+LIC.verify().then((st) => { if (!st.ok) return onLocked(st); }).catch(() => {}); // asks the server only when 6 h are up
 ensureScoresAlarm().catch(() => {});
 // A worker that was killed mid-job leaves a "running" score job behind: mark it interrupted.
 SB.updateBoard((b) => (b.job && b.job.status === "running" ? { ...b, job: { ...b.job, status: "error", error: "Interrupted (the browser stopped the worker)", finishedAt: now() } } : b)).catch(() => {});
@@ -291,6 +315,27 @@ const handlers = {
   importData: (m) => importData(m.data, m.parts),
   historyClear: async () => { const r = await clearHistory(); await engine.refreshBadge(); return r; },
   resetAll: async () => { await engine.stop(STOP.USER); const r = await resetAll(); await engine.refreshBadge(); return r; },
+
+  // ---- license: the only requests that work while ScoreX is locked ----
+  licenseState: async () => ({ ok: true, license: LIC.licenseView(await LIC.getLicense()) }),
+  licenseActivate: async (m) => {
+    const r = await LIC.activate(String(m.key || ""));
+    if (!r.ok) return r;
+    log("info", "ScoreX activated on this browser");
+    return { ok: true, license: LIC.licenseView(await LIC.getLicense()) };
+  },
+  licenseCheck: async () => {
+    const st = await LIC.verify({ force: true });
+    if (!st.ok) await onLocked(st);
+    return { ok: true, license: LIC.licenseView(await LIC.getLicense()) };
+  },
+  licenseRemove: async () => {
+    const s = await getState();
+    if (s.status === STATUS.RUNNING) await engine.pause().catch(() => {});
+    await LIC.removeLicense();
+    log("info", "License removed from this browser");
+    return { ok: true };
+  },
 };
 
 
@@ -306,7 +351,13 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
   const h = handlers[msg.sx];
   if (!h) { reply({ ok: false, error: "Unknown request: " + msg.sx }); return false; }
   Promise.resolve()
-    .then(() => h(msg))
+    .then(async () => {
+      if (!LICENSE_FREE.has(msg.sx)) {
+        const st = LIC.licenseState(await LIC.getLicense());
+        if (!st.ok) return { ok: false, error: st.message, licensed: false };
+      }
+      return h(msg);
+    })
     .then((r) => reply(r || { ok: true }))
     .catch((e) => { log("error", `Request ${msg.sx} failed: ${e && e.message}`); reply({ ok: false, error: String((e && e.message) || e) }); });
   return true;

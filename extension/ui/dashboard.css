@@ -1343,3 +1343,18 @@ svg.meter { display: block; }
 .setup-tabs { margin-bottom: 4px; }
 .setup-tabs a.seg-btn { text-decoration: none; }
 .disc-tabs { margin-bottom: 4px; }
+
+/* License lock screen (ui/license_gate.js): the dashboard and popup show only this until a key is active */
+.lock-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px 16px; background: var(--bg); }
+.lock-card { width: 100%; max-width: 460px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: var(--r-md, 10px); padding: 28px 24px; display: flex; flex-direction: column; gap: 12px; }
+.lock-card-compact { border: none; padding: 16px; gap: 10px; max-width: none; }
+.lock-brand { font-size: 20px; }
+.lock-title { margin: 0; font-size: 20px; line-height: 1.25; }
+.lock-card-compact .lock-title { font-size: 16px; }
+.lock-lead { margin: 0; color: var(--text-2); }
+.lock-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.lock-input { flex: 1 1 220px; min-width: 0; letter-spacing: 0.04em; }
+.lock-msg { margin: 0; min-height: 1.3em; font-size: var(--fs-s); color: var(--text-2); }
+.lock-msg-bad { color: var(--red-text); }
+.lock-fine { margin: 4px 0 0; font-size: var(--fs-s); color: var(--text-3); }
+.lock-popup { width: 360px; }

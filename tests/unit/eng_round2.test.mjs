@@ -11,7 +11,7 @@ import { runSelfTest } from "../../extension/lib/diagnostics.js";
 import { getState, patchState, save, load, setSecrets, sanitizeSettings, getTargets } from "../../extension/lib/store.js";
 import { K, HS, STOP, STATUS, HARD } from "../../extension/lib/constants.js";
 import { newTarget, applyFollow, followStatus, FS } from "../../extension/lib/targets.js";
-import { MIN, HOUR, DAY } from "../../extension/lib/util.js";
+import { MIN, HOUR, DAY, now } from "../../extension/lib/util.js";
 
 const ME = "0x_nation";
 const LIST = "https://x.com/i/lists/1234567890";
@@ -50,6 +50,8 @@ describe("engine fixes (review round 2)", () => {
       await import("../../extension/background/sw.js");
       await env.wait(50); // its start-up work (worker start, alarms) settles
     }
+    // An activated install (the worker refuses every request while locked; lib/license.js), freshly checked.
+    await save({ [K.license]: { key: "SCX-TEST-TEST-TEST-TEST", deviceId: "unit-test-install-0001", status: "active", checkedAt: now() } });
     return new Promise((resolve) => {
       const keep = sw.listeners.message(msg, { id: chrome.runtime.id, url: "chrome-extension://test-extension/ui/dashboard.html" }, resolve);
       if (keep !== true) resolve(undefined);

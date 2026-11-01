@@ -34,6 +34,7 @@ import tones from "./tabs/tones.js";
 import models from "./tabs/models.js";
 import safety from "./tabs/safety.js";
 import settingsTab from "./tabs/settings.js";
+import { currentLicense, unlocked, watchLicense, showLockPage } from "./license_gate.js";
 
 // Rail: seven screens in three groups; labels are also the screen titles. History holds every comment plus the stats and
 // spend (route #history, views Comments | Stats | Spend). Settings holds four tabs - General, Tone, Models & costs, Safety -
@@ -562,6 +563,10 @@ async function route() {
 // ---------------------------------------------------------------- init
 
 async function init() {
+  // Locked until a license key is active (lib/license.js): only the activation card is shown.
+  const lic = await currentLicense();
+  if (!unlocked(lic)) { showLockPage(lic); watchLicense(false); return; }
+  watchLicense(true);
   const [settings, data] = await Promise.all([getSettings(), chrome.storage.local.get(WATCH)]);
   ctx.settings = deepClone(settings);
   lastSavedJson = JSON.stringify(ctx.settings);

@@ -27,9 +27,36 @@ you would (content scripts in a pinned X tab).
    `manifest.json`), not the repository root.
 5. Pin the ScoreX icon. The dashboard opens automatically the first time. Later, open it with right-click on
    the icon > **Options**, or the **Open dashboard** button in the popup.
-6. Make sure you are logged in to x.com as **@0x_nation** in this Chrome profile.
+6. **Activate**: paste your license key (`SCX-XXXX-XXXX-XXXX-XXXX`, from your admin) on the activation screen and
+   click Activate. ScoreX stays locked until then. A key works on one browser only (see *License* below).
+7. Make sure you are logged in to x.com as **@0x_nation** in this Chrome profile.
 
-After editing any file, press the reload button on the ScoreX card in `chrome://extensions`.
+After editing any file, press the reload button on the ScoreX card in `chrome://extensions`. To update, unzip the new
+version over the same folder and press reload: loading it from another folder makes Chrome see a new install (your
+settings and targets stay with the old one, and your license key needs a Reset by your admin).
+
+### License (team copies)
+
+ScoreX is locked until a license key from your license server is activated. The server is the `license-server/` folder
+of this repository, deployed on Vercel with a free Upstash Redis database. **[license-server/README.md](license-server/README.md)**
+has the 10-minute setup. In short:
+
+1. Deploy `license-server/` to Vercel, add Upstash Redis (Storage tab) and an `ADMIN_SECRET` environment variable, then redeploy.
+2. Put your project's URL in `extension/lib/license.js` (`LICENSE_SERVER = "https://YOUR-PROJECT.vercel.app"`), then
+   zip the `extension` folder for your team.
+3. Open your Vercel URL, log in with `ADMIN_SECRET`, create one key per team member and send it to them.
+
+* **One key, one browser**: the first install that activates a key owns it. The same key on another browser, or a
+  forwarded zip without a key, does not work. The admin page shows each key's status and last check. **Reset** frees a
+  key for a new computer. **Revoke** stops it at that browser's next check (within 6 hours; a running ScoreX pauses).
+* ScoreX checks the key every 6 hours. If the server can't be reached, it keeps working for 3 days after the last good
+  check, then locks until it can check again. Settings > General > License shows the status, with *Check now* and
+  *Remove from this browser*.
+* Sent to the license server: the key, a random install ID and the ScoreX version. The key is kept when you use
+  *Reset everything* and is never part of a backup.
+* Honest limit: ScoreX is JavaScript that runs on the user's machine. Someone who edits its code can remove the
+  check, and copying a whole Chrome profile copies the activation. The keys stop casual sharing (a forwarded zip or
+  key), not a determined developer.
 
 ## 2. First-time setup (5 minutes)
 
@@ -450,7 +477,8 @@ wording to the `text` patterns (captcha, rate limit, "Your post was sent", ...).
 
 Everything stays in your browser (`chrome.storage.local` and IndexedDB). With "Let the model see post images" on
 (the default), the public X image links of the post you reply to are sent to OpenAI, which downloads them itself.
-The only outbound requests are to `api.openai.com` and, only for the score sites you turn on, `api.sorsa.io`, `twitterscore.io`,
+The only outbound requests are to `api.openai.com`, your license server (the key, a random install ID and the
+version, every 6 hours) and, only for the score sites you turn on, `api.sorsa.io`, `twitterscore.io`,
 `api.ethos.network` and `api.discover.getmoni.io` (they receive X handles, nothing else). There is no telemetry,
 no remote code and no X API. API keys are never exported, logged or sent to x.com. Permissions: `storage`,
 `alarms` and `notifications`, plus host access to `x.com` and `api.openai.com`; the score sites and `scripting`

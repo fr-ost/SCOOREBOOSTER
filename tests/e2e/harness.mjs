@@ -37,8 +37,13 @@ function stageExtension({ grantOptional = false } = {}) {
 }
 
 // SX_PORT lets several e2e runs work in parallel (each mock X gets its own port).
-export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewport = { width: 1280, height: 900 }, grantOptional = false } = {}) {
+// The license server host the extension calls (lib/license.js LICENSE_SERVER), answered by the mock.
+export const LICENSE_HOST = new URL(fs.readFileSync(path.join(SRC, "lib/license.js"), "utf8").match(/LICENSE_SERVER = "([^"]+)"/)[1]).hostname;
+export const TEST_LICENSE_KEY = "SCX-TEST-TEST-TEST-TEST";
+
+export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewport = { width: 1280, height: 900 }, grantOptional = false, license = true } = {}) {
   const M = createMock();
+  M.licenseHost = LICENSE_HOST;
   await M.start(port);
   const ext = stageExtension({ grantOptional });
   const udd = fs.mkdtempSync(path.join(os.tmpdir(), "sx-udd-"));
@@ -50,7 +55,7 @@ export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewpor
     args: [
       `--disable-extensions-except=${ext}`,
       `--load-extension=${ext}`,
-      `--host-resolver-rules=MAP x.com:443 127.0.0.1:${port}, MAP api.openai.com:443 127.0.0.1:${port}, MAP api.sorsa.io:443 127.0.0.1:${port}, MAP twitterscore.io:443 127.0.0.1:${port}, MAP api.ethos.network:443 127.0.0.1:${port}, MAP api.discover.getmoni.io:443 127.0.0.1:${port}`,
+      `--host-resolver-rules=MAP x.com:443 127.0.0.1:${port}, MAP api.openai.com:443 127.0.0.1:${port}, MAP api.sorsa.io:443 127.0.0.1:${port}, MAP twitterscore.io:443 127.0.0.1:${port}, MAP api.ethos.network:443 127.0.0.1:${port}, MAP api.discover.getmoni.io:443 127.0.0.1:${port}, MAP ${LICENSE_HOST}:443 127.0.0.1:${port}`,
       "--ignore-certificate-errors",
       "--no-proxy-server",
     ],
@@ -158,6 +163,12 @@ export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewpor
   // Fast, deterministic-ish defaults for tests.
   await H.page();
   await H.waitFor(() => H.store("sx.settings"), "default settings", 15000);
+  // ScoreX is locked until a license key is active: activate the test key (the mock license server accepts it).
+  H.activateLicense = async (key = TEST_LICENSE_KEY) => H.msg("licenseActivate", { key });
+  if (license) {
+    const r = await H.activateLicense();
+    if (!r || !r.ok) throw new Error("test license activation failed: " + JSON.stringify(r));
+  }
   return H;
 }
 

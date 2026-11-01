@@ -1,0 +1,8 @@
+{
+  "name": "scorex-license",
+  "private": true,
+  "type": "module",
+  "description": "License keys for the ScoreX Chrome extension: one key, one browser. Vercel functions + Upstash Redis, no dependencies.",
+  "engines": { "node": ">=18" },
+  "scripts": { "test": "node --test test/*.test.mjs" }
+}

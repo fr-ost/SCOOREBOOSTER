@@ -330,6 +330,8 @@ try {
   const extId = new URL(sw.url()).host;
   const base = `chrome-extension://${extId}/ui/`;
   console.log("extension id:", extId);
+  // An activated install: ScoreX is locked until a license key is active (tests/e2e/license.mjs covers the lock itself).
+  await sw.evaluate(() => chrome.storage.local.set({ "sx.license": { key: "SCX-TEST-TEST-TEST-TEST", deviceId: "ui-smoke-install-0001", status: "active", note: "UI smoke", activatedAt: Date.now(), checkedAt: Date.now() } }));
 
   const page = await ctx.newPage();
   watch(page, () => "dashboard #" + curRoute);

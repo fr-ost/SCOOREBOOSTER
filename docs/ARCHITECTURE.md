@@ -24,6 +24,8 @@ extension/
     scoreboard.js         sx.scoreboard: own scores + history, checks, smart lists, target scores, usage caps,
                           pagedSmartFollowers (TwitterScore API, 25 per page) and the smart follower database scan
     smartdb.js            IndexedDB "smartdb": one row per username (score, date of scan, accounts it was found under)
+    license.js            license gate: activate / verify against license-server/ (one key, one browser; 6 h checks,
+                          3 days of grace); background/sw.js refuses requests and alarms while locked
     xlsx.js               CSV and a minimal XLSX writer (no library) for the downloads
     analytics.js          funnel, heatmap and follow-back attribution for History > Stats
     diagnostics.js        live X self-test (home, profile, followers list; never clicks or types)
@@ -60,6 +62,7 @@ extension/
                           (#screen?param=..), storage watch + redraw, Full-auto confirm, safety-stop review dialog
     components.js         DOM helpers (h(), no innerHTML with untrusted text), fields, drawer, sheets, tables
     charts.js             inline SVG charts (sparklines, bars, history with event ticks, heatmap)
+    license_gate.js       the activation card shown instead of the dashboard / popup while locked
     tabs/*.js             one module per screen: overview (Today), review, targets, discover (tabs: smartdb_ui.js
                           database | Find targets), scores, history (Comments | Stats | Spend), and the Settings
                           tabs settings (General, with Diagnostics), tones (Tone), models, safety

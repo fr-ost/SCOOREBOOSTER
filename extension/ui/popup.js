@@ -18,6 +18,7 @@ import {
   providerKey, providerName, enabledProviders, primaryProvider, historyDelta, confirmDialog, truncate, approvedSummary,
 } from "./components.js";
 import { responsive, rhythm, rhythmFrom, miniBars, stepLine, vizClass } from "./charts.js";
+import { currentLicense, unlocked, watchLicense, lockCard } from "./license_gate.js";
 
 let settings = null;
 let state = { ...DEFAULT_STATE };
@@ -376,6 +377,14 @@ async function refreshHealth() {
 const KEYS = { [K.spend]: "spend", [K.targets]: "targets", [K.scoreboard]: "board", [K.conversations]: "convos", [K.blacklist]: "blacklist", [K.secretsRev]: "secretsRev" };
 
 async function init() {
+  const lic = await currentLicense();
+  if (!unlocked(lic)) { // locked: only the activation card
+    $("popup").hidden = true;
+    document.body.prepend(h("div", { class: "lock-popup" }, lockCard(lic, { compact: true })));
+    watchLicense(false);
+    return;
+  }
+  watchLicense(true);
   const [s, stored] = await Promise.all([getSettings(), chrome.storage.local.get([K.state, ...Object.keys(KEYS)])]);
   settings = s;
   state = { ...DEFAULT_STATE, ...(stored[K.state] || {}) };

@@ -36,6 +36,8 @@ export function createMock(opts = {}) {
     sorsa: { calls: [], scores: {}, top: {} }, // top: handle -> [{ username, display_name, score, followers_count }]
     // twitterscore: scores handle -> 0..1000; smart: handle -> [{ handle, score }]; mode: ok | blocked (bot check) | botcheck (fetch blocked, browser tab passes) | js (panel filled by JS)
     twitterscore: { calls: [], scores: {}, smart: {}, mode: "ok", apiKey: "ts-test" },
+    // license server: bound key -> install ID; unknown / revoked keys; mode ok | down
+    license: { calls: [], bound: {}, unknown: [], revoked: [], mode: "ok" },
     ethos: { calls: [], scores: {} }, // handle -> score (missing = no Ethos profile)
     moni: { calls: [], scores: {}, smarts: {} }, // smarts: handle -> [handles]
     log: [],
@@ -301,6 +303,33 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           if (m4[2] === "info/smart_engagement") return M.moni.scores[h] == null ? send(404, { detail: "Not found" }) : send(200, { smartEngagement: { smartsCount: (M.moni.smarts[h] || []).length, moniScore: M.moni.scores[h], mentionsCount: 3, smartMentionsCount: 1 } });
           const items = (M.moni.smarts[h] || []).map((x) => ({ meta: { userId: "1", userUrl: "https://x.com/" + x } }));
           return send(200, { items, totalCount: items.length });
+        }
+        // The license server (license-server/ on Vercel): any well-formed key works on the first install that activates it.
+        if (M.licenseHost && host === M.licenseHost) {
+          const L = M.license;
+          const cors = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "POST, OPTIONS", "Access-Control-Allow-Headers": "Content-Type" };
+          const reply = (status, obj) => { res.writeHead(status, { "Content-Type": "application/json", ...cors }); res.end(JSON.stringify(obj)); };
+          if (req.method === "OPTIONS") { res.writeHead(204, cors); return res.end(); }
+          const u = new URL(req.url, "https://" + host);
+          L.calls.push(u.pathname);
+          let b = {};
+          try { b = JSON.parse(body || "{}"); } catch (_) {}
+          if (L.mode === "down") { res.writeHead(503, { "Content-Type": "text/html", ...cors }); return res.end("<h1>down</h1>"); }
+          if (!/^SCX(?:-[A-Z0-9]{4}){4}$/.test(String(b.key || ""))) return reply(400, { ok: false, error: "bad_request", message: "Enter a key like SCX-XXXX-XXXX-XXXX-XXXX" });
+          if (L.unknown.includes(b.key)) return reply(404, { ok: false, error: "invalid", message: "This license key doesn't exist. Check it, or ask your admin for a key." });
+          if (L.revoked.includes(b.key)) return reply(403, { ok: false, error: "revoked", message: "This license key was turned off by your admin." });
+          const bound = L.bound[b.key];
+          if (u.pathname === "/api/activate") {
+            if (bound && bound !== b.deviceId) return reply(409, { ok: false, error: "used", message: "This license key is already used on another browser. Ask your admin for a new key, or to reset this one." });
+            L.bound[b.key] = b.deviceId;
+            return reply(200, { ok: true, status: "active", note: "Test" });
+          }
+          if (u.pathname === "/api/verify") {
+            if (!bound) return reply(409, { ok: false, error: "inactive", message: "This license key is no longer active on this browser." });
+            if (bound !== b.deviceId) return reply(409, { ok: false, error: "used", message: "This license key is used on another browser." });
+            return reply(200, { ok: true, status: "active" });
+          }
+          return reply(404, { ok: false, error: "not_found" });
         }
         if (host === "twitterscore.io") {
           const u = new URL(req.url, "https://twitterscore.io");

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>ScoreX licenses</title>
+  <link rel="stylesheet" href="/admin.css">
+</head>
+<body>
+  <main>
+    <h1>ScoreX licenses</h1>
+    <p class="muted">One key works on one browser. Keys are shown only once, when you create them.</p>
+
+    <section id="login" class="card">
+      <label for="secret">Admin password (ADMIN_SECRET)</label>
+      <div class="row">
+        <input id="secret" type="password" autocomplete="current-password" spellcheck="false">
+        <button id="loginBtn" class="primary">Open</button>
+      </div>
+      <p id="loginMsg" class="msg"></p>
+    </section>
+
+    <div id="panel" hidden>
+      <section class="card">
+        <h2>Create keys</h2>
+        <div class="row">
+          <label class="inline">How many <input id="count" type="number" min="1" max="100" value="1"></label>
+          <label class="inline grow">For (name or note) <input id="note" type="text" maxlength="60" placeholder="e.g. Rafi"></label>
+          <button id="createBtn" class="primary">Create</button>
+        </div>
+        <div id="newKeys" hidden>
+          <p class="warn">Copy these now - they are not shown again.</p>
+          <textarea id="newKeysText" readonly rows="4"></textarea>
+          <button id="copyBtn">Copy</button>
+        </div>
+        <p id="createMsg" class="msg"></p>
+      </section>
+
+      <section class="card">
+        <div class="row between">
+          <h2>Keys <span id="count2" class="muted"></span></h2>
+          <span><button id="refreshBtn">Refresh</button> <button id="logoutBtn">Log out</button></span>
+        </div>
+        <p class="muted small">Reset frees a key for a new browser (for example a new computer). Revoke turns it off: ScoreX stops on that browser at its next check (within 6 hours).</p>
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Key</th><th>For</th><th>Status</th><th>Activated</th><th>Last check</th><th>Version</th><th></th></tr></thead>
+            <tbody id="rows"><tr><td colspan="7" class="muted">Loading...</td></tr></tbody>
+          </table>
+        </div>
+        <p id="listMsg" class="msg"></p>
+      </section>
+    </div>
+  </main>
+  <script src="/admin.js"></script>
+</body>
+</html>

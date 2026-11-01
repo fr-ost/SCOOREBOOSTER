@@ -295,6 +295,31 @@ export default {
       h("div", { class: "form-row" },
         f({ path: "account.handle", type: "text", label: "Your X handle", placeholder: "your_handle", hint: "Without @" }),
         f({ path: "account.verifyAccount", type: "toggle", label: "Stop if a different account is logged in" })));
+    // ------------------------------------------------ license (lib/license.js)
+    const licHost = h("div", { class: "stack-sm", id: "licenseBox" });
+    async function drawLicense() {
+      const r = await ctx.send("licenseState", {}, { quiet: true });
+      const L = r && r.license;
+      if (!L) return;
+      fill(licHost,
+        h("div", { class: "toolbar" },
+          L.ok ? badge("Active", "green") : badge("Locked", "red"),
+          h("span", { class: "small", id: "licHint" }, `Key ${L.hint || "-"}${L.note ? " · " + L.note : ""}`),
+          L.activatedAt ? h("span", { class: "small muted" }, `activated ${fmtDateTime(L.activatedAt)}`) : null,
+          L.checkedAt ? h("span", { class: "small muted" }, `last check ${fmtAgo(L.checkedAt)}`) : null),
+        h("div", { class: "toolbar" },
+          btn("Check now", (e) => busy(e.currentTarget, async () => {
+            const x = await ctx.send("licenseCheck", {}, { label: "License check" });
+            if (x && x.license) toast(x.license.ok ? "License active" : x.license.message, { type: x.license.ok ? "success" : "error" });
+            drawLicense();
+          }), { size: "sm", iconName: "refresh", id: "licCheckBtn" }),
+          btn("Remove from this browser", async () => {
+            if (!(await confirmDialog("Remove the license key from this browser? ScoreX pauses and locks until a key is entered again. The same key works again on this browser.", { title: "Remove license", okLabel: "Remove", danger: true }))) return;
+            await ctx.send("licenseRemove", {}, { label: "Remove license" }); // the page reloads into the lock screen
+          }, { size: "sm", kind: "ghost-danger", id: "licRemoveBtn" })),
+        h("p", { class: "small muted" }, `License server: ${L.server} - it receives only the key, a random install ID and the ScoreX version.`));
+    }
+    const licenseSec = section({ title: "License", id: "licenseSec", hint: "One key works on one browser. Checked every 6 hours; without the server ScoreX keeps working for 3 days." }, licHost);
     const generalSec = section({ hint: h("span", null, "Mode is also on ", h("a", { href: "#overview" }, "Today"), " and in the top bar; the time zone is also in ", h("a", { href: "#safety" }, "Safety"), "; the theme is in the top bar.") },
       h("div", { class: "form-row" },
         labeled("Mode", modeSel, "Full auto asks first"),
@@ -564,6 +589,7 @@ export default {
     add(root,
       diagSec,
       accountSec,
+      licenseSec,
       watchSec,
       windowSec,
       h("div", { class: "adv-group-label" }, "Advanced"),
@@ -576,6 +602,7 @@ export default {
       advanced({ key: "settings.data", title: "Data", desc: "Export and import backups, export history, reset everything" }, dataSec, resetSec));
 
     drawStrategy();
+    drawLicense();
     await loadOverrides();
     diagSec.runQuick();
     if (ctx.params && ctx.params.focus === "handle") {

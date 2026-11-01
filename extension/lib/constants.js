@@ -22,6 +22,7 @@ export const K = Object.freeze({
   providerOverrides: "sx.providerOverrides", // partial provider definitions JSON, merged over lib/providerdefs.js
   conversations: "sx.conversations", // { items: [{ id, target, comment, replyUrl, authorReplyUrl, text, at, done }], checkedAt } author replies to answer
   schema: "sx.schemaVersion",
+  license: "sx.license", // { key, deviceId, status, checkedAt, ... } lib/license.js; kept by Reset everything, never backed up
 });
 
 export const SCHEMA_VERSION = 1;
