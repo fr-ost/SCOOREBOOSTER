@@ -379,28 +379,103 @@ ${notice}<button data-testid="tweetButton">Reply</button></div>`;
     } finally { await p.close(); }
   });
 
-  test("follow: only the author's own 'Follow @handle' button (never an ad or a suggestion); already following is left alone", async () => {
-    const side = (label, extra = "") => `<aside aria-label="Relevant people"><div data-testid="UserCell"><button aria-label="${label}" data-testid="11-follow" id="authorFollow"><span>Follow</span></button></div></aside>${extra}`;
-    const ad = `<div data-testid="placementTracking"><button aria-label="Follow @bigbob" data-testid="99-follow" id="adFollow">Follow</button></div><div aria-label="Who to follow"><button aria-label="Follow @someoneelse" data-testid="12-follow">Follow</button></div>`;
-    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(side("Follow @bigbob", ad)));
+  // ---------- follow first (on the profile page) ----------
+  // A profile like X's: the header's own button (X wraps it in placementTracking), a post with its own Follow button
+  // placed before the header, and a "Who to follow" cell. header: whose name block is rendered.
+  const profilePage = (h, { button = "follow", header = h, extra = "" } = {}) => {
+    const b = { follow: ["Follow", "777-follow"], following: ["Following", "777-unfollow"], pending: ["Pending", "777-cancel"] }[button];
+    const btn = b ? `<div data-testid="placementTracking"><button aria-label="${b[0]} @${h}" data-testid="${b[1]}" id="headerFollow"><span>${b[0]}</span></button></div>` : "";
+    return `${NAV}<main role="main"><div data-testid="primaryColumn">
+<article data-testid="tweet" role="article"><button aria-label="Follow @${h}" data-testid="555-follow">Follow</button></article>
+<div data-testid="UserName"><div><span>${header.toUpperCase()}</span></div><div><div dir="ltr"><span>@${header}</span></div></div></div>
+${btn}<section><div><h2 role="heading">Who to follow</h2>${cell("somefan", {})}</div></section>${extra}</div></main><div id="layers"></div>`;
+  };
+  // X's button: "Following" the moment it is clicked; then (after) it keeps it, or turns back with a message.
+  const xButton = ({ after = null, toast = "" } = {}) => `(() => {
+    const b = document.getElementById("headerFollow"), h = b.getAttribute("aria-label").split("@")[1];
+    const set = (l, id) => { b.setAttribute("aria-label", l + " @" + h); b.setAttribute("data-testid", id); b.querySelector("span").textContent = l; };
+    b.addEventListener("click", () => {
+      set("Following", "777-unfollow");
+      ${after ? `setTimeout(() => { ${toast ? `const t = document.createElement("div"); t.setAttribute("data-testid", "toast"); t.setAttribute("role", "alert"); t.textContent = ${JSON.stringify(toast)}; document.getElementById("layers").appendChild(t);` : ""} ${after === "revert" ? `set("Follow", "777-follow");` : ""} }, 500);` : ""}
+    });
+  })();`;
+  const followClicks = async (p) => (await p.clicks()).filter((x) => /follow|cancel/.test(x));
+
+  test("follow: the profile header's own button only (never a post's or a suggestion's); counts once it still reads Following", async () => {
+    const p = await open("https://x.com/alice", profilePage("alice"));
     try {
-      await p.page.addScriptTag({ content: `document.getElementById("authorFollow").addEventListener("click", (e) => { e.currentTarget.setAttribute("aria-label", "Following @bigbob"); e.currentTarget.setAttribute("data-testid", "11-unfollow"); });` });
-      const r = await p.call({ sx: "follow", handle: "bigbob", expectMe: "0x_nation" });
+      await p.page.addScriptTag({ content: xButton() });
+      const r = await p.call({ sx: "follow", handle: "alice", expectMe: "0x_nation", settleMs: 1200 });
       assert.equal(r.ok, true, JSON.stringify(r));
+      assert.equal(r.clicked, true);
       assert.ok(!r.already);
-      assert.deepEqual((await p.clicks()).filter((x) => /follow/.test(x)), ["11-follow"], "only the author's button");
+      assert.deepEqual(await followClicks(p), ["777-follow"], "only the header's button");
     } finally { await p.close(); }
-    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(side("Following @bigbob")));
+  });
+
+  test("follow: X turns the button back to Follow (with a message) -> not followed, the message is kept", async () => {
+    const p = await open("https://x.com/alice", profilePage("alice"));
     try {
-      const r = await p.call({ sx: "follow", handle: "bigbob", expectMe: "0x_nation" });
-      assert.equal(r.already, true);
-      assert.deepEqual((await p.clicks()).filter((x) => /follow/.test(x)), [], "nothing clicked");
+      await p.page.addScriptTag({ content: xButton({ after: "revert", toast: "Something went wrong. Try reloading." }) });
+      const r = await p.call({ sx: "follow", handle: "alice", expectMe: "0x_nation", settleMs: 3000 });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.equal(r.error, "follow_reverted");
+      assert.equal(r.clicked, true);
+      assert.match(r.detail, /Something went wrong/);
     } finally { await p.close(); }
-    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage());
+  });
+
+  test("follow: X's follow-limit message after the click is X refusing (rate_limit), even while the button reads Following", async () => {
+    const p = await open("https://x.com/alice", profilePage("alice"));
     try {
-      const r = await p.call({ sx: "follow", handle: "bigbob", expectMe: "0x_nation" });
-      assert.equal(r.error, "follow_button_missing");
+      await p.page.addScriptTag({ content: xButton({ after: "keep", toast: "You are unable to follow more people at this time." }) });
+      const r = await p.call({ sx: "follow", handle: "alice", expectMe: "0x_nation", settleMs: 3000 });
+      assert.equal(r.ok, false, JSON.stringify(r));
+      assert.equal(r.state, "rate_limit");
+      assert.equal(r.clicked, true);
     } finally { await p.close(); }
+  });
+
+  test("follow: already following / a pending request -> nothing clicked; another page, another header or no button -> nothing clicked", async () => {
+    for (const [button, want] of [["following", { ok: true, already: true }], ["pending", { ok: true, pending: true, already: true }]]) {
+      const p = await open("https://x.com/alice", profilePage("alice", { button }));
+      try {
+        const r = await p.call({ sx: "follow", handle: "alice", expectMe: "0x_nation" });
+        assert.deepEqual({ ok: r.ok, already: r.already, pending: r.pending }, { pending: undefined, ...want }, button);
+        assert.deepEqual(await followClicks(p), [], button + ": nothing clicked");
+      } finally { await p.close(); }
+    }
+    let p = await open(`https://x.com/alice/status/${TID}`, profilePage("alice"));
+    try {
+      assert.equal((await p.call({ sx: "follow", handle: "alice", expectMe: "0x_nation" })).error, "wrong_page");
+      assert.deepEqual(await followClicks(p), []);
+    } finally { await p.close(); }
+    p = await open("https://x.com/alice", profilePage("alice", { header: "someoneelse" }));
+    try {
+      assert.equal((await p.call({ sx: "follow", handle: "alice", expectMe: "0x_nation", readyMs: 800 })).error, "profile_not_rendered");
+      assert.deepEqual(await followClicks(p), [], "another account's header: nothing clicked");
+    } finally { await p.close(); }
+    p = await open("https://x.com/alice", profilePage("alice", { button: "none" }));
+    try {
+      assert.equal((await p.call({ sx: "follow", handle: "alice", expectMe: "0x_nation", readyMs: 800 })).error, "follow_button_missing");
+      assert.deepEqual(await followClicks(p), [], "a post's Follow button is never used");
+    } finally { await p.close(); }
+  });
+
+  test("followState after a reload waits for the header's button; the profile read uses that button, not a post's", async () => {
+    const p = await open("https://x.com/alice", profilePage("alice", { button: "none" }));
+    try {
+      await p.page.addScriptTag({ content: `setTimeout(() => { document.querySelector('[data-testid="UserName"]').insertAdjacentHTML("afterend", '<div data-testid="placementTracking"><button aria-label="Following @alice" data-testid="777-unfollow"><span>Following</span></button></div>'); }, 600);` });
+      const fs = await p.call({ sx: "followState", handle: "alice", waitMs: 5000 });
+      assert.equal(fs.ok, true);
+      assert.equal(fs.youFollow, true, "read once the button rendered");
+    } finally { await p.close(); }
+    const q = await open("https://x.com/alice", profilePage("alice"));
+    try {
+      const r = await q.call({ sx: "scrapeProfile" });
+      assert.equal(r.profile.youFollow, false, "the header says Follow (the post's button is not the header's)");
+      assert.equal((await q.call({ sx: "followState", handle: "bob", waitMs: 300 })).ok, false, "another account's profile");
+    } finally { await q.close(); }
   });
 
   test("the reply goes in with one paste (X's editor commits it), not character by character", async () => {

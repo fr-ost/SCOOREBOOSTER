@@ -47,9 +47,11 @@ extension/
     tabs.js               pinned X worker tab, navigation (+ X page-load ledger by purpose), content-script
                           messaging, logged-in account tracking (state.me, unreadable-account streak)
     watcher.js            new-post detection (X List / batched Latest search / profile rotation)
-    poster.js             human-like posting flow (navigate, read, scroll, like, type, submit, verify)
+    poster.js             human-like posting flow (follow first on the profile, confirmed by a reload; navigate, read,
+                          scroll, like, type, submit, verify)
     discovery.js          candidate discovery jobs (followers/following/search/common follows)
-    follow.js             follow tracking: followers-list scan + profile checks, give-up removal, blacklist
+    follow.js             follow tracking: followers-list scan + profile checks, give-up removal, blacklist; follow
+                          first (24 h trust of a profile look, daily follow cap, background follow-ahead)
     learning.js           follow-back credit + engagement tracking, priorities, A/B testing (Thompson sampling)
     cleanup.js            optional unfollow of non-followers after N days (default OFF)
     engine.js             start/pause/stop/resume, the randomized tick, auto-stop, review actions

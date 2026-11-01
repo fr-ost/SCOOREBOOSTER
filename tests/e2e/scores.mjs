@@ -193,10 +193,13 @@ try {
   // ---- diagnostics self-test against the mock X ----
   M.addUser("0x_nation", { followers: 4200 });
   M.addUser("fan1", { followsMe: true });
+  M.addUser("delta", { followers: 9000 }); // the target whose profile the self-test reads the Follow button on
   M.followers["0x_nation"] = ["fan1"];
   M.addPost("fan1", "A post so the home timeline is not empty for the self-test today.", 3);
   r = await H.msg("selfTest");
-  assert(r.ok && r.checks.length === 4 && r.checks.every((c) => c.ok), "self-test: account, home, profile and followers are readable (" + JSON.stringify(r.checks.map((c) => [c.id, c.ok, c.detail])) + ")");
+  assert(r.ok && r.checks.length === 5 && r.checks.every((c) => c.ok), "self-test: account, home, profile, followers and a target's Follow button are readable (" + JSON.stringify(r.checks.map((c) => [c.id, c.ok, c.detail])) + ")");
+  const fb = r.checks.find((c) => c.id === "follow");
+  assert(fb && /shows "Follow"|shows "Following"/.test(fb.detail), "self-test reads the Follow button on a target's profile without clicking it: " + (fb && fb.detail));
   M.pageMode = "broken";
   r = await H.msg("selfTest");
   const home = r.checks.find((c) => c.id === "home");

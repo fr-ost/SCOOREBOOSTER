@@ -419,42 +419,59 @@
     return { ok: false, error: cleared ? "unconfirmed_cleared" : "not_confirmed", cleared, xSaid: xMessages(), textLeft: !!(box && boxText(box)) };
   }
 
-  function followState() {
+  // The profile's follow state. With handle + waitMs (follow-first's check after a reload): waits until the header of
+  // @handle shows its follow button, and reads that button.
+  async function followState({ handle, waitMs = 0 } = {}) {
+    const h = String(handle || "").toLowerCase().replace(/^@/, "");
+    if (h && waitMs > 0) await D.waitFor(() => (S.profileHeaderIs(h) && S.headerFollow(h).state ? true : null), Math.min(waitMs, 20000), 250);
     const { profile } = S.scrapeProfile();
     if (!profile) return { ok: false, error: "profile_not_rendered" };
+    if (h && !S.profileHeaderIs(h)) return { ok: false, error: "profile_not_rendered" };
     return { ok: true, followsYou: profile.followsYou, youFollow: profile.youFollow, pending: profile.followPending, profile };
   }
 
-  // Follow an account (follow-first): on its post page the author's button reads "Follow @handle" (UniqueFarm), on its
-  // profile it is the header's follow button. Never a "Who to follow" suggestion or an ad. A "Following @handle" /
-  // unfollow button means you already follow it; a protected account answers with a pending request.
-  async function follow({ handle, expectMe }) {
+  // Follow an account (follow-first) on its profile page, with the header's own Follow button - never a button in a
+  // post, a "Who to follow" cell, a dialog or an ad. X turns the button into "Following" the moment it is clicked,
+  // before its server has answered, and turns it back into "Follow" (often with a message) when the server refuses.
+  // So a click only counts when the button still reads Following settleMs later and X showed nothing; the worker then
+  // reloads the profile to confirm that X kept the follow (lib/poster.js followOnProfile). Already following or a
+  // pending request: nothing is clicked. clicked:true on every answer after the click (it counts toward the daily
+  // follow cap).
+  async function follow({ handle, expectMe, settleMs = 5000, readyMs = 8000 }) {
     const acct = accountCheck(expectMe);
     if (acct) return acct;
     const p0 = promptCheck();
     if (p0) return p0;
     const h = String(handle || "").toLowerCase().replace(/^@/, "");
     if (!h) return { ok: false, error: "no_handle" };
-    const inAd = (el) => !!(el && el.closest('[data-testid="placementTracking"]'));
-    const labelled = () => [...document.querySelectorAll("button[aria-label], [role=\"button\"][aria-label]")].filter((b) => !inAd(b));
-    const label = (b) => (b.getAttribute("aria-label") || "").trim().toLowerCase();
-    const following = () => labelled().some((b) => label(b) === "following @" + h || label(b) === "unfollow @" + h)
-      || (onProfile() && !!S.relationButtons(D.q("primaryColumn") || document).un);
-    const pending = () => labelled().some((b) => label(b) === "pending @" + h) || (onProfile() && !!S.relationButtons(D.q("primaryColumn") || document).pend);
-    const onProfile = () => (location.pathname.split("/")[1] || "").toLowerCase() === h;
-    if (following()) return { ok: true, already: true };
-    if (pending()) return { ok: true, pending: true, already: true };
-    let btn = labelled().find((b) => label(b) === "follow @" + h) || null;
-    if (!btn && onProfile()) btn = S.relationButtons(D.q("primaryColumn") || document).fo;
-    if (!btn) return { ok: false, error: "follow_button_missing" };
-    D.humanClick(btn);
-    const done = await D.waitFor(() => following() || pending() || X.toastState() || promptCheck(), 8000, 250);
-    const ts = X.toastState();
-    if (ts) return { ok: false, state: ts.state, detail: ts.detail };
-    const p1 = promptCheck();
-    if (p1) return p1;
-    if (pending()) return { ok: true, pending: true };
-    return done && following() ? { ok: true } : { ok: false, error: "follow_not_confirmed" };
+    // Only on x.com/<handle> itself (a post page's path starts with the author's handle too).
+    const path = location.pathname.match(/^\/([A-Za-z0-9_]{1,15})\/?$/);
+    if (!path || path[1].toLowerCase() !== h) return { ok: false, error: "wrong_page" };
+    // The header shows the name first and the button a moment later.
+    const ready = await D.waitFor(() => (S.profileHeaderIs(h) && S.headerFollow(h).state ? true : null), Math.min(Math.max(0, Number(readyMs) || 0), 20000), 250);
+    if (!ready) return { ok: false, error: S.profileHeaderIs(h) ? "follow_button_missing" : "profile_not_rendered" };
+    const first = S.headerFollow(h);
+    if (first.state === "following") return { ok: true, already: true };
+    if (first.state === "pending") return { ok: true, pending: true, already: true };
+    if (!first.btn) return { ok: false, error: "follow_button_missing" };
+    D.humanClick(first.btn);
+    const state = () => S.headerFollow(h).state;
+    const refused = () => {
+      const ts = X.toastState();
+      if (ts) return { ok: false, clicked: true, state: ts.state, detail: ts.detail };
+      const p = promptCheck();
+      return p ? { ...p, clicked: true } : null;
+    };
+    const took = await D.waitFor(() => refused() || (state() === "following" || state() === "pending" ? true : null), 8000, 250);
+    if (took && took !== true) return took;
+    if (!took) return { ok: false, clicked: true, error: "follow_not_confirmed", detail: xMessages() };
+    // It reads Following now: watch for X turning it back.
+    const back = await D.waitFor(() => refused() || (state() === "follow" ? { ok: false, clicked: true, error: "follow_reverted", detail: xMessages() } : null), Math.max(0, Number(settleMs) || 0), 250);
+    if (back) return back;
+    const s = state();
+    if (s === "pending") return { ok: true, clicked: true, pending: true };
+    if (s === "following") return { ok: true, clicked: true };
+    return { ok: false, clicked: true, error: "follow_not_confirmed", detail: xMessages() };
   }
 
   async function unfollow({ handle, expectMe }) {

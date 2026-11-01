@@ -7,7 +7,8 @@
 //   profile: { handle, name, bio, followers, following, verified, protected, defaultAvatar, joinedAt, avatar, updatedAt },
 //   recentPosts: [{ id, text, createdAt, metrics, lang, isQuote, hasMedia, hasCard, links }]  (newest first, max 5)
 //   lastPostAt, lastCheckedAt,
-//   rel: { followsYou (null = not checked yet), youFollow, checkedAt, youFollowSince, followedBackAt,
+//   rel: { followsYou (null = not checked yet), youFollow, youFollowVerifiedAt (its profile showed Following then),
+//          checkedAt, youFollowSince, followedBackAt,
 //          notFollowingSeen, unfollowedYouAt (it followed you, then unfollowed; followedBackAt then moves to
 //          prevFollowedBackAt), gone (profile not found; cleared
 //          when the profile reads fine again or the target is turned on again), verifiedAt (last "does it still
@@ -249,6 +250,8 @@ export function applyProfile(t, profile, posts, blend = 0.5) {
       if (profile.youFollow && !t.rel.youFollowSince) t.rel.youFollowSince = now();
       if (!profile.youFollow) t.rel.youFollowSince = null;
       t.rel.youFollow = profile.youFollow;
+      // A profile page read right after it loaded: what follow-first trusts for 24 h (lib/follow.js followConfirmed).
+      t.rel.youFollowVerifiedAt = profile.youFollow ? now() : null;
     }
     if (profile.followsYou != null || profile.youFollow != null) t.rel.checkedAt = now();
   }

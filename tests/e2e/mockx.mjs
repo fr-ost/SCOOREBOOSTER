@@ -29,8 +29,12 @@ export function createMock(opts = {}) {
     replies: [], // our posted replies { id, inReplyTo, text, at }
     likes: [],
     unfollows: [],
-    follows: [], // handles followed through the profile's Follow button
-    followMode: "ok", // ok | limit (X refuses with a toast) | ignore (the click does nothing)
+    follows: [], // handles followed through the profile's Follow button (and kept by X)
+    followLog: [], // every follow X answered: { handle, at, kept }
+    // Like X, the button reads Following the moment it is clicked, before the server answered. Then:
+    //   ok (X keeps it) | notkept (the server says ok, but a reload shows Follow) | revert (X turns it back with
+    //   "Something went wrong") | limit (X's follow-limit message, turned back) | ignore (the click does nothing)
+    followMode: "ok",
     followers: {}, // handle -> [handles]
     following: {},
     lists: { "1234567890": [] }, // list id -> member handles (empty = all authors)
@@ -168,7 +172,7 @@ ${likeBtn}
       const h = m[1].toLowerCase();
       const user = M.users[h];
       if (!user) return { html: shell(`<div data-testid="emptyState"><span data-testid="empty_state_header_text">This account doesn’t exist</span></div>`) };
-      const btn = user.iFollow ? `<button data-testid="${user.id}-unfollow">Following</button>` : `<button data-testid="${user.id}-follow">Follow</button>`;
+      const btn = user.iFollow ? `<button data-testid="${user.id}-unfollow">Following</button>` : `<button data-testid="${user.id}-follow" data-mock-mode="${M.followMode}">Follow</button>`;
       return { html: shell(`<div data-testid="UserName"><div><span>${esc(user.name)}</span>${user.verified ? `<svg data-testid="icon-verified"></svg>` : ""}</div><div><span>@${h}</span>${user.followsMe ? `<span data-testid="userFollowIndicator">Follows you</span>` : ""}</div></div>
 <div data-testid="UserDescription"><span>${esc(user.bio)}</span></div>
 <div data-testid="UserProfileHeader_Items"><span data-testid="UserJoinDate">Joined ${esc(user.joined)}</span></div>
@@ -205,12 +209,13 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
     var like=e.target.closest('[data-testid="like"]');
     if(like){ var art=like.closest('article'); fetch('/__mock/like',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:art.getAttribute('data-mock-id')})}).then(function(r){return r.json();}).then(function(j){ if(j.toast){toast('<span>'+j.toast+'</span>');return;} like.setAttribute('data-testid','unlike'); }); }
     var fo=e.target.closest('[data-testid$="-follow"]');
-    if(fo && !fo.closest('[data-testid="UserCell"]')){
+    if(fo && !fo.closest('[data-testid="UserCell"]') && fo.getAttribute('data-mock-mode')!=='ignore'){
+      var tid=fo.getAttribute('data-testid');
+      fo.setAttribute('data-testid', tid.replace(/-follow$/,'-unfollow')); fo.textContent='Following';
       fetch('/__mock/follow',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({handle:location.pathname.split('/')[1]})}).then(function(r){return r.json();}).then(function(j){
-        if(j.toast){ toast('<span>'+j.toast+'</span>'); return; }
-        if(j.ignored) return;
-        fo.setAttribute('data-testid', fo.getAttribute('data-testid').replace(/-follow$/,'-unfollow')); fo.textContent='Following';
+        if(j.toast){ setTimeout(function(){ toast('<span>'+j.toast+'</span>'); fo.setAttribute('data-testid', tid); fo.textContent='Follow'; }, 700); }
       });
+      return;
     }
     var un=e.target.closest('[data-testid$="-unfollow"]');
     if(un && !un.closest('[data-testid="UserCell"]')){
@@ -405,9 +410,11 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           const j = JSON.parse(body);
           const h = String(j.handle).toLowerCase();
           if (M.followMode === "limit") return send(200, { toast: "You are unable to follow more people at this time." });
+          if (M.followMode === "revert") return send(200, { toast: "Something went wrong. Try reloading." });
           if (M.followMode === "ignore") return send(200, { ignored: true });
-          M.follows.push(h);
-          if (M.users[h]) M.users[h].iFollow = true;
+          const kept = M.followMode !== "notkept";
+          M.followLog.push({ handle: h, at: Date.now(), kept });
+          if (kept) { M.follows.push(h); if (M.users[h]) M.users[h].iFollow = true; }
           return send(200, { ok: true });
         }
         if (url.pathname === "/__mock/unfollow" && req.method === "POST") {

@@ -190,14 +190,42 @@
     return null;
   }
 
+  // The profile header's relation buttons: never one in a "Who to follow" cell, a post or a dialog.
+  const headerOwn = (b) => !D.closest(b, "userCell") && !D.closest(b, "tweet") && !D.closest(b, "dialog");
   function relationButtons(primary) {
-    const notInList = (b) => !D.closest(b, "userCell");
-    const un = D.qa("unfollowBtnSuffix", primary).find(notInList) || null;
-    const fo = D.qa("followBtnSuffix", primary).find(notInList) || null;
-    const pend = D.qa("pendingBtnSuffix", primary).find(notInList) || null;
+    const un = D.qa("unfollowBtnSuffix", primary).find(headerOwn) || null;
+    const fo = D.qa("followBtnSuffix", primary).find(headerOwn) || null;
+    const pend = D.qa("pendingBtnSuffix", primary).find(headerOwn) || null;
     const any = un || fo || pend;
     const idm = any && (any.getAttribute("data-testid") || "").match(/^(\d+)-/);
     return { un, fo, pend, userId: idm ? idm[1] : null };
+  }
+
+  // Is the rendered profile header @h's? (its name block shows "@h")
+  function profileHeaderIs(h) {
+    const nameEl = D.q("profileUserName", D.q("primaryColumn") || document);
+    const want = "@" + String(h || "").toLowerCase().replace(/^@/, "");
+    return !!nameEl && D.text(nameEl).toLowerCase().split(/\s+/).includes(want);
+  }
+
+  // Your relation to @h as the profile header's own button shows it: "following" | "pending" | "follow" | null (not
+  // rendered), and the Follow button to click. X labels it "Follow @h" / "Following @h" / "Pending @h"; its testid
+  // ends in -follow / -unfollow / -cancel. A label naming @h wins over a testid.
+  function headerFollow(h) {
+    const primary = D.q("primaryColumn") || document;
+    const hh = String(h || "").toLowerCase().replace(/^@/, "");
+    const label = (b) => (b.getAttribute("aria-label") || "").trim().toLowerCase();
+    const labelled = [...primary.querySelectorAll('button[aria-label], [role="button"][aria-label]')].filter(headerOwn);
+    const byLabel = (verb) => labelled.find((b) => label(b) === verb + " @" + hh) || null;
+    const lf = byLabel("following") || byLabel("unfollow"), lp = byLabel("pending"), lo = byLabel("follow");
+    if (lf) return { state: "following", btn: null };
+    if (lp) return { state: "pending", btn: null };
+    if (lo) return { state: "follow", btn: lo };
+    const rb = relationButtons(primary);
+    if (rb.un) return { state: "following", btn: null };
+    if (rb.pend) return { state: "pending", btn: null };
+    if (rb.fo) return { state: "follow", btn: rb.fo };
+    return { state: null, btn: null };
   }
 
   // X's "Follows you" badge as plain text: the line right after "@handle" that is exactly the badge text (a bio
@@ -228,6 +256,7 @@
     const avatarImg = D.q("avatar", primary);
     const avatar = avatarImg ? avatarImg.getAttribute("src") || "" : "";
     const rb = relationButtons(primary);
+    const hf = headerFollow(handle);
     const profile = {
       handle,
       userId: rb.userId,
@@ -238,8 +267,8 @@
       verified: !!D.q("verifiedIcon", nameEl),
       protected: !!D.q("lockIcon", nameEl),
       followsYou: profileFollowsYou(primary, nameEl, handle),
-      youFollow: rb.un ? true : rb.fo || rb.pend ? false : null,
-      followPending: !!rb.pend,
+      youFollow: hf.state === "following" ? true : hf.state ? false : null,
+      followPending: hf.state === "pending",
       defaultAvatar: /default_profile/.test(avatar),
       avatar,
       joinedAt,
@@ -328,5 +357,5 @@
     return { focal, focalIndex: focalIdx, replies: replies.slice(0, 30), canReply: !restricted, myReplies };
   }
 
-  globalThis.SXScrape = { parseTweet, scrapeTweets, scrapeProfile, scrapeUsers, scrapeStatus, articles, relationButtons };
+  globalThis.SXScrape = { parseTweet, scrapeTweets, scrapeProfile, scrapeUsers, scrapeStatus, articles, relationButtons, headerFollow, profileHeaderIs };
 })();

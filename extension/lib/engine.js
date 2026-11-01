@@ -895,20 +895,25 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   }
   const allowLike = likeLimit(settings) > counts.likedToday;
   if (!(await stillRunning())) return "aborted";
-  // Follow first (poster.js): an account you do not follow is followed before anything is liked or typed. No room
-  // under the daily follow cap -> no like and no reply to it now: the item waits until the cap has room, and replies
-  // to accounts you already follow go on meanwhile.
+  // Follow first (poster.js followOnProfile): before anything is liked or typed, the account's profile is opened -
+  // unless it showed Following in the last 24 h - and the account is followed if it is not yet. No room under the daily
+  // follow cap -> no like and no reply to an account you do not follow: the item waits until the cap has room, and
+  // replies to accounts you follow go on meanwhile. (An account your records say you follow is looked at anyway: a
+  // look needs no room.)
   const tgt = (await getTargets())[rec.target];
   const mustFollow = !!(tgt && wantsFollow(tgt, settings));
-  if (mustFollow && followRoom(settings, state) <= 0) {
-    const until = followRoomAt(settings, state);
-    await H.patch(rec.id, (r) => (r.status === rec.status ? { scheduledFor: until, reason: `Waiting to follow @${rec.target} first (daily follow cap reached)` } : null));
-    if (!state.followCapLoggedAt || now() - state.followCapLoggedAt > HOUR) {
+  const room = followRoom(settings, state);
+  const capWait = async () => {
+    const until = followRoomAt(settings, await getState());
+    await H.patch(rec.id, (r) => ([rec.status, HS.POSTING].includes(r.status) ? { status: rec.status, scheduledFor: until, reason: `Waiting to follow @${rec.target} first (daily follow cap reached)` } : null));
+    const st = await getState();
+    if (!st.followCapLoggedAt || now() - st.followCapLoggedAt > HOUR) {
       await patchState({ followCapLoggedAt: now() });
       log("info", "Daily follow cap reached: replies to accounts you don't follow yet wait until it has room (Targets > Edit rules)");
     }
     return "moved";
-  }
+  };
+  if (mustFollow && room <= 0 && !(tgt.rel && tgt.rel.youFollow === true)) return capWait();
   // Compare-and-set: only claim the item if it is still in the state we picked it in (the user may have
   // skipped or edited it a moment ago), and post the freshly read text.
   const prevStatus = rec.status;
@@ -920,10 +925,11 @@ async function postOne(rec, { tabId, settings, me, counts }) {
   });
   if (!claimed) return "gone";
   const shouldStop = async () => !(await stillRunning());
-  const pctx = { tabId, settings, me, allowLike, shouldStop, followFirst: mustFollow };
+  const pctx = { tabId, settings, me, allowLike, shouldStop, followFirst: mustFollow, canFollow: room > 0 };
   const r = await postReply(claimed, pctx);
   if (pctx.followResult) await recordFollow(rec.target, pctx.followResult);
   const ts = now();
+  if (r.capWait) return capWait();
   if (r.aborted) {
     await H.patch(rec.id, { status: prevStatus, reason: "Posting interrupted by Pause/Stop - not posted", ...(r.liked ? { liked: true, likedAt: ts } : {}) });
     log("info", `Posting to @${rec.target} interrupted by you before submitting`);
@@ -951,7 +957,7 @@ async function postOne(rec, { tabId, settings, me, counts }) {
       ? { status: HS.SKIPPED, followTries: tries, reason: `Could not follow @${rec.target} first (${r.reason}) - not commented` }
       : { status: prevStatus, followTries: tries, scheduledFor: ts + humanDelay(8 * MIN, 15 * MIN), reason: `Will retry: following @${rec.target} first did not work (${r.reason})` });
     await patchState({ nextCommentAt: ts + humanDelay(2 * MIN, 4 * MIN) });
-    log("warn", `Could not follow @${rec.target} first (${r.reason}) - not commented${last ? "" : "; will try again"}`);
+    log("warn", `Could not follow @${rec.target} first (${r.reason}${r.detail ? ": " + truncate(r.detail, 120) : ""}) - not commented${last ? "" : "; will try again"}`);
     return "retry";
   }
   if (r.retry) {
@@ -965,7 +971,9 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     return "retry";
   }
   if (r.ok) {
-    await H.patch(rec.id, { status: HS.POSTED, postedAt: ts, replyUrl: r.replyUrl || "", replyId: r.replyId || "", liked: !!r.liked, likedAt: r.liked ? ts : null, reason: r.already ? "Reply was already in the thread" : "" });
+    // follow: what follow-first saw right before this reply ("followed" now / "already" following, both on the profile).
+    const follow = ["followed", "already"].includes(pctx.followResult) ? pctx.followResult : null;
+    await H.patch(rec.id, { status: HS.POSTED, postedAt: ts, replyUrl: r.replyUrl || "", replyId: r.replyId || "", liked: !!r.liked, likedAt: r.liked ? ts : null, reason: r.already ? "Reply was already in the thread" : "", ...(follow ? { follow, followCheckedAt: ts } : {}) });
     await patchState({ ...afterPost(settings, state, ts), consecutiveFailures: 0, lastLikeAt: r.liked ? ts : state.lastLikeAt, internalErrors: 0 });
     await updateTargets((all) => {
       const t = all[rec.target];

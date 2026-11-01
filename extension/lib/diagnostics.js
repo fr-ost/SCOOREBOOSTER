@@ -1,10 +1,12 @@
 // ScoreX - diagnostics self-test: opens your X home timeline, your profile and your followers list in the
 // worker tab and checks that ScoreX can still read them (the selectors match, the right account is logged in,
-// X's "Follows you" badge is visible on your followers). Read-only: nothing is clicked or typed. Runs under the
-// job lease, so it never overlaps a running check, post or discovery.
+// X's "Follows you" badge is visible on your followers), then one of your targets' profiles, where follow first
+// needs the Follow / Following button. Read-only: nothing is clicked or typed. Runs under the job lease, so it never
+// overlaps a running check, post or discovery.
 
 import { CMD } from "./constants.js";
-import { getSettings, log, patchState } from "./store.js";
+import { getSettings, getTargets, log, patchState } from "./store.js";
+import { followStatus, FS } from "./targets.js";
 import { workerTab, navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
 import { withLease, stop } from "./engine.js";
@@ -73,6 +75,31 @@ export async function runSelfTest() {
       if (p.id === "home" && r.counts && !r.counts.tweet && r.counts.emptyState) { add(p.id, p.label, true, "Your timeline is empty (nothing to read)"); continue; }
       add(p.id, p.label, !missing.length, missing.length ? `Not found: ${missing.join(", ")} - X may have changed its page (Settings > Selector overrides)` : summarize(r.counts));
     }
+    // Follow first: the Follow / Following button in a target's profile header (read, never clicked).
+    const fh = await followTestProfile(me);
+    if (fh) {
+      const label = "Follow button (follow first)";
+      const nav = await navigate(tabId, `https://x.com/${fh}`, { purpose: "diagnostics" });
+      if (nav.aborted) return { ok: false, aborted: true, error: "Stopped by Pause/Stop before the test finished", checks, at: now() };
+      if (!nav.ok) add("follow", label, false, nav.budget ? "Not loaded: the X page-load budget (Safety) is used up - try again later" : `@${fh}'s profile did not load`);
+      else {
+        const w = await waitForPage(tabId, ["profileUserName", "emptyState"], 20000);
+        const v = pageVerdict(w.page, settings);
+        if (v && v.stop) {
+          add("follow", label, false, `X shows a problem: ${v.stop}${v.detail ? " (" + v.detail + ")" : ""}`);
+          await stop(v.stop, v.detail || "Seen during the self-test").catch(() => {});
+          return { ok: true, checks, stop: v.stop, at: now() };
+        }
+        if (v && v.notFound) add("follow", label, true, `@${fh}: the profile was not found (nothing to check)`);
+        else {
+          const fs = await send(tabId, CMD.FOLLOW_STATE, { handle: fh, waitMs: 8000 }, 30000);
+          if (fs && fs.ok && fs.youFollow === true) add("follow", label, true, `@${fh}'s profile shows "Following" (you follow this account): ScoreX reads the button`);
+          else if (fs && fs.ok && fs.pending) add("follow", label, true, `@${fh}'s profile shows a pending follow request: ScoreX reads the button`);
+          else if (fs && fs.ok && fs.youFollow === false) add("follow", label, true, `@${fh}'s profile shows "Follow": ScoreX follows an account like this before liking or replying`);
+          else add("follow", label, false, `No Follow / Following button found on @${fh}'s profile - follow first cannot work (X may have changed its page)`);
+        }
+      }
+    }
     return { ok: true, checks, at: now() };
   });
   if (res && res.busy) return { ok: false, error: "ScoreX is busy in the X tab - try again in a minute (or pause it first)" };
@@ -83,6 +110,17 @@ export async function runSelfTest() {
     await patchState({ lastSelfTest: { at: res.at || now(), ok: !failedN && !res.stop, checks: res.checks.slice(0, 20), stop: res.stop || null } }).catch(() => {});
   }
   return res;
+}
+
+// The profile for the follow-button check: a target that does not follow you and that you do not follow (the button
+// then reads Follow), else any target that does not follow you, else any target. null without targets.
+async function followTestProfile(me) {
+  const all = Object.values(await getTargets()).filter((t) => t && t.handle && t.handle !== me && t.enabled !== false && !(t.rel && t.rel.gone));
+  const active = all.filter((t) => followStatus(t) === FS.ACTIVE);
+  const pool = active.length ? active : all;
+  const notFollowed = pool.filter((t) => !(t.rel && t.rel.youFollow === true));
+  const pick = (notFollowed.length ? notFollowed : pool)[0];
+  return pick ? pick.handle : null;
 }
 
 function summarize(counts) {

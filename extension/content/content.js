@@ -56,7 +56,7 @@
     async closeComposer() { return A.closeComposer(); },
     async submitReply(m) { return A.submitReply(m); },
     async replyResult(m) { return A.replyResult(m); },
-    async followState() { return A.followState(); },
+    async followState(m) { return A.followState(m || {}); },
     async unfollow(m) { return A.unfollow(m); },
     async follow(m) { return A.follow(m); },
     async replyStats(m) { return A.replyStats(m); },

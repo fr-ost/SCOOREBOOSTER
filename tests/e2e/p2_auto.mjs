@@ -52,6 +52,9 @@ try {
   const posted = await H.waitFor(async () => (await H.history()).find((x) => x.id === q.id && x.status === "posted"), "auto posted", 120000);
   assert(M.replies.some((r) => r.inReplyTo === p2.id), "Full auto posted the reply");
   assert(posted.liked && M.likes.includes(p2.id), "like + comment combo liked the post first");
+  const fa = M.followLog.find((f) => f.handle === "alice" && f.kept);
+  const ra = M.replies.find((r) => r.inReplyTo === p2.id);
+  assert(fa && ra && fa.at < ra.at && M.users.alice.iFollow, "follow first: alice was followed (and X kept it) before the like and the reply");
   s = (await H.msg("getStatus")).status;
   assert(s.today.liked === 1 && s.today.posted === 1, "today's counters: 1 posted, 1 liked");
 
@@ -191,6 +194,29 @@ try {
   await H.runNow();
   const sg = await H.waitFor(async () => (await H.history()).find((x) => x.id === qg.id && x.status === "skipped"), "thread reply skipped", 120000);
   assert(/reply_in_thread/.test(sg.reason) && !M.replies.some((r) => r.inReplyTo === pg.id), "replies inside threads are skipped at posting time");
+
+  // ---- follow first: X shows Following but does not keep the follow -> no like, no reply; once X keeps it, the
+  //      follow comes first and the reply after it ----
+  M.addUser("jack", { followers: 22000 });
+  await H.msg("targetsUpsert", { rows: ["jack"], defaults: { tier: 2 } });
+  await H.markNotFollowing(["jack"]);
+  M.followMode = "notkept";
+  const pj = M.addPost("jack", "Hot take: most growth teams over-invest in top of funnel and starve activation.", 2);
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: 0, consecutiveFailures: 0 });
+  await H.runNow();
+  const qj = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pj.id && x.status === "queued"), "queued pj", 90000);
+  await H.patchHistory(qj.id, { scheduledFor: 0 });
+  await H.runNow();
+  const wj = await H.waitFor(async () => (await H.history()).find((x) => x.id === qj.id && /follow_not_kept/.test(x.reason || "")), "follow not kept", 150000);
+  assert(wj.status === "queued" && !M.replies.some((r) => r.inReplyTo === pj.id) && !M.likes.includes(pj.id) && !M.users.jack.iFollow, "X did not keep the follow: no like and no reply to jack (" + wj.reason + ")");
+  M.followMode = "ok";
+  await H.patchHistory(qj.id, { scheduledFor: 0 });
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: 0, consecutiveFailures: 0 });
+  await H.runNow();
+  const pjDone = await H.waitFor(async () => (await H.history()).find((x) => x.id === qj.id && x.status === "posted"), "jack posted after the follow", 150000);
+  const fj = M.followLog.find((f) => f.handle === "jack" && f.kept);
+  const rj = M.replies.find((r) => r.inReplyTo === pj.id);
+  assert(fj && rj && fj.at < rj.at && M.users.jack.iFollow, "follow first: jack followed (X kept it) before the reply (" + pjDone.follow + ")");
 
   // ---- catch-up: an account's latest earlier posts (from before ScoreX ran) get comments too ----
   M.addUser("ivy", { followers: 30000 });

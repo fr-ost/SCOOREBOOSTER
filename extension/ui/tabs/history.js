@@ -294,6 +294,8 @@ export default {
     function resultsChips(r) {
       const res = r.results || {};
       const parts = [];
+      if (r.follow === "followed") parts.push(badge("followed first", "green", "ScoreX followed this account right before liking and replying (its profile, reloaded, showed Following)"));
+      else if (r.follow === "already") parts.push(badge("following", "grey", "Right before replying, the account's profile showed you already follow it"));
       if (r.liked) parts.push(badge("liked post", "grey", "ScoreX liked the post before replying"));
       if (res.likes != null) parts.push(h("span", { class: "small tnum", title: "Likes on your reply" }, `${res.likes}♥`));
       if (res.replies != null) parts.push(h("span", { class: "small tnum", title: "Replies to your reply" }, `${res.replies} repl${res.replies === 1 ? "y" : "ies"}`));
@@ -348,7 +350,9 @@ export default {
           ["Created", fmtDateTime(r.createdAt)], r.scheduledFor ? ["Scheduled", fmtDateTime(r.scheduledFor)] : null, r.postedAt ? ["Posted", fmtDateTime(r.postedAt)] : null, ["Mode", r.mode === "auto" ? "Full auto" : r.mode ? "Review" : ""]])),
         h("div", { class: "drawer-sec" }, h("span", { class: "cap" }, "Results"), r.status === HS.POSTED ? kv([
           ["Likes", res.likes != null ? fmtNum(res.likes) : null], ["Replies", res.replies != null ? fmtNum(res.replies) : null], ["Views", views(r) != null ? fmtNum(views(r)) : null],
-          ["Author replied", res.authorReplied ? "yes" : "no"], ["Followed back", res.followedBack ? "yes" : "no"], ["Liked the post", r.liked ? "yes" : "no"], ["Checked", res.checkedAt ? fmtDateTime(res.checkedAt) : "not yet"]]) : h("p", { class: "muted small" }, "Results are read after a comment is posted.")),
+          ["Author replied", res.authorReplied ? "yes" : "no"], ["Followed back", res.followedBack ? "yes" : "no"], ["Liked the post", r.liked ? "yes" : "no"],
+          r.follow ? ["Follow first", r.follow === "followed" ? "followed right before replying" : "already following (checked on the profile)"] : null,
+          ["Checked", res.checkedAt ? fmtDateTime(res.checkedAt) : "not yet"]]) : h("p", { class: "muted small" }, "Results are read after a comment is posted.")),
         h("div", { class: "drawer-sec" }, h("span", { class: "cap" }, "Generation"), kv([
           ["Model", h("span", { class: "mono" }, r.modelName || r.modelId || "-")], ["Reasoning effort", r.effort], ["Preset", PRESET_LABEL[r.preset] || r.preset], ["Tone", toneName(r.tone, s)],
           ["Tokens in / cached / out / reasoning", h("span", { class: "mono" }, `${fmtTokens(num(tk.input))} / ${fmtTokens(num(tk.cached))} / ${fmtTokens(num(tk.output))} / ${fmtTokens(num(tk.reasoning))}`)],

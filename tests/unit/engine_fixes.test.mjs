@@ -201,6 +201,7 @@ describe("engine fixes (review round 1)", () => {
       const page = { ...env.page, state: errorPage && !status ? "error_page" : "ok", url: tab.url };
       if (msg.sx === "waitFor") return status ? { ok: false, settled: "loading", page } : { ok: true, key: msg.keys[0], page };
       if (msg.sx === "scrapeTweets") return { ok: true, tweets: [], articleCount: 0, page };
+      if (msg.sx === "follow") return { ok: true, already: true, page }; // follow first: the profile shows Following
       return { ok: true, page };
     };
     const rec = await H.put(H.newRecord({ status: HS.QUEUED, target: "alice", group: "B", postId: POST_ID, postUrl: `https://x.com/alice/status/${POST_ID}`, comment: "Deferring company size is underrated for early funnels", attempts: 1, postCreatedAt: Date.now() - 5 * MIN, scheduledFor: 0 }));

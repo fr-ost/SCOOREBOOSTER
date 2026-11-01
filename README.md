@@ -302,15 +302,20 @@ ScoreX only comments on accounts that **don't follow you**. Import a list of 100
    Targets screen (**Edit rules**).
 
 **Follow them first** (Targets > Edit rules, on): a reply from someone who does not follow you is easy to ignore, so
-ScoreX **follows an account before it likes or replies to it**. For an account you don't follow it opens the profile
-first (the one page where X always shows Follow / Following), checks whether you already follow it, clicks Follow if
-not, and waits until X shows "Following"; only then does it open the post, like it and reply. If the follow does not
-go through (no Follow button, X does not confirm), nothing is liked or typed: the reply waits, tries again, and is
-skipped after 3 tries. When today's follows are used up (100 a day by default, up to 300; X itself allows 400),
-replies to accounts you don't follow wait until there is room, and replies to accounts you follow go on. X refusing a
-follow ("unable to follow more people") is a rate-limit stop. While idle, ScoreX also follows targets ahead of time
-from their profiles, one every 3-8 minutes. A protected account gets a follow request. Accounts that already follow
-you are not touched. Note: with Cleanup on, accounts you followed are unfollowed after its
+ScoreX **follows an account before it likes or replies to it**. Before the like and the reply it opens the account's
+profile (the one page where X always shows Follow / Following) and checks whether you follow it. If not, it clicks
+Follow and then makes sure X **kept** the follow: X shows "Following" the moment the button is clicked, before its
+server has answered, and turns it back when it refuses. So ScoreX watches the button for a few seconds, then
+**reloads the profile**, and only when the fresh page still shows "Following" does it open the post, like it and
+reply. If the follow does not go through (no Follow button, X turns it back, the reloaded profile shows Follow),
+nothing is liked or typed: the reply waits, tries again, and is skipped after 3 tries. "You follow this account" is
+trusted for 24 hours after its profile showed it; after that ScoreX looks again before the next reply (records from
+earlier versions, which never looked, are checked too). When today's follows are used up (100 a day by default, up
+to 300; X itself allows 400), replies to accounts you don't follow wait until there is room, and replies to accounts
+you follow go on. X refusing a follow ("unable to follow more people") is a rate-limit stop. While idle, ScoreX also
+follows targets ahead of time from their profiles, one every 3-8 minutes. A protected account gets a follow request.
+Accounts that already follow you are not touched. Every posted comment shows **followed first** (or **following**)
+in History, and the Activity log says "Followed @name" or "@name: you already follow this account" each time. Note: with Cleanup on, accounts you followed are unfollowed after its
 days without a follow-back; keep those days at or above the give-up days if you want the follow to last while
 ScoreX is still replying.
 
@@ -462,8 +467,10 @@ for example:
 
 **Settings > Diagnostics** runs a quick check (permissions, storage, key, handle, the "Follows you" badge, the
 engine) and a **live X test**: it opens your home timeline, profile and followers list in the X tab (about
-30 seconds, never clicks or types) and shows which selectors still match. **Copy report** gives a redacted
-JSON (no keys, no other accounts' handles) to share when asking for help.
+30 seconds, never clicks or types) and shows which selectors still match. It also opens one of your targets'
+profiles and checks that ScoreX can see its **Follow / Following button** (what follow first clicks), without
+clicking it. **Copy report** gives a redacted JSON (no keys, no other accounts' handles) to share when asking for
+help.
 
 The patterns are written for an English X interface. If you use X in another language, add your language's
 wording to the `text` patterns (captcha, rate limit, "Your post was sent", ...).

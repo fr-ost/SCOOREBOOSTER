@@ -16,6 +16,7 @@ import { CMD, STOP, HARD } from "./constants.js";
 import { getState, patchState, getTargets, updateTargets, updateBlacklist, log } from "./store.js";
 import { navigate, send, waitForPage } from "./tabs.js";
 import { pageVerdict } from "./guard.js";
+import { followOnProfile } from "./poster.js";
 import { refreshProfile } from "./watcher.js";
 import { processFollowBacks } from "./learning.js";
 import { applyFollow, followStatus, followDays, FS } from "./targets.js";
@@ -277,9 +278,11 @@ export async function followStep({ tabId, settings, me, shouldStop }) {
 
 // ---------- follow first ----------
 // A reply from someone who does not follow you is easy to ignore, so (settings.follow.followFirst) ScoreX follows a
-// target you do not follow: on its post page right before replying (lib/poster.js), and otherwise from its profile in
-// the background, one account per run, 3-8 minutes apart, within settings.follow.followsPerDay (rolling 24 h,
-// HARD.dailyFollows at most). Only accounts ScoreX comments on (they do not follow you); X warnings stop it like any
+// target before it likes or replies to it: on the target's profile, right before the like and the reply (lib/poster.js
+// followOnProfile), and otherwise in the background, one account per run, 3-8 minutes apart, within
+// settings.follow.followsPerDay (rolling 24 h, HARD.dailyFollows at most). A follow counts only once a fresh load of
+// the profile shows Following; a record that you follow an account is trusted for 24 h after its profile showed it,
+// then ScoreX looks again. Only accounts ScoreX comments on (they do not follow you); X warnings stop it like any
 // other action.
 
 // Follows left in the rolling 24 h window.
@@ -297,12 +300,32 @@ export function followRoomAt(settings, st, ts = now()) {
   if (!cap || recent.length < cap) return ts + HOUR;
   return recent[recent.length - cap] + DAY + randInt(1, 5) * MIN;
 }
-// Should this target be followed now? (you do not follow it, and no follow request is waiting)
-export function wantsFollow(t, settings) {
+// How long a look at the profile that showed "Following" is trusted: after that, follow-first looks again before the
+// next like or reply (you may have unfollowed by hand, or X may have dropped the follow).
+export const FOLLOW_TRUST_MS = DAY;
+// Was "you follow this account" seen on its profile recently enough to like and reply without looking again?
+export function followConfirmed(t, ts = now()) {
   const rel = (t && t.rel) || {};
-  return !!(settings.follow.followFirst && t && t.enabled !== false && followStatus(t) === FS.ACTIVE && rel.youFollow !== true && !rel.followRequestedAt);
+  if (rel.youFollow !== true || !rel.youFollowVerifiedAt) return false;
+  const age = ts - rel.youFollowVerifiedAt;
+  return age >= -MIN && age < FOLLOW_TRUST_MS;
 }
-// Record a follow-first outcome on the target ("followed" | "already" | "pending" | "missing").
+// Must follow-first open this target's profile before liking or replying to it? Yes unless its profile showed
+// Following in the last 24 h (a record that you follow it is not enough on its own: ScoreX looks) or a follow request
+// is waiting.
+export function wantsFollow(t, settings, ts = now()) {
+  const rel = (t && t.rel) || {};
+  return !!(settings.follow.followFirst && t && t.enabled !== false && followStatus(t) === FS.ACTIVE && !followConfirmed(t, ts) && !rel.followRequestedAt);
+}
+// Record a follow-first outcome on the target (lib/poster.js followOnProfile):
+//   "followed"   Follow clicked, and a fresh load of the profile shows Following
+//   "already"    the profile showed Following before anything was clicked
+//   "pending"    a follow request was sent (protected account); "requested": one was already waiting
+//   "clicked"    Follow clicked, but X's answer could not be confirmed (the profile is looked at again next time)
+//   "not_kept"   Follow clicked, and the profile shows Follow again after a reload: X did not keep it
+//   "missing"    nothing clicked (no Follow button, the profile did not load)
+// Every click counts toward the daily follow cap.
+export const FOLLOW_CLICKS = new Set(["followed", "pending", "clicked", "not_kept"]);
 export async function recordFollow(handle, result, ts = now()) {
   if (!result) return;
   await updateTargets((all) => {
@@ -311,19 +334,32 @@ export async function recordFollow(handle, result, ts = now()) {
     t.rel = t.rel || {};
     if (result === "followed" || result === "already") {
       t.rel.youFollow = true;
+      t.rel.youFollowVerifiedAt = ts;
       if (!t.rel.youFollowSince) t.rel.youFollowSince = ts;
       if (result === "followed") t.rel.followedByScoreXAt = ts;
-    } else if (result === "pending") t.rel.followRequestedAt = ts;
+    } else if (result === "pending" || (result === "requested" && !t.rel.followRequestedAt)) {
+      t.rel.followRequestedAt = ts;
+    } else if (result === "not_kept") {
+      t.rel.youFollow = false;
+      t.rel.youFollowVerifiedAt = null;
+      t.rel.youFollowSince = null;
+      t.rel.followNotKeptAt = ts;
+    } else if (result === "clicked") {
+      t.rel.youFollowVerifiedAt = null;
+    }
     t.rel.followTriedAt = ts;
     return all;
   });
-  if (result === "followed" || result === "pending") {
-    await patchState((s) => ({ lastFollowAt: ts, followTimes: [...(s.followTimes || []).filter((x) => ts - x < DAY), ts] }));
-    log("info", result === "pending" ? `Sent a follow request to @${handle} (protected account)` : `Followed @${handle}`);
-  }
+  if (FOLLOW_CLICKS.has(result)) await patchState((s) => ({ lastFollowAt: ts, followTimes: [...(s.followTimes || []).filter((x) => ts - x < DAY), ts] }));
+  if (result === "followed") log("info", `Followed @${handle} (a fresh load of its profile shows Following)`);
+  else if (result === "pending") log("info", `Sent a follow request to @${handle} (protected account)`);
+  else if (result === "already") log("info", `@${handle}: you already follow this account (checked on its profile)`);
+  else if (result === "not_kept") log("warn", `X did not keep the follow on @${handle}: its profile shows Follow again after a reload`);
+  else if (result === "clicked") log("warn", `Clicked Follow on @${handle}, but could not confirm that X kept it`);
 }
 
-// Background: follow one target you do not follow from its profile page.
+// Background: follow one target you do not follow from its profile page (or look at one whose "you follow" record
+// was never checked on its profile), so replies to it do not have to wait for that later.
 export async function followFirstStep({ tabId, settings, me, shouldStop }) {
   const ts = now();
   const st = await getState();
@@ -331,29 +367,16 @@ export async function followFirstStep({ tabId, settings, me, shouldStop }) {
   if (st.lastFollowAt && ts - st.lastFollowAt < (st.nextFollowGapMin || 3) * MIN) return null;
   const targets = await getTargets();
   const pick = Object.values(targets)
-    .filter((t) => wantsFollow(t, settings) && !(t.rel.followTriedAt && ts - t.rel.followTriedAt < DAY))
+    .filter((t) => wantsFollow(t, settings, ts) && !(t.rel.youFollow === true && t.rel.youFollowVerifiedAt) && !(t.rel.followTriedAt && ts - t.rel.followTriedAt < DAY))
     .sort((a, b) => (b.priority || 0) - (a.priority || 0) || (Number(a.tier) || 2) - (Number(b.tier) || 2))[0];
   if (!pick) return null;
   if (shouldStop && (await shouldStop())) return { did: "aborted" };
-  const nav = await navigate(tabId, `https://x.com/${pick.handle}`, NAV("follow"));
-  if (!nav.ok && (nav.budget || nav.aborted)) return null;
-  if (!nav.ok) { await recordFollow(pick.handle, "missing"); return { did: "follow_first" }; }
-  const w = await waitForPage(tabId, ["profileUserName", "emptyState"], 20000);
-  const v = pageVerdict(w.page, settings);
-  if (v && v.stop) return v;
-  if (v && v.notFound) { await recordFollow(pick.handle, "missing"); return { did: "follow_first" }; }
-  await sleep(humanDelay(1500, 3500));
-  if (shouldStop && (await shouldStop())) return { did: "aborted" };
-  const acct = settings.account || {};
-  const expectMe = acct.verifyAccount && acct.handle ? String(acct.handle).trim().replace(/^@+/, "").toLowerCase() : undefined;
-  const r = await send(tabId, CMD.FOLLOW, { handle: pick.handle, expectMe }, 20000);
-  const v2 = pageVerdict(r.page, settings);
-  if (v2 && v2.stop) return v2;
-  if (r.error === "wrong_account") return { stop: STOP.WRONG_ACCOUNT, detail: `Logged in as @${r.me || "?"}, expected @${expectMe}` };
-  if (r.error === "account_unknown") return { did: "follow_first" };
-  if (r.state === "unknown_prompt") return { stop: STOP.UNKNOWN_PROMPT, detail: r.detail || "X showed a prompt ScoreX does not know" };
-  if (r.state) return { stop: r.state === "rate_limit" ? STOP.RATE_LIMIT : STOP.WARNING, detail: r.detail || "X warning after follow" };
-  await recordFollow(pick.handle, r.ok ? (r.pending ? "pending" : r.already ? "already" : "followed") : "missing");
+  const r = await followOnProfile(tabId, pick.handle, settings, { stopped: shouldStop || (async () => false) });
+  if (r.result) await recordFollow(pick.handle, r.result);
+  if (r.aborted) return { did: "aborted" };
+  if (r.stop) return { stop: r.stop, detail: r.detail };
+  if (r.budget) return null;
+  if (r.gone) await recordFollow(pick.handle, "missing");
   await patchState({ nextFollowGapMin: randInt(3, 8) });
   return { did: "follow_first" };
 }

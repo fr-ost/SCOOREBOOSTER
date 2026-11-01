@@ -105,6 +105,8 @@ async function cleanup(tabId) {
  *   { ok:false, fail:true, reason }       -> counts toward "repeated post failures"
  *   { ok:false, retry:true, reason }      -> the page did not load/render; the item stays queued
  *   { ok:false, retry:true, followFailed:true, reason } -> follow first did not work: nothing was liked or typed
+ *   { ok:false, capWait:true }            -> you do not follow the account and the daily follow cap is used up:
+ *                                            nothing was clicked, liked or typed
  *   { ok:false, retry:true, soft:"account_unknown", reason:"account_unknown" }
  *                                         -> the logged-in account could not be verified; nothing was liked,
  *                                            typed or submitted after that (not a posting failure)
@@ -123,19 +125,22 @@ export async function postReply(rec, ctx) {
   const text = String(rec.comment || "").trim();
   if (!text) return { ok: false, skip: true, reason: "empty_comment" };
 
-  // 1) Follow first (ctx.followFirst: settings.follow.followFirst and you do not follow this account): before anything
-  //    is liked or typed, open the account's profile - the one page where X always shows "Follow" / "Following" for
-  //    it - and follow it unless it already shows Following. Not confirmed -> no like and no reply now: the item waits
-  //    and tries again (engine). The outcome is left in ctx.followResult for the engine.
+  // 1) Follow first (ctx.followFirst: settings.follow.followFirst, and "you follow" was not confirmed on the account's
+  //    profile in the last 24 h): before anything is liked or typed, open the account's profile - the one page where X
+  //    always shows "Follow" / "Following" for it - and follow it unless it already shows Following; a follow counts
+  //    once a reload of the profile shows it (followOnProfile). Not confirmed -> no like and no reply now: the item
+  //    waits and tries again (engine). ctx.canFollow false (daily follow cap used up): only a look - an account you
+  //    do not follow waits ({ capWait }). The outcome is left in ctx.followResult for the engine.
   if (ctx.followFirst) {
-    const f = await followFromProfile(tabId, rec.target, settings, want, stopped);
+    const f = await followOnProfile(tabId, rec.target, settings, { stopped, canFollow: ctx.canFollow !== false });
+    if (f.result) ctx.followResult = f.result;
     if (f.aborted) return { ok: false, aborted: true };
     if (f.stop) return { ok: false, stop: f.stop, detail: f.detail };
     if (f.budget) return { ok: false, retry: true, budget: true, reason: "page_budget", until: f.until };
     if (f.soft) return accountUnknown(false);
     if (f.gone) return { ok: false, skip: true, reason: "account_not_found" };
-    ctx.followResult = f.result;
-    if (!f.ok) return { ok: false, retry: true, followFailed: true, reason: "follow_first_" + f.reason };
+    if (f.capWait) return { ok: false, capWait: true };
+    if (!f.ok) return { ok: false, retry: true, followFailed: true, reason: "follow_first_" + f.reason, detail: f.detail || "" };
     await sleep(humanDelay(1200, 3200));
     if (await stopped()) return { ok: false, aborted: true };
   }
@@ -288,12 +293,61 @@ export async function postReply(rec, ctx) {
   }
 }
 
-// Follow an account from its profile page (x.com/<handle>): X always shows its "Follow" / "Following" button there,
-// unlike a post page, where it may only be in a sidebar that is not rendered in a narrow window. Already following
-// -> nothing is clicked. Returns { ok:true, result: "followed" | "already" | "pending" } | { ok:false, result:
-// "missing", reason } | { stop, detail } | { aborted } | { budget, until } | { soft: "account_unknown" } | { gone }.
-async function followFromProfile(tabId, handle, settings, want, stopped) {
+// Follow-first on the account's profile page (x.com/<handle>), where X always shows its Follow / Following button.
+// Already following -> nothing is clicked ("already"). Otherwise Follow is clicked, and the follow only counts once a
+// fresh load of the profile shows Following: X shows Following the moment the button is clicked, before its server
+// has answered, and can still refuse it. canFollow false (the daily follow cap is used up): the profile is only
+// looked at, and when it shows Follow nothing is clicked ({ capWait }).
+// Returns { ok:true, result: "followed" | "already" | "pending" | "requested" }
+//       | { ok:false, result: "missing" | "clicked" | "not_kept", reason, detail }
+//       | { stop, detail, result? } | { aborted, result? } | { budget, until } | { soft: "account_unknown" } | { gone }
+//       | { capWait }   (result: what to record with lib/follow.js recordFollow)
+export async function followOnProfile(tabId, handle, settings, { stopped = async () => false, canFollow = true, settleMs } = {}) {
+  const want = expectedHandle(settings);
   if (await stopped()) return { aborted: true };
+  const open = await openProfile(tabId, handle, settings, want);
+  if (!open.ok) return open;
+  await sleep(humanDelay(1500, 3500)); // a look at the profile first, as a person would
+  if (await stopped()) return { aborted: true };
+  if (!canFollow) {
+    const st = await send(tabId, CMD.FOLLOW_STATE, { handle, waitMs: 8000 }, 30000);
+    const v = verdictOf(st, settings);
+    if (v) return { stop: v.stop, detail: v.detail };
+    if (st.ok && st.youFollow === true) return { ok: true, result: "already" };
+    if (st.ok && st.pending) return { ok: true, result: "requested" };
+    if (st.ok && st.youFollow === false) return { capWait: true };
+    return { ok: false, result: "missing", reason: st.error || "follow_button_missing" };
+  }
+  const fr = await send(tabId, CMD.FOLLOW, { handle, expectMe: want || undefined, ...(settleMs != null ? { settleMs } : {}) }, 45000);
+  const clicked = fr && fr.clicked ? { result: "clicked" } : {};
+  const v2 = verdictOf(fr, settings);
+  if (v2) return { stop: v2.stop, detail: v2.detail, ...clicked };
+  const ar = accountRefusal(fr, want);
+  if (ar && ar.stop) return { stop: ar.stop, detail: ar.detail };
+  if (ar) return { soft: "account_unknown" };
+  if (fr.state) return { stop: stopFor(fr.state), detail: fr.detail || "X warning after follow", ...clicked };
+  if (fr.ok && fr.already) return { ok: true, result: fr.pending ? "requested" : "already" };
+  if (!fr.ok) return { ok: false, result: fr.clicked ? "clicked" : "missing", reason: fr.error || "follow_not_confirmed", detail: fr.detail || "" };
+  // X kept showing Following for a few seconds: confirm on a fresh load of the profile that it kept the follow.
+  await sleep(humanDelay(1200, 2500));
+  if (await stopped()) return { aborted: true, result: "clicked" };
+  const again = await openProfile(tabId, handle, settings, want);
+  if (!again.ok) {
+    if (again.stop || again.aborted) return { ...again, result: "clicked" };
+    return { ok: false, result: "clicked", reason: "follow_unverified" };
+  }
+  const chk = await send(tabId, CMD.FOLLOW_STATE, { handle, waitMs: 8000 }, 30000);
+  const v3 = verdictOf(chk, settings);
+  if (v3) return { stop: v3.stop, detail: v3.detail, result: "clicked" };
+  if (chk.ok && chk.youFollow === true) return { ok: true, result: "followed" };
+  if (chk.ok && chk.pending) return { ok: true, result: "pending" };
+  if (chk.ok && chk.youFollow === false) return { ok: false, result: "not_kept", reason: "follow_not_kept" };
+  return { ok: false, result: "clicked", reason: "follow_unverified" };
+}
+
+// Open x.com/<handle> and wait for its header: { ok:true } | { stop, detail } | { gone } | { aborted } | { budget, until }
+// | { soft: "account_unknown" } | { ok:false, result: "missing", reason }.
+async function openProfile(tabId, handle, settings, want) {
   const nav = await navigate(tabId, `https://x.com/${handle}`, { purpose: "follow", timeoutMs: 45000 });
   if (nav.aborted) return { aborted: true };
   if (nav.budget) return { budget: true, until: nav.until };
@@ -307,17 +361,7 @@ async function followFromProfile(tabId, handle, settings, want, stopped) {
   const av = accountVerdict(w.page, want);
   if (av && av.stop) return { stop: av.stop, detail: av.detail };
   if (av) return { soft: "account_unknown" };
-  await sleep(humanDelay(1500, 3500)); // a look at the profile first, as a person would
-  if (await stopped()) return { aborted: true };
-  const fr = await send(tabId, CMD.FOLLOW, { handle, expectMe: want || undefined }, 20000);
-  const v2 = verdictOf(fr, settings);
-  if (v2) return { stop: v2.stop, detail: v2.detail };
-  const ar = accountRefusal(fr, want);
-  if (ar && ar.stop) return { stop: ar.stop, detail: ar.detail };
-  if (ar) return { soft: "account_unknown" };
-  if (fr.state) return { stop: stopFor(fr.state), detail: fr.detail || "X warning after follow" };
-  if (fr.ok) return { ok: true, result: fr.pending ? "pending" : fr.already ? "already" : "followed" };
-  return { ok: false, result: "missing", reason: fr.error || "follow_not_confirmed" };
+  return { ok: true };
 }
 
 // Stops that mean X refused the action outright (nothing was posted).
