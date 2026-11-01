@@ -7,6 +7,7 @@ import { db, STORES } from "./db.js";
 import { now, normalizeHandle } from "./util.js";
 import { newTarget, sanitizePatch } from "./targets.js";
 import { sumCalls } from "./costs.js";
+import { importEntries } from "./followbacks.js";
 
 // Size limits for imported files (an imported file is untrusted; chrome.storage.local has a 10 MB quota that the
 // engine's own state shares, so a huge import must not fill it).
@@ -19,7 +20,7 @@ export async function exportData(parts = ["settings", "targets", "history"]) {
   if (parts.includes("settings")) out.settings = await getSettings();
   if (parts.includes("targets")) { out.targets = await load(K.targets, {}); out.blacklist = await load(K.blacklist, {}); }
   if (parts.includes("candidates")) out.candidates = await load(K.candidates, {});
-  if (parts.includes("history")) out.history = await H.all();
+  if (parts.includes("history")) { out.history = await H.all(); out.followbacks = await load(K.followbacks, []); }
   if (parts.includes("learning")) out.learning = await load(K.learning, {});
   if (out.settings && out.settings.secrets) delete out.settings.secrets;
   return { ok: true, data: out };
@@ -94,6 +95,7 @@ export async function importData(data, parts = ["settings", "targets", "history"
     await db().putMany(STORES.history, recs);
     imported.history = recs.length;
   }
+  if (parts.includes("history") && Array.isArray(data.followbacks)) imported.followbacks = await importEntries(data.followbacks);
   if (parts.includes("candidates") && data.candidates && typeof data.candidates === "object") {
     // Under the candidates lock (a running smart-follower search writes them too) and capped like every other write
     // (CANDIDATES_CAP newest / best). Your targets, blacklisted accounts and your own handle are not candidates.
@@ -207,7 +209,7 @@ export async function resetAll() {
   // not write its results back into the lists cleared here (lib/scoreboard.js).
   noteReset();
   // Provider overrides are your config like the selector overrides, conversation alerts are worker data: both go.
-  await remove([K.settings, K.blacklist, K.seen, K.logs, K.discovery, K.selectorOverrides, K.providerOverrides, K.learning, K.conversations, K.state]);
+  await remove([K.settings, K.blacklist, K.seen, K.logs, K.discovery, K.selectorOverrides, K.providerOverrides, K.learning, K.conversations, K.state, K.followbacks]);
   // Targets and candidates go under their locks: a score job's write already under way (it read the lists before this
   // reset) finishes first and is cleared with them, instead of writing the old lists back after the reset.
   await withLock(K.targets, () => remove([K.targets]));

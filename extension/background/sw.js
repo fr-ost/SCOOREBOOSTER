@@ -23,6 +23,7 @@ import { runSelfTest } from "../lib/diagnostics.js";
 import { closeStaleReaderTab } from "../lib/pagereader.js";
 import { markDone as conversationDone } from "../lib/conversations.js";
 import * as LIC from "../lib/license.js";
+import * as FB from "../lib/followbacks.js";
 import { notify } from "../lib/notify.js";
 
 const EXT_ORIGIN = chrome.runtime.getURL("");
@@ -133,6 +134,11 @@ chrome.notifications.onClicked.addListener((id) => {
 // Every worker start: drop a lease left by a killed worker and re-arm alarms (cheap and idempotent).
 engine.onWorkerStart().catch(() => {});
 LIC.verify().then((st) => { if (!st.ok) return onLocked(st); }).catch(() => {}); // asks the server only when 6 h are up
+// The follow-back record (History > Follow-backs): kept current; earlier follow-backs from your history are added once.
+getState().then(async (st) => {
+  await FB.syncFollowBacks({ fromHistory: !st.fbBackfilled });
+  if (!st.fbBackfilled) await patchState({ fbBackfilled: true });
+}).catch(() => {});
 ensureScoresAlarm().catch(() => {});
 // A worker that was killed mid-job leaves a "running" score job behind: mark it interrupted.
 SB.updateBoard((b) => (b.job && b.job.status === "running" ? { ...b, job: { ...b.job, status: "error", error: "Interrupted (the browser stopped the worker)", finishedAt: now() } } : b)).catch(() => {});

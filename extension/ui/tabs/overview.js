@@ -408,7 +408,7 @@ export default {
         if (pick) scoreFig.querySelector(".fig-label").appendChild(pick);
         return ledger(
           figure({
-            label: "Follow-backs", value: String(w.fb7), id: "figFollowBacks", href: "#history?view=ov",
+            label: "Follow-backs", value: String(w.fb7), id: "figFollowBacks", href: "#history?view=followbacks",
             chart: miniBars(w.daily.map((d) => d.followBacks), { w: 110, h: 28, label: "Follow-backs per day, last 30 days", titles: w.daily.map((d) => `${d.d}: ${d.followBacks}`) }),
             delta: w.any ? delta(w.fb7 - w.fbPrev, { suffix: "vs prev", title: `${w.fbPrev} in the 7 days before` }) : null,
             sub: w.any ? "7 days · bars: 30 days" : "No follow-backs yet: they arrive 1-14 days after the first comments",

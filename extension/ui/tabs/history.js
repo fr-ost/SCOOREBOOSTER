@@ -9,7 +9,8 @@
 
 import { K, HS } from "../../lib/constants.js";
 import * as history from "../../lib/history.js";
-import { toXlsx } from "../../lib/xlsx.js";
+import { toXlsx, toCsv as tableToCsv } from "../../lib/xlsx.js";
+import * as FB from "../../lib/followbacks.js";
 import { aggregate, performance, budgetStatus } from "../../lib/costs.js";
 import { funnel as funnelOf, daysToFollowBack, conversionBy, dailySeries, topResponders, authorReplies } from "../../lib/analytics.js";
 import { MAIN_TONE, followStatus, FS } from "../../lib/targets.js";
@@ -24,7 +25,7 @@ import { PRESET_LABEL } from "./models.js";
 
 const STATUS_OPTS = [["", "All statuses"], [HS.POSTED, "Posted"], [HS.PENDING_REVIEW, "Pending review"], [HS.APPROVED, "Approved"], [HS.QUEUED, "Queued"], [HS.POSTING, "Posting"], [HS.SKIPPED, "Skipped"], [HS.FAILED, "Failed"]];
 const OUTCOME_OPTS = [["", "Any outcome"], ["liked", "Reply got likes"], ["replied", "Reply got replies"], ["author", "Author replied"], ["followed", "Followed back"], ["none", "No response"], ["unchecked", "Not checked yet"]];
-const VIEWS = [["comments", "Comments"], ["ov", "Stats"], ["spend", "Spend"]];
+const VIEWS = [["comments", "Comments"], ["followbacks", "Follow-backs"], ["ov", "Stats"], ["spend", "Spend"]];
 const RANGES = [["7", "7 d"], ["30", "30 d"], ["all", "All"]];
 const TIERS = [["", "All tiers"], ["1", "T1"], ["2", "T2"]];
 
@@ -63,8 +64,8 @@ export default {
     let all = [];
     let loadErr = "";
     let sig = null;
-    const dirty = { ov: true, comments: true, spend: true };
-    const markAll = () => { dirty.ov = dirty.comments = dirty.spend = true; };
+    const dirty = { ov: true, comments: true, followbacks: true, spend: true };
+    const markAll = () => { dirty.ov = dirty.comments = dirty.followbacks = dirty.spend = true; };
     const tz = () => ctx.settings.timezone;
     const sinceTs = () => (p.range === "all" ? 0 : Date.now() - Number(p.range) * DAY);
     const rangeDays = () => (p.range === "7" ? 7 : p.range === "30" ? 30 : 90);
@@ -83,10 +84,10 @@ export default {
     rangeSeg.id = "resultsRange";
     const tierSeg = segmented(TIERS, p.tier, (v) => setP({ tier: v }), { label: "Tier" });
     tierSeg.id = "resultsTier";
-    const panes = { ov: h("div", { class: "res-pane stack-lg", id: "resultsOverview" }), comments: h("div", { class: "res-pane", id: "resultsComments" }), spend: h("div", { class: "res-pane", id: "resultsSpend" }) };
+    const panes = { ov: h("div", { class: "res-pane stack-lg", id: "resultsOverview" }), comments: h("div", { class: "res-pane", id: "resultsComments" }), followbacks: h("div", { class: "res-pane", id: "resultsFollowBacks" }), spend: h("div", { class: "res-pane", id: "resultsSpend" }) };
     add(root,
       h("div", { class: "filterbar res-bar" }, viewSeg, h("span", { class: "spacer" }), rangeSeg, tierSeg),
-      panes.ov, panes.comments, panes.spend);
+      panes.ov, panes.comments, panes.followbacks, panes.spend);
 
     function setP(patch) {
       Object.assign(p, patch);
@@ -539,7 +540,59 @@ export default {
       fill(pane, budgetSec, dailySec, totalsSec, perfSec);
     }
 
-    const DRAW = { ov: drawOverview, comments: drawComments, spend: drawSpend };
+    // ================================================ Follow-backs
+    // Who followed back (lib/followbacks.js): the stored record merged with what your targets and history know now.
+    const fbSort = { key: "at", dir: "desc" };
+    let fbRows = [];
+    const fmtDays = (d) => { const n = Math.round(d); return d < 1 ? "same day" : `${n} day${n === 1 ? "" : "s"}`; };
+    function drawFollowBacks() {
+      const pane = panes.followbacks;
+      if (loadErr) { fill(pane, h("div", { class: "banner banner-danger" }, "Could not read history: " + loadErr)); return; }
+      const since = sinceTs();
+      fbRows = FB.mergeEntries(ctx.data[K.followbacks], ctx.targets, all).filter((e) => (!since || e.at >= since) && tierOk(e.tier));
+      const days = fbRows.map((e) => e.days).filter((d) => d != null);
+      const med = median(days);
+      const avgC = fbRows.length ? fbRows.reduce((a, e) => a + num(e.comments), 0) / fbRows.length : 0;
+      const item = (v, l, id) => h("span", { class: "summary-item" }, h("span", { class: "summary-num", id: id || null }, v), l);
+      const summary = h("div", { class: "summary-row", id: "fbSummary", "aria-live": "polite" },
+        item(String(fbRows.length), fbRows.length === 1 ? "follow-back" : "follow-backs", "fbCount"),
+        item(med == null ? "-" : fmtDays(med), "median from first comment"),
+        item(fbRows.length ? (Number.isInteger(avgC) ? String(avgC) : avgC.toFixed(1)) : "-", "comments before, on average"),
+        item(String(fbRows.filter((e) => e.youFollowedFirst).length), "after you followed first"),
+        item(String(fbRows.filter((e) => e.unfollowedAt).length), "unfollowed later"),
+        h("span", { class: "summary-item muted" }, rangeText(), tierText()));
+      const cols = [
+        { key: "at", label: "Followed back", sort: (e) => e.at, render: (e) => h("span", { class: "nowrap mono small" }, fmtDateTime(e.at), e.again ? [" ", badge("again", "grey", "Followed you back before, unfollowed, and followed back again")] : null) },
+        { key: "handle", label: "Account", sort: (e) => e.handle, render: (e) => h("span", { class: "cell-handle" }, xLink(e.handle), tierBadge(e.tier), e.name ? h("span", { class: "muted small" }, " " + truncate(e.name, 28)) : null) },
+        { key: "after", label: "After", sort: (e) => num(e.comments) * 1e4 + num(e.days), render: (e) => h("div", { class: "small" }, `${e.comments || 0} comment${e.comments === 1 ? "" : "s"}${e.days != null ? " · " + fmtDays(e.days) : ""}`, e.youFollowedFirst ? h("div", null, badge("you followed first", "green", "ScoreX followed this account before it followed you back")) : null) },
+        { key: "last", label: "Last comment before", sort: false, className: "col-text", render: (e) => { const lc = e.lastComment; if (!lc || !lc.text) return h("span", { class: "muted small" }, "-"); const u = safeUrl(lc.url); return h("div", { class: "cell-text small", title: lc.text }, u ? link(u, truncate(lc.text, 110)) : truncate(lc.text, 110)); } },
+        { key: "followers", label: "Followers", align: "right", sort: (e) => num(e.followers), render: (e) => (e.followers == null ? "-" : fmtNum(e.followers)) },
+        { key: "score", label: "Score", align: "right", sort: (e) => num(e.twitterscore != null ? e.twitterscore : e.score), render: (e) => (e.twitterscore != null ? h("span", { title: "TwitterScore" }, fmtNum(e.twitterscore)) : e.score != null ? h("span", { title: "ScoreX rank" }, fmtNum(e.score)) : "-") },
+        { key: "now", label: "Now", sort: (e) => (e.unfollowedAt ? 0 : 1), render: (e) => (e.unfollowedAt ? h("span", { class: "small text-red", title: fmtDateTime(e.unfollowedAt) }, "Unfollowed " + fmtDay(e.unfollowedAt)) : h("span", { class: "small text-green" }, "Follows you")) },
+      ];
+      const exportCsv = btn("Export CSV", () => {
+        if (!fbRows.length) { toast("Nothing to export yet.", { type: "warn" }); return; }
+        download(`scorex-follow-backs-${stamp()}.csv`, tableToCsv(FB.toTable(fbRows)), "text/csv");
+        toast(`Exported ${fbRows.length} follow-back${fbRows.length === 1 ? "" : "s"}`, { type: "success" });
+      }, { iconName: "download", size: "sm", id: "fbExportCsv" });
+      const exportXlsx = btn("Export XLSX", () => {
+        if (!fbRows.length) { toast("Nothing to export yet.", { type: "warn" }); return; }
+        download(`scorex-follow-backs-${stamp()}.xlsx`, toXlsx(FB.toTable(fbRows), "Follow-backs"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        toast(`Exported ${fbRows.length} follow-back${fbRows.length === 1 ? "" : "s"}`, { type: "success" });
+      }, { iconName: "download", size: "sm", id: "fbExportXlsx" });
+      const tableHost = h("div", { id: "followBacksTable" }, renderTable({
+        columns: cols, rows: fbRows, rowKey: (e) => e.id, sortState: fbSort, maxRows: 200, caption: "Follow-backs", tall: true,
+        rowLabel: (e) => `@${e.handle} followed you back`,
+        // A row opens the target's timeline (every comment and check); an account no longer in your targets opens on X.
+        onRowOpen: (e) => { if (Object.hasOwn(ctx.targets, e.handle)) ctx.navigate("targets?h=" + encodeURIComponent(e.handle)); else window.open("https://x.com/" + e.handle, "_blank", "noopener"); },
+        empty: "No follow-backs yet. When an account you commented on follows you, it is recorded here: when, after how many comments, and the last comment before it.",
+      }));
+      fill(pane,
+        h("div", { class: "toolbar" }, summary),
+        section({ wide: true, title: "Who followed back", hint: "Newest first. Kept even after a target is removed. Click a row for the account's timeline.", actions: h("div", { class: "toolbar" }, exportCsv, exportXlsx) }, tableHost));
+    }
+
+    const DRAW = { ov: drawOverview, comments: drawComments, followbacks: drawFollowBacks, spend: drawSpend };
 
     // ------------------------------------------------ data
     async function load() {
@@ -562,6 +615,7 @@ export default {
     ctx.on(K.targets, redrawSoon);
     ctx.on(K.blacklist, redrawSoon);
     ctx.on(K.spend, () => { dirty.spend = true; if (p.view === "spend") show(); });
+    ctx.on(K.followbacks, () => { dirty.followbacks = true; if (p.view === "followbacks") show(); });
     ctx.on("status", () => { const r = ctx.status && ctx.status.reach; const k = r ? `${r.medianViews}|${r.prevMedianViews}` : ""; if (k !== reachSig) { reachSig = k; dirty.ov = true; if (p.view === "ov") show(); } });
     ctx.on("settings", (s, from) => { if (!from) { markAll(); show(); } });
     const onVis = () => { if (document.visibilityState === "visible") reload(); };

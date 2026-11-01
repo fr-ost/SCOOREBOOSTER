@@ -160,6 +160,10 @@ try {
   await sleep(8000);
   assert(!(await H.history()).find((x) => x.postId === pDave3.id), "no comments after the follow-back");
   assert(/followed you back/.test(JSON.stringify(await H.store("sx.logs"))), "follow-back logged");
+  const fbLog = await H.waitFor(async () => { const l = await H.store("sx.followbacks"); return Array.isArray(l) && l.some((e) => e.handle === "dave") ? l : null; }, "follow-back record", 15000);
+  const fbDave = fbLog.find((e) => e.handle === "dave");
+  // Dave's comments were skipped / dropped before posting, so the record says so: none posted before the follow-back.
+  assert(fbDave.at === tDave.rel.followedBackAt && fbDave.comments === 0 && fbDave.lastComment === null && fbDave.followers === 40000, "the follow-back is in the record (History > Follow-backs) with its time, 0 comments posted before it, followers: " + JSON.stringify(fbDave));
 
   // ---- unknown X prompt after Reply: stop, never click it, nothing further posted ----
   M.addUser("hank", { name: "Hank", followers: 30000 });

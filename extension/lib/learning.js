@@ -16,6 +16,7 @@ import { notify } from "./notify.js";
 import { valueDetails, learnedRates } from "./scores.js";
 import { checkReach, checkDelayMs } from "./reach.js";
 import * as H from "./history.js";
+import { recordFollowBack, syncFollowBacks } from "./followbacks.js";
 import { now, DAY, HOUR, MIN, random, clamp, sleep, humanDelay, num } from "./util.js";
 
 const ATTRIBUTION_DAYS = 14; // a follow-back is credited to comments from the previous 14 days
@@ -192,9 +193,11 @@ export async function processFollowBacks(settings) {
       if (x) x.rel = { ...(x.rel || {}), followBackCredited: true };
       return all;
     });
+    await recordFollowBack(t, t.rel.followedBackAt).catch(() => {}); // History > Follow-backs
     log("info", `@${t.handle} followed you back - no more comments to this account`);
     await notify("sx-fb-" + t.handle, "New follow-back", `@${t.handle} followed you back after your comments.`);
   }
+  await syncFollowBacks().catch(() => {}); // "unfollowed later" and anything the record is still missing
   return fresh.length;
 }
 

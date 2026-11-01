@@ -27,6 +27,8 @@ extension/
     license.js            license gate: activate / verify against license-server/ (one key, one browser; 6 h checks,
                           3 days of grace); background/sw.js refuses requests and alarms while locked
     xlsx.js               CSV and a minimal XLSX writer (no library) for the downloads
+    followbacks.js        the follow-back record (History > Follow-backs): "sx.followbacks", written where follow-backs
+                          are credited (learning.js processFollowBacks), backfilled from targets / history, merged live
     analytics.js          funnel, heatmap and follow-back attribution for History > Stats
     diagnostics.js        live X self-test (home, profile, followers list; never clicks or types)
     catchup.js            catch-up: each target's latest earlier posts when the queue runs dry

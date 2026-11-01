@@ -65,7 +65,7 @@ const ALIASES = {
   results: ["history", { view: "ov" }], stats: ["history", { view: "ov" }], comments: ["history", { view: "comments" }],
   diagnostics: ["settings", { view: "diagnostics" }], general: ["settings", {}], today: ["overview", {}], dashboard: ["overview", {}],
 };
-const WATCH = [K.state, K.targets, K.candidates, K.blacklist, K.discovery, K.logs, K.spend, K.learning, K.scoreboard, K.conversations, K.secretsRev];
+const WATCH = [K.state, K.targets, K.candidates, K.blacklist, K.discovery, K.logs, K.spend, K.learning, K.scoreboard, K.conversations, K.secretsRev, K.followbacks];
 
 // ---------------------------------------------------------------- event bus + scopes
 

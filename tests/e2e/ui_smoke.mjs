@@ -346,7 +346,7 @@ try {
 
   // ---------------------------------------------------------------- every screen, both themes, 3 widths
   await section("screens (light + dark at 1360 / 800 / 560)", async () => {
-    const routes = [...SCREENS.map(([r]) => r), "tones", "models", "safety", "diagnostics", "discover?view=find"];
+    const routes = [...SCREENS.map(([r]) => r), "tones", "models", "safety", "diagnostics", "discover?view=find", "history?view=followbacks"];
     for (const theme of ["light", "dark"]) {
       await setTheme(page, theme);
       for (const w of [1360, 800, 560]) {
@@ -457,7 +457,19 @@ try {
     await openTab(page, base, "comments");
     check((await page.locator("#nav .tab.active").getAttribute("data-tab")) === "history" && (await page.locator("#resultsComments").isVisible()) && (await page.locator("#historyTable").count()) === 1, "#comments (old link) opens History › Comments");
     await openTab(page, base, "history");
-    check((await page.locator('#resultsRange [aria-checked="true"]').getAttribute("data-value")) === "all" && (await page.locator('#resultsView [aria-checked="true"]').getAttribute("data-value")) === "comments" && JSON.stringify(await page.locator("#resultsView [data-value]").allInnerTexts()) === JSON.stringify(["Comments", "Stats", "Spend"]), "History opens on Comments, all time (views Comments | Stats | Spend)");
+    check((await page.locator('#resultsRange [aria-checked="true"]').getAttribute("data-value")) === "all" && (await page.locator('#resultsView [aria-checked="true"]').getAttribute("data-value")) === "comments" && JSON.stringify(await page.locator("#resultsView [data-value]").allInnerTexts()) === JSON.stringify(["Comments", "Follow-backs", "Stats", "Spend"]), "History opens on Comments, all time (views Comments | Follow-backs | Stats | Spend)");
+    // Who followed back: the seeded follow-back shows with its comments, days, last comment and score (no stored record
+    // needed: the page merges the record with what the targets and history know).
+    await openTab(page, base, "history?view=followbacks");
+    const fbRow = page.locator('#followBacksTable tr[data-key^="devrel_sam:"]');
+    const fbText = (await fbRow.count()) ? await fbRow.innerText() : "";
+    check((await fbRow.count()) === 1 && /3 comments · 6 days/.test(fbText) && /Does it handle \$ref/.test(fbText) && /300/.test(fbText) && /Follows you/.test(fbText), "History › Follow-backs: devrel_sam - 3 comments · 6 days, the last comment before it, TwitterScore 300, follows you (" + fbText.replace(/\s+/g, " ").slice(0, 160) + ")");
+    check((await page.locator("#fbExportCsv").count()) === 1 && (await page.locator("#fbExportXlsx").count()) === 1 && /1/.test(await page.locator("#fbCount").innerText()), "Follow-backs: count and CSV / XLSX export");
+    await fbRow.click();
+    check(await waitFor(page, () => !!document.querySelector("#targetDrawer"), null, 8000) && /targets/.test(page.url()), "a follow-back row opens that target's timeline");
+    await page.keyboard.press("Escape");
+    await openTab(page, base, "overview");
+    check((await page.locator("#figFollowBacks").evaluate((el) => { const a = el.closest("a"); return a ? a.getAttribute("href") : ""; })) === "#history?view=followbacks", "Today's Follow-backs figure opens History › Follow-backs");
     // Settings: one rail item, four tabs (each its own route).
     for (const [r, label] of SETUP) {
       await openTab(page, base, r);
