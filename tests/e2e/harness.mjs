@@ -69,7 +69,13 @@ export async function boot({ port = Number(process.env.SX_PORT) || 8443, viewpor
     if (!tp || tp.isClosed()) {
       tp = await ctx.newPage();
       tp.on("pageerror", (e) => log("TEST PAGE ERROR", e.message));
-      await tp.goto(`chrome-extension://${extId}/__test.html`);
+      // On a fresh install the extension may open its dashboard in this same new page while it loads: try again.
+      for (let i = 0; ; i++) {
+        try { await tp.goto(`chrome-extension://${extId}/__test.html`); break; } catch (e) {
+          if (i >= 2 || !/interrupted by another navigation/.test(String(e && e.message))) throw e;
+          await new Promise((r) => setTimeout(r, 500));
+        }
+      }
     }
     return tp;
   };

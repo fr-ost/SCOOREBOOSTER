@@ -11,7 +11,7 @@
 
 import { K } from "./constants.js";
 import { load, update, withLock, getSettings, getSecrets, getTargets, updateTargets, updateCandidates, getBlacklist, log, resetCount } from "./store.js";
-import { providerDefs, pickMode, modeNeeds, runCapability, CAPS } from "./providers.js";
+import { providerDefs, pickMode, modeNeeds, runCapability, CAPS, fill } from "./providers.js";
 import { combinedScore } from "./scores.js";
 import { upsertRows, countRows } from "./smartdb.js";
 import { now, DAY, HOUR, sleep, dayKey, normalizeHandle, clamp, num } from "./util.js";
@@ -58,6 +58,8 @@ export async function providerStates() {
       needs: mode ? modeNeeds(def, mode) : { origins: [], permissions: [] },
       granted: mode ? await granted(def, mode) : false,
       hasKey, caps: Object.fromEntries(CAPS.map((c) => [c, !!(mode && def.modes[mode] && def.modes[mode][c])])),
+      // TwitterScore with a key: your score from the free page, smart followers from the API.
+      split: !!(Array.isArray(def.ownModes) && def.smartMode && hasKey && (cfg.mode || "auto") === "auto"),
       usage: { today: u && u.d === today ? u.n : 0, cap: cfg.dailyCap || 100 },
       own: (board.own || {})[def.id] || null,
       notes: def.notes || "",
@@ -91,12 +93,14 @@ async function call(id, cap, handle, ctx, vars, want = null) {
     const r = await ready(id, cap, { ...ctx, settings }, want);
     if (!r.ok) return r;
     const today = dayKey(now(), settings.timezone);
+    // Paid API requests (apiUncapped) and the explicit database scan (ctx.noCap) are counted but not held back.
+    const capped = !(ctx.noCap || (r.mode === "api" && r.def.apiUncapped));
     let allowed = false;
     await updateBoard((b) => {
       b.usage = b.usage || {};
       const cur = b.usage[id];
       const n = cur && cur.d === today ? num(cur.n, 0) : 0;
-      if (n >= r.cap) return b;
+      if (capped && n >= r.cap) return b;
       allowed = true;
       b.usage[id] = { d: today, n: n + 1 };
       return b;
@@ -228,7 +232,7 @@ export async function smartFollowersOf(handle, { providers = null, maxAgeMs = 3 
   for (const def of list) {
     const c = cached && cached.results && cached.results[def.id];
     if (c && c.at && !c.error && now() - c.at < maxAgeMs) { results[def.id] = c; continue; }
-    const r = await call(def.id, "smartFollowers", h, ctx);
+    const r = await lookupSmart(def, h, ctx);
     results[def.id] = r.ok ? { list: r.list || [], total: r.total != null ? r.total : null, url: r.url || "", at: now() } : { list: [], error: r.message || r.error, url: r.url || "", at: now() };
   }
   if (stale(ctx)) return { ok: false, error: RESET.message };
@@ -376,48 +380,133 @@ function capMap(map, cap) {
   for (const k of keys.slice(0, keys.length - cap)) delete map[k];
 }
 
-// Smart-follower database (lib/smartdb.js): every page of TwitterScore's paid API (top_followers_paginate) for each
-// account, up to maxPages pages of `size` rows. Needs TwitterScore on in API mode with your key; each page is one
-// request against TwitterScore's daily cap (raise it in Scores > Providers for big sweeps). A page shorter than `size`,
-// the reported total, or a page that repeats the last one ends an account. Pause-free: Cancel stops it.
-export async function buildSmartDb(handles, { size = 100, maxPages = 50, ...extra } = {}) {
+// ---------- smart followers, page by page (TwitterScore's API) ----------
+
+export const LOOKUP_PAGES = 4; // Find targets / popup: the best 100 smart followers of an account (4 requests)
+export const SCAN_PAGES = 2000; // the database scan: every page (a safety stop at 50,000 per account)
+const RATE_WAIT_MS = 60 * 1000;
+const RATE_TRIES = 3;
+const ALT_ON = ["not_found", "http", "parse"];
+
+async function waitOrStop(ms, shouldStop) {
+  const until = now() + ms;
+  while (now() < until) {
+    if (shouldStop && (await shouldStop())) return true;
+    await sleep(Math.min(1000, Math.max(0, until - now())));
+  }
+  return false;
+}
+
+// Every page of one account's smart followers, best first. TwitterScore serves at most 25 per request (page 1, 2, ...;
+// an empty page after the last). An account ends at an empty page, a short page, a page with nothing new (the API
+// ignored the page number), the reported total, or maxPages. A rate limit (429) waits a minute and asks again (3
+// times). TwitterScore marks top_followers_paginate deprecated: when it answers 404 / an error / something unreadable
+// on a first page, get_followers (its replacement) is asked, and used for the rest of the run once it answers.
+// onPage(rows, { page, total }) gets each page's new rows as they arrive. Never throws.
+export async function pagedSmartFollowers(id, handle, ctx, { maxPages = SCAN_PAGES, onPage, shouldStop } = {}) {
+  const h = normalizeHandle(handle);
+  const def = ctx.defs[id];
+  const api = def && def.modes && def.modes.api;
+  const spec = api && api.smartFollowers;
+  if (!spec) return { ok: false, error: "unsupported", message: `${def ? def.name : "Provider"} has no paged smart followers` };
+  const size = clamp(Math.round(num(spec.pageSize, 25)), 1, 100);
+  const seen = new Set();
+  const list = [];
+  let pages = 0, requests = 0, total = null, firstLen = 0;
+  for (let page = 1; page <= maxPages; page++) {
+    if (shouldStop && (await shouldStop())) return { ok: true, list, pages, requests, total, stopped: true };
+    let r = null;
+    for (let tries = 0; ; tries++) {
+      r = await call(id, ctx.altEndpoint ? "smartFollowersAlt" : "smartFollowers", h, ctx, { page, size }, "api");
+      requests++;
+      if (stale(ctx)) return { ...RESET, list, pages, requests };
+      if (!r.ok && page === 1 && !ctx.altEndpoint && api.smartFollowersAlt && ALT_ON.includes(r.error)) {
+        const alt = await call(id, "smartFollowersAlt", h, ctx, { page, size }, "api");
+        requests++;
+        if (alt.ok && (alt.list || []).length) { ctx.altEndpoint = true; r = alt; }
+        else if (alt.ok || alt.error === "not_found") r = r.error === "not_found" ? r : alt; // nothing on either: no data
+      }
+      if (r.ok || r.error !== "rate" || tries >= RATE_TRIES) break;
+      if (await waitOrStop(RATE_WAIT_MS, shouldStop)) return { ok: true, list, pages, requests, total, stopped: true };
+    }
+    if (!r.ok) {
+      if (r.error === "not_found") return { ok: true, list, pages, requests, total: total != null ? total : list.length, url: r.url || "" };
+      return { ...r, list, pages, requests, total };
+    }
+    if (r.mode !== "api") return { ok: false, error: "no_mode", message: `Add your ${def.name} API key first (Scores > Providers): the free page only shows 3`, list, pages, requests };
+    pages++;
+    const rows = r.list || [];
+    // The reported total is trusted as "all smart followers" only when it is plausible: larger than one page, or this
+    // page was short. A full page with a total of 25 or less (a page count, or this page's count) is ignored, so a
+    // misread total can never end a scan after the first page; an empty page ends it instead.
+    if (Number.isFinite(r.total) && r.total > 0 && (r.total > size || rows.length < size)) total = r.total;
+    const fresh = rows.filter((x) => x && x.handle && !seen.has(x.handle));
+    for (const x of fresh) { seen.add(x.handle); list.push(x); }
+    if (fresh.length && onPage) await onPage(fresh, { page, total });
+    if (page === 1) firstLen = rows.length;
+    const last = !rows.length || !fresh.length || (total > 0 && list.length >= total) || (page > 1 && rows.length < firstLen) || (page === 1 && total == null && rows.length < Math.min(size, 5));
+    if (last) break;
+  }
+  return { ok: true, list, pages, requests, total: total != null ? total : list.length };
+}
+
+// One account's smart followers from one provider for Find targets / the popup: TwitterScore's API reads its first
+// LOOKUP_PAGES pages; every other provider (and TwitterScore's free page) answers with one request.
+async function lookupSmart(def, h, ctx) {
+  const settings = await getSettings();
+  const r = await ready(def.id, "smartFollowers", { ...ctx, settings }, def.smartMode || null);
+  if (r.ok && r.mode === "api" && r.def.modes.api.smartFollowers && r.def.modes.api.smartFollowers.pageSize) {
+    const p = await pagedSmartFollowers(def.id, h, ctx, { maxPages: LOOKUP_PAGES });
+    if (!p.ok && !(p.list && p.list.length)) return p;
+    const list = (p.list || []).slice(0, clamp(Math.round(num(def.listLimit, 100)), 1, 200));
+    return { ok: true, list, total: p.total != null ? p.total : list.length, url: def.profileUrl ? fill(def.profileUrl, { handle: h }) : "", mode: "api", provider: def.id };
+  }
+  return call(def.id, "smartFollowers", h, ctx);
+}
+
+// Smart follower database (Discover): every smart follower TwitterScore's API lists for each account, merged into
+// lib/smartdb.js as the pages arrive (Stop keeps what was read). Needs TwitterScore on with your API key. Each page
+// (25 accounts) is one API request; ScoreX's daily cap does not stop this scan (you started it, Stop ends it).
+export async function buildSmartDb(handles, extra = {}) {
   const list = [...new Set((handles || []).map(normalizeHandle).filter(Boolean))].slice(0, 500);
-  if (!list.length) return { ok: false, error: "Enter at least one @handle" };
-  const ctx = await context(extra);
+  if (!list.length) return { ok: false, error: "Enter at least one username or link" };
+  const ctx = await context({ ...extra, noCap: true });
   const cfg = (ctx.settings.providers && ctx.settings.providers.twitterscore) || {};
-  if (!cfg.enabled) return { ok: false, error: "Turn on TwitterScore with your API key first (Scores > Providers)" };
-  if (!ctx.secrets.twitterscoreKey) return { ok: false, error: "Add your TwitterScore API key first (Scores > Providers)" };
-  const per = clamp(Math.round(num(size, 100)), 10, 100);
-  const pagesMax = clamp(Math.round(num(maxPages, 50)), 1, 1000);
-  let pages = 0, added = 0, updated = 0, done = 0, lastError = "", failStreak = 0;
+  if (!ctx.secrets.twitterscoreKey) return { ok: false, error: "Add your TwitterScore API key first" };
+  if (!cfg.enabled) return { ok: false, error: "Turn TwitterScore on first (Scores > Providers)" };
+  let pages = 0, requests = 0, added = 0, updated = 0, done = 0, found = 0;
+  const errors = [], empty = [];
   for (const h of list) {
     if (extra.shouldStop && (await extra.shouldStop())) break;
-    let prevFirst = null, got = 0;
-    for (let page = 1; page <= pagesMax; page++) {
-      if (extra.shouldStop && (await extra.shouldStop())) break;
-      if (extra.onProgress) await extra.onProgress({ done, total: list.length, current: `@${h} · page ${page}`, updated: added });
-      const r = await call("twitterscore", "smartFollowers", h, ctx, { page, size: per });
-      if (stale(ctx)) return { ok: false, error: "Reset", pages, added, updated };
-      if (!r.ok) {
-        if (r.error === "not_found") break;
-        lastError = r.message || r.error || "error";
-        if (FATAL.includes(r.error)) return { ok: false, error: lastError, pages, added, updated, accounts: done };
-        if (++failStreak >= FAIL_STREAK) return { ok: false, error: `TwitterScore: ${failStreak} failures in a row, stopped (${lastError})`, pages, added, updated, accounts: done };
-        break;
-      }
-      failStreak = 0;
-      if (r.mode !== "api") return { ok: false, error: "The database needs your TwitterScore API key (Scores > Providers) - the free page only shows 3", pages, added, updated };
-      pages++;
-      const rows = r.list || [];
-      if (!rows.length || (prevFirst && rows[0].handle === prevFirst)) break; // empty, or the API ignored the page number
-      prevFirst = rows[0].handle;
-      const u = await upsertRows(h, rows);
-      added += u.added; updated += u.updated; got += rows.length;
-      if (rows.length < per || (Number.isFinite(r.total) && r.total > 0 && got >= r.total)) break;
-    }
+    const ts = now();
+    let page = 0, total = null;
+    const progress = () => {
+      const est = total && total <= SCAN_PAGES * 25 ? Math.max(page, Math.ceil(total / 25)) : null; // pages this account will take
+      return extra.onProgress && extra.onProgress({ done, total: list.length, current: `@${h} · page ${page}${est ? ` of ${est}` : ""}`, page, pagesEst: est, updated: added, found, requests });
+    };
+    await progress();
+    const r = await pagedSmartFollowers("twitterscore", h, ctx, {
+      shouldStop: extra.shouldStop,
+      onPage: async (rows, info) => {
+        page = info.page; total = info.total;
+        const u = await upsertRows(h, rows, ts);
+        added += u.added; updated += u.updated; found += rows.length;
+        await progress();
+      },
+    });
+    pages += r.pages || 0; requests += r.requests || 0;
+    if (stale(ctx)) return { ok: false, error: "Reset", pages, requests, added, updated };
+    if (!r.ok) {
+      const msg = r.message || r.error || "error";
+      if (FATAL.includes(r.error) || r.error === "no_mode") return { ok: false, error: msg, accounts: done, pages, requests, added, updated, total: await countRows() };
+      errors.push(`@${h}: ${msg}`);
+    } else if (!(r.list || []).length && !r.stopped) empty.push(h);
     done++;
+    if (r.stopped) break;
   }
-  if (extra.onProgress) await extra.onProgress({ done, total: list.length, current: "", updated: added });
-  log("info", `Smart follower database: ${pages} TwitterScore pages, ${added} new and ${updated} updated accounts`);
-  return { ok: true, accounts: done, pages, added, updated, total: await countRows() };
+  if (extra.onProgress) await extra.onProgress({ done, total: list.length, current: "", updated: added, found, requests });
+  log("info", `Smart follower database: ${found} smart followers from ${done} account${done === 1 ? "" : "s"} (${requests} TwitterScore requests), ${added} new`);
+  const total = await countRows();
+  if (!found && errors.length === done && done > 0) return { ok: false, error: errors.slice(0, 3).join("; "), accounts: done, pages, requests, added, updated, total };
+  return { ok: true, accounts: done, pages, requests, found, added, updated, total, errors, empty };
 }

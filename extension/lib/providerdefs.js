@@ -20,6 +20,14 @@
 //     { smartEngagement: { moniScore, smartsCount } }, accounts/<handle>/smarts/meta/?orderBy=SCORE ->
 //     { items: [{ meta: { userUrl } }] }. A free Moni account gets about 300 requests a month.
 
+// Field names of a smart follower row in TwitterScore's API answers (both endpoints; the first one present is used).
+const TS_FIELDS = {
+  handle: ["username", "screen_name", "twitter_username", "twitter_screen_name", "user.username", "user.screen_name", "handle"],
+  name: ["name", "display_name", "user.name"],
+  score: ["twitter_score", "score", "twitterScore", "user.twitter_score"],
+  followers: ["followers_count", "followers", "followersCount", "user.followers_count"],
+};
+
 export const PROVIDER_DEFS = {
   sorsa: {
     id: "sorsa",
@@ -62,6 +70,9 @@ export const PROVIDER_DEFS = {
     // blocks the direct read. The paid API is used only for smart followers (the smart-follower database).
     ownModes: ["public", "page"],
     smartMode: "api",
+    // API requests are paid for in your TwitterScore plan, so ScoreX's daily cap does not hold them back (they are still
+    // counted and paced at 50 a minute, under the plan's 60). The cap keeps limiting reads of the public page.
+    apiUncapped: true,
     notFound: "(?:page|account|user) (?:was )?not found|doesn't exist|no data for this account",
     modes: {
       public: {
@@ -83,11 +94,21 @@ export const PROVIDER_DEFS = {
       api: {
         hosts: ["https://twitterscore.io/*"],
         score: { kind: "json", url: "https://twitterscore.io/api/v1/get_twitter_score?username={handle}&api_key={key}", headers: { "X-API-Key": "{key}" }, value: { path: ["twitter_score", "data.twitter_score", "score"] } },
+        // Paged: {page} is 1-based, {size} is at most 25 (TwitterScore's documented cap; an empty page follows the last).
+        // lib/scoreboard.js pagedSmartFollowers walks every page (the smart follower database) or the first few (Find
+        // targets). TwitterScore marks top_followers_paginate deprecated; get_followers below replaces it when it stops
+        // answering. auto: an answer whose list sits under another key is still found.
         smartFollowers: {
-          // Paged ({page}, {size} up to 100): the smart-follower database (lib/smartdb.js) walks every page.
           kind: "json", url: "https://twitterscore.io/api/v1/top_followers_paginate?username={handle}&page={page}&size={size}&api_key={key}", headers: { "X-API-Key": "{key}" },
-          list: { path: ["top_followers", "data.top_followers", "followers", "data.followers", "data", "results"], fields: { handle: ["username", "screen_name", "twitter_username"], name: ["name", "display_name"], score: ["twitter_score", "score"], followers: ["followers_count", "followers"], bio: ["description", "bio"], tags: ["tags", "categories", "category"] }, limit: 100 },
-          total: { path: ["total", "data.total", "count", "total_count", "meta.total"] },
+          pageSize: 25,
+          list: { path: ["top_followers", "data.top_followers", "followers", "data.followers", "data.items", "items", "data", "results"], auto: true, fields: TS_FIELDS, limit: 100 },
+          total: { path: ["total", "data.total", "total_count", "totalCount", "meta.total", "pagination.total"] }, // never "count" (often this page's)
+        },
+        smartFollowersAlt: {
+          kind: "json", url: "https://twitterscore.io/api/v1/get_followers?username={handle}&page={page}&size={size}&api_key={key}", headers: { "X-API-Key": "{key}" },
+          pageSize: 25,
+          list: { path: ["followers", "data.followers", "top_followers", "data.top_followers", "data.items", "items", "data", "results"], auto: true, fields: TS_FIELDS, limit: 100 },
+          total: { path: ["total", "data.total", "total_count", "totalCount", "meta.total", "pagination.total"] }, // never "count" (often this page's)
         },
       },
     },

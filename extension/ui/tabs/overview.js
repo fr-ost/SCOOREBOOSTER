@@ -408,20 +408,20 @@ export default {
         if (pick) scoreFig.querySelector(".fig-label").appendChild(pick);
         return ledger(
           figure({
-            label: "Follow-backs", value: String(w.fb7), id: "figFollowBacks", href: "#results",
+            label: "Follow-backs", value: String(w.fb7), id: "figFollowBacks", href: "#history?view=ov",
             chart: miniBars(w.daily.map((d) => d.followBacks), { w: 110, h: 28, label: "Follow-backs per day, last 30 days", titles: w.daily.map((d) => `${d.d}: ${d.followBacks}`) }),
             delta: w.any ? delta(w.fb7 - w.fbPrev, { suffix: "vs prev", title: `${w.fbPrev} in the 7 days before` }) : null,
             sub: w.any ? "7 days · bars: 30 days" : "No follow-backs yet: they arrive 1-14 days after the first comments",
           }),
           figure({
-            label: "Follow-back rate", value: w.rate == null ? "-" : fmtPct(w.rate * 100, 1), id: "figRate", href: "#results",
+            label: "Follow-back rate", value: w.rate == null ? "-" : fmtPct(w.rate * 100, 1), id: "figRate", href: "#history?view=ov",
             chart: w.rates.some((x) => x != null) ? spark(w.rates, { w: 110, h: 28, label: "Follow-back rate per week, last 8 weeks" }) : null,
             delta: w.rNow != null && w.rPrev != null ? delta(w.rNow - w.rPrev, { unit: " pt", digits: 1, title: "This week vs the week before" }) : null,
             sub: w.rate == null ? `known once accounts reach day ${s.follow.giveUpDays || 14}` : `of accounts whose ${s.follow.giveUpDays || 14}-day window ended`,
           }),
           scoreFig,
           figure({
-            label: "Cost per follow-back", value: w.cpf == null ? "-" : fmtUsd(w.cpf), id: "figCpf", href: "#results?view=spend",
+            label: "Cost per follow-back", value: w.cpf == null ? "-" : fmtUsd(w.cpf), id: "figCpf", href: "#history?view=spend",
             chart: w.cpfWeeks.some((x) => x != null) ? spark(w.cpfWeeks, { w: 110, h: 28, label: "Cost per follow-back per week, last 8 weeks" }) : null,
             delta: w.cpf != null && w.cpfPrev != null ? delta(w.cpf - w.cpfPrev, { digits: 2, invert: true, title: "vs the 30 days before" }) : null,
             sub: "30 days · real OpenAI cost",
@@ -556,7 +556,7 @@ export default {
         const from = [...new Set(cands.flatMap((c) => (c.sources || []).map((x) => (String(x).match(/@([A-Za-z0-9_]{1,15})/) || [])[1]).filter(Boolean)))];
         rows.push({ key: "cand", ico: "discover", title: `${cands.length} new candidate${cands.length === 1 ? "" : "s"}`,
           text: from.length ? `From the smart followers of ${from.slice(0, 2).map((x) => "@" + x).join(" and ")}${from.length > 2 ? ` and ${from.length - 2} more` : ""}.` : "Found by the smart-follower search.",
-          actions: [h("a", { href: "#discover", class: "btn btn-xs", onClick: () => lsSet(LS_CAND_SEEN, String(now())) }, "Review")] });
+          actions: [h("a", { href: "#discover?view=find", class: "btn btn-xs", onClick: () => lsSet(LS_CAND_SEEN, String(now())) }, "Review")] });
       }
       // Budget.
       const b = budgetStatus(s, ctx.data[K.spend]);

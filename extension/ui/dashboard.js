@@ -35,7 +35,9 @@ import models from "./tabs/models.js";
 import safety from "./tabs/safety.js";
 import settingsTab from "./tabs/settings.js";
 
-// Rail: groups, labels (also the screen titles) and icons. Route ids stay the old ones (#history = Results).
+// Rail: seven screens in three groups; labels are also the screen titles. History holds every comment plus the stats and
+// spend (route #history, views Comments | Stats | Spend). Settings holds four tabs - General, Tone, Models & costs, Safety -
+// each still its own route (#settings, #tones, #models, #safety), all shown under the one Settings rail item.
 const NAV = [
   { group: "Work", items: [
     { id: "overview", label: "Today", icon: "today" },
@@ -43,24 +45,25 @@ const NAV = [
     { id: "targets", label: "Targets", icon: "targets" },
     { id: "discover", label: "Discover", icon: "discover" },
   ] },
-  { group: "Growth", items: [
+  { group: "Track", items: [
+    { id: "history", label: "History", icon: "history" },
     { id: "scores", label: "Scores", icon: "scores" },
-    { id: "history", label: "Results", icon: "results" },
-    { id: "comments", label: "History", icon: "history" }, // every comment: Results > Comments, all time
   ] },
   { group: "Setup", items: [
-    { id: "tones", label: "Tone", icon: "tones" },
-    { id: "models", label: "Models & costs", icon: "models" },
-    { id: "safety", label: "Safety", icon: "safety" },
     { id: "settings", label: "Settings", icon: "settings" },
   ] },
 ];
+const SETUP_TABS = [["settings", "General"], ["tones", "Tone"], ["models", "Models & costs"], ["safety", "Safety"]];
+const RAIL_OF = { tones: "settings", models: "settings", safety: "settings" }; // route -> its rail item
 const MODULES = { overview, review, targets, discover, scores, history: historyTab, tones, models, safety, settings: settingsTab };
 const NAV_ITEMS = NAV.flatMap((g) => g.items);
-const TABS = NAV_ITEMS.map((it) => MODULES[it.id]).filter(Boolean);
-const LABEL = Object.fromEntries(NAV_ITEMS.map((it) => [it.id, it.label]));
+const TABS = Object.values(MODULES);
+const LABEL = { ...Object.fromEntries(NAV_ITEMS.map((it) => [it.id, it.label])), tones: "Settings", models: "Settings", safety: "Settings" };
 // Old and friendly names that open a screen (with default params).
-const ALIASES = { results: ["history", {}], comments: ["history", { view: "comments", r: "all" }], diagnostics: ["settings", { view: "diagnostics" }], today: ["overview", {}], dashboard: ["overview", {}] };
+const ALIASES = {
+  results: ["history", { view: "ov" }], stats: ["history", { view: "ov" }], comments: ["history", { view: "comments" }],
+  diagnostics: ["settings", { view: "diagnostics" }], general: ["settings", {}], today: ["overview", {}], dashboard: ["overview", {}],
+};
 const WATCH = [K.state, K.targets, K.candidates, K.blacklist, K.discovery, K.logs, K.spend, K.learning, K.scoreboard, K.conversations, K.secretsRev];
 
 // ---------------------------------------------------------------- event bus + scopes
@@ -140,13 +143,13 @@ const ctx = {
     const next = { ...ctx.params, ...patch };
     for (const k of Object.keys(next)) if (next[k] == null || next[k] === "" || next[k] === false) delete next[k];
     const qs = new URLSearchParams(next).toString();
-    const hash = "#" + (ctx.navId || ctx.route || "overview") + (qs ? "?" + qs : "");
+    const hash = "#" + (ctx.route || "overview") + (qs ? "?" + qs : "");
     if (location.hash !== hash) window.history[push ? "pushState" : "replaceState"](null, "", hash);
     ctx.params = next;
     current.params = next;
   },
   setTitle(text) {
-    const t = text || LABEL[ctx.navId] || LABEL[ctx.route] || "ScoreX";
+    const t = text || LABEL[ctx.route] || "ScoreX";
     const el = document.getElementById("screenTitle");
     if (el) el.textContent = t;
     document.title = `${t} · ScoreX`;
@@ -487,15 +490,12 @@ function parseHash() {
   try { id = decodeURIComponent(qi >= 0 ? raw.slice(0, qi) : raw).trim().toLowerCase() || "overview"; } catch (_) { /* bad escape */ }
   let params = {};
   for (const [k, v] of new URLSearchParams(qi >= 0 ? raw.slice(qi + 1) : "")) params[k] = v;
-  let title = null, navId = null;
   if (ALIASES[id]) {
     const [to, def] = ALIASES[id];
     params = { ...def, ...params };
-    if (id === "results") title = "Results";
-    if (id !== "results" && Object.hasOwn(LABEL, id)) { title = LABEL[id]; navId = id; } // its own rail item (History)
     id = to;
   }
-  return { id, params, title, navId: navId || id };
+  return { id, params };
 }
 
 function handleResumeParam(params) {
@@ -504,9 +504,15 @@ function handleResumeParam(params) {
   if (isSafetyStop(ctx.state)) setTimeout(() => openReviewStop(), 0);
 }
 
+// The tab strip at the top of Settings, Tone, Models & costs and Safety (links: each tab is its own route).
+function setupTabs(active) {
+  return h("nav", { class: "filterbar setup-tabs", id: "setupTabs", "aria-label": "Settings sections" },
+    h("div", { class: "seg seg-lg" }, SETUP_TABS.map(([r, label]) => h("a", { href: "#" + r, class: ["seg-btn", r === active && "active"], dataset: { value: r }, "aria-current": r === active ? "page" : null }, label))));
+}
+
 let renderSeq = 0;
 async function route() {
-  const { id, params, title, navId } = parseHash();
+  const { id, params } = parseHash();
   const tab = MODULES[id] || overview;
   const markRail = (key) => {
     for (const a of nav.querySelectorAll(".tab")) {
@@ -518,7 +524,6 @@ async function route() {
   // Same screen, only the params changed, and the screen handles "params" itself: no re-render.
   if (current.id === tab.id && scope && scope.listeners.has("params") && scope.listeners.get("params").size) {
     ctx.params = params; current.params = params;
-    if (ctx.navId !== (MODULES[navId] ? tab.id : navId)) { ctx.navId = MODULES[navId] ? tab.id : navId; markRail(ctx.navId); ctx.setTitle(title || LABEL[tab.id] || tab.title); }
     emit("params", params);
     handleResumeParam(params);
     return;
@@ -530,17 +535,17 @@ async function route() {
   scope = sc;
   current = { id: tab.id, params };
   ctx.route = tab.id;
-  ctx.navId = MODULES[navId] ? tab.id : navId; // the rail item and the hash: #comments opens Results > Comments as "History"
   ctx.params = params;
   view.removeAttribute("data-ready");
   clear(view);
   view.dataset.tab = tab.id;
-  ctx.setTitle(title || LABEL[tab.id] || tab.title);
-  markRail(ctx.navId);
+  ctx.setTitle(LABEL[tab.id] || tab.title);
+  markRail(RAIL_OF[tab.id] || tab.id);
   // Each render gets its own host inside the view. Navigating clears the view, which detaches the old host,
   // so a slow tab that is still awaiting can only append into its own detached host, never the next tab.
   const host = h("div", { class: "tab-host" });
   view.appendChild(host);
+  if (SETUP_TABS.some(([r]) => r === tab.id)) host.appendChild(setupTabs(tab.id));
   if (tab.hint) host.appendChild(h("p", { class: "page-hint" }, tab.hint));
   try {
     await tab.render(host, screenCtx(sc));

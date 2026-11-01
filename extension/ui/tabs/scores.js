@@ -270,7 +270,7 @@ export default {
         ? spark(vals, { w: 120, h: 34, step: true, cls: vizClass(p.id), label: `${p.name}, last 90 days: ${fmtNum(firstV)} to ${fmtNum(lastV)}` })
         : null;
       const kids = [
-        h("span", { class: "cap pcell-cap" }, providerKey(p.id), p.name, p.mode ? tag(MODE_TAG[p.mode] || p.mode) : null),
+        h("span", { class: "cap pcell-cap" }, providerKey(p.id), p.name, p.split ? tag("Page + API", "", "Your score: the free page (a browser tab after a bot check). Smart followers: the API with your key.") : p.mode ? tag(MODE_TAG[p.mode] || p.mode) : null),
         h("div", { class: "fig-row" }, h("span", { class: "fig-value" }, hasScore ? fmtNum(own.score) : "-"), chart ? h("span", { class: "fig-chart" }, chart) : null),
       ];
       if (hasScore && max) {
@@ -679,12 +679,17 @@ export default {
         ctx.field({ path: "scores.blendSorsa", type: "percent", label: "Weight of Sorsa in the combined rank", min: 0, max: 100, step: 5, suffix: "%", hint: "A target's rank mixes ScoreX's own rank with its Sorsa score when Sorsa has one." })),
       ovAdv);
 
+    // Other accounts' scores (off by default: requests go to your own score and smart followers only), folded away.
+    const othersAdv = advanced({ key: "scores.others", id: "scoresOthers", title: "Other accounts' scores", desc: "Check any account and your targets' scores - off by default, they spend requests", open: !!ctx.settings.scores.checkOthers },
+      h("div", { class: "cols-even scores-cols" }, checkSec, coverWrap));
+
     // ------------------------------------------------ layout
     add(root,
       head,
       cellsHost,
       histSec,
-      h("div", { class: "cols-even scores-cols" }, fbSec, h("div", { class: "stack-lg" }, checkSec, coverWrap)),
+      fbSec,
+      othersAdv,
       provAdv);
 
     function drawAll() {

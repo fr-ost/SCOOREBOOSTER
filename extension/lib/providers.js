@@ -203,6 +203,6 @@ function finish(def, cap, r, pageUrl, self = "") {
   if (!r || !r.ok) return { ...(r || { ok: false, error: "unknown" }), url: (r && r.url) || pageUrl };
   const out = { ...r, url: r.url || pageUrl };
   if (cap === "score" && out.max == null && def.max) out.max = def.max;
-  if (cap === "smartFollowers" && Array.isArray(out.list)) out.list = out.list.filter((x) => x.handle !== self).slice(0, clamp(Math.round(num(def.listLimit, 50)), 1, 200));
+  if (/^smartFollowers/.test(cap) && Array.isArray(out.list)) out.list = out.list.filter((x) => x.handle !== self).slice(0, clamp(Math.round(num(def.listLimit, 50)), 1, 200));
   return out;
 }

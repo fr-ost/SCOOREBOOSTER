@@ -310,7 +310,15 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
             if ((u.searchParams.get("api_key") || req.headers["x-api-key"]) !== TS.apiKey) return send(401, { success: false, message: "bad key" });
             const h = (u.searchParams.get("username") || "").toLowerCase();
             if (u.pathname === "/api/v1/get_twitter_score") return TS.scores[h] == null ? send(404, { success: false }) : send(200, { success: true, username: h, twitter_id: "1", twitter_score: TS.scores[h] });
-            if (u.pathname === "/api/v1/top_followers_paginate") return send(200, { success: true, top_followers: (TS.smart[h] || []).map((x) => ({ username: x.handle, name: x.handle.toUpperCase(), twitter_score: x.score, followers_count: 10000 })) });
+            // As documented: page is 1-based, size defaults to 5 and is capped at 25, a page past the last is empty (same total).
+            // get_followers is the replacement endpoint (same paging); TS.oldGone makes the deprecated one answer 404.
+            if (u.pathname === "/api/v1/top_followers_paginate" || u.pathname === "/api/v1/get_followers") {
+              if (TS.oldGone && u.pathname === "/api/v1/top_followers_paginate") return send(404, { success: false, message: "Not found" });
+              const all = TS.smart[h] || [];
+              const page = Math.max(1, Number(u.searchParams.get("page") || 1)), size = Math.min(25, Math.max(1, Number(u.searchParams.get("size") || 5)));
+              const rows = all.slice((page - 1) * size, page * size).map((x) => ({ username: x.handle, name: x.handle.toUpperCase(), twitter_score: x.score, followers_count: 10000 }));
+              return send(200, { success: true, total: all.length, [u.pathname.endsWith("get_followers") ? "followers" : "top_followers"]: rows });
+            }
             return send(404, { success: false });
           }
           const m2 = u.pathname.match(/^\/twitter\/([A-Za-z0-9_]{1,15})\/?$/);

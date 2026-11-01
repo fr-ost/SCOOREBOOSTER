@@ -52,7 +52,7 @@ export function uid(prefix = "") {
 
 // ---------- handles ----------
 
-// Accepts "@name", "name", "https://x.com/name", "x.com/name/status/1", "twitter.com/name".
+// Accepts "@name", "name", "https://x.com/name", "x.com/name/status/1", "twitter.com/name", "twitterscore.io/twitter/name".
 // Returns the lowercase handle or "" when invalid.
 // Also never accept names that collide with Object prototype keys (handle-keyed maps are plain objects).
 const RESERVED = new Set(["home", "explore", "notifications", "messages", "i", "search", "settings", "compose", "login", "logout", "signup", "tos", "privacy", "hashtag", "intent", "share", "__proto__", "constructor", "prototype", "hasownproperty", "tostring", "valueof"]);
@@ -60,9 +60,10 @@ export function normalizeHandle(raw) {
   if (raw == null) return "";
   let s = String(raw).trim();
   if (!s) return "";
-  const m = s.match(/(?:https?:\/\/)?(?:www\.|mobile\.)?(?:x|twitter)\.com\/(?:#!\/)?@?([A-Za-z0-9_]{1,15})(?:[/?#]|$)/i);
+  const m = s.match(/(?:https?:\/\/)?(?:www\.|mobile\.)?(?:x|twitter)\.com\/(?:#!\/)?@?([A-Za-z0-9_]{1,15})(?:[/?#]|$)/i)
+    || s.match(/(?:https?:\/\/)?(?:www\.)?twitterscore\.io\/twitter\/@?([A-Za-z0-9_]{1,15})(?:[/?#]|$)/i); // a TwitterScore profile
   if (m) s = m[1];
-  else if (/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(s)) return ""; // a link to some other site
+  else if (/^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)/i.test(s) || /^[a-z0-9-]+(?:\.[a-z0-9-]+)+\//i.test(s)) return ""; // a link to some other site
   s = s.replace(/^@+/, "").replace(/[^A-Za-z0-9_].*$/, "");
   if (!/^[A-Za-z0-9_]{1,15}$/.test(s)) return "";
   const h = s.toLowerCase();

@@ -131,7 +131,7 @@ export default {
     const blViewBtn = h("button", { type: "button", class: "btn btn-ghost tg-bl-btn", id: "blacklistViewBtn", dataset: { sum: "blacklisted" }, title: "Accounts ScoreX never adds again", onClick: () => showView("blacklist", true) },
       icon("ban"), h("span", null, "Blacklist"), blCount);
     const addBtn = btn("Add targets", () => openAdd(), { kind: "primary", iconName: "plus", id: "addTargetsBtn" });
-    const findLink = h("a", { href: "#discover", class: "btn btn-ghost", id: "findTargetsLink", title: "Smart followers, followers of an account, search (Discover)" }, icon("discover"), h("span", null, "Find new targets"));
+    const findLink = h("a", { href: "#discover?view=find", class: "btn btn-ghost", id: "findTargetsLink", title: "Smart followers, followers of an account, search (Discover)" }, icon("discover"), h("span", null, "Find new targets"));
     const head = h("div", { class: "filterbar tg-head", id: "targetsSummary" }, statusSeg, h("span", { class: "spacer" }), findLink, blViewBtn, addBtn);
 
     // ------------------------------------------------ toolbar: search, tier, high value, columns
@@ -288,7 +288,7 @@ export default {
           fill(emptyHost,
             h("div", { class: "tg-empty-head" },
               h("h2", { class: "sec-title" }, "Add your first targets"),
-              h("p", { class: "small muted" }, "Paste the accounts you want replies on, or find smart accounts on ", h("a", { href: "#discover" }, "Discover"), ".")),
+              h("p", { class: "small muted" }, "Paste the accounts you want replies on, or find smart accounts on ", h("a", { href: "#discover?view=find" }, "Discover"), ".")),
             addForm({ inline: true }));
         }
         emptyHost.hidden = false;
@@ -429,7 +429,7 @@ export default {
           h("span", { class: "cap" }, "From a file"),
           h("p", { class: "small muted" }, "CSV (handle, tier, tone, notes), JSON or a plain list. Rows without a tier use the Tier above."),
           h("div", { class: "toolbar" }, importLabel, file, btn("Export CSV", exportCsv, { iconName: "download", size: "sm", id: "exportTargetsBtn", title: "All targets with scores and stats", disabled: !list().length }))),
-        h("p", { class: "small muted tg-add-note" }, "ScoreX first checks who already follows you and only comments on accounts that don't. ", h("a", { href: "#discover" }, "Find new targets on Discover"), "."));
+        h("p", { class: "small muted tg-add-note" }, "ScoreX first checks who already follows you and only comments on accounts that don't. ", h("a", { href: "#discover?view=find" }, "Find new targets on Discover"), "."));
     }
     function openAdd() {
       if (!list().length && !emptyHost.hidden) { const ta = emptyHost.querySelector("#addHandles"); if (ta) { ta.focus(); return; } }
@@ -646,7 +646,7 @@ export default {
         it.text ? h("span", { class: "tg-tl-text" }, String(it.text)) : null,
         (it.res && it.res.length) || (it.links && it.links.some((l) => l[0])) ? h("span", { class: "res" }, it.res || [],
           (it.links || []).filter((l) => l[0]).map(([href, label]) => h("a", { href, target: "_blank", rel: "noopener noreferrer", class: "small tg-tl-link" }, label + " ↗"))) : null));
-      if (items.length > MAX) out.push(h("li", { class: "tg-tl-more" }, h("span", { class: "what muted" }, `${fmtNum(items.length - MAX)} older entries: see `, h("a", { href: "#results" }, "Results"), ".")));
+      if (items.length > MAX) out.push(h("li", { class: "tg-tl-more" }, h("span", { class: "what muted" }, `${fmtNum(items.length - MAX)} older entries: see `, h("a", { href: "#history" }, "History"), ".")));
       return out;
     }
     async function loadTimeline(handle) {

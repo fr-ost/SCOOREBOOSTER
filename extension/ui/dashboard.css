@@ -1338,3 +1338,8 @@ svg.meter { display: block; }
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
   .table-wrap { animation-duration: auto !important; } /* the scroll-driven edge colour is not motion */
 }
+
+/* Settings tab strip (General | Tone | Models & costs | Safety): links styled as the segmented control */
+.setup-tabs { margin-bottom: 4px; }
+.setup-tabs a.seg-btn { text-decoration: none; }
+.disc-tabs { margin-bottom: 4px; }

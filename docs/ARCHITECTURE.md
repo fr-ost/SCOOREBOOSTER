@@ -21,8 +21,11 @@ extension/
     providers.js          runs one provider capability (score / smart followers): api, public or page mode,
                           owner overrides limited to the provider's own https hosts, optional permissions
     pagereader.js         "browser tab" mode: reads a rendered provider page in a background tab, then closes it
-    scoreboard.js         sx.scoreboard: own scores + history, checks, smart lists, target scores, usage caps
-    analytics.js          funnel, heatmap and follow-back attribution for Results
+    scoreboard.js         sx.scoreboard: own scores + history, checks, smart lists, target scores, usage caps,
+                          pagedSmartFollowers (TwitterScore API, 25 per page) and the smart follower database scan
+    smartdb.js            IndexedDB "smartdb": one row per username (score, date of scan, accounts it was found under)
+    xlsx.js               CSV and a minimal XLSX writer (no library) for the downloads
+    analytics.js          funnel, heatmap and follow-back attribution for History > Stats
     diagnostics.js        live X self-test (home, profile, followers list; never clicks or types)
     catchup.js            catch-up: each target's latest earlier posts when the queue runs dry
     guard.js              pageVerdict: turns the page report into stop / soft / not-found verdicts
@@ -52,12 +55,14 @@ extension/
     selectors.js          THE single config of DOM selectors + text patterns (user overrides merged)
     dom.js  detect.js  scrape.js  actions.js  content.js (router)
   ui/                     dashboard (options page) + popup
-    dashboard.js          shell: left rail (Work / Growth / Setup), engine bar, routes (#screen?param=..),
-                          storage watch + redraw, Full-auto confirm, safety-stop review dialog
+    dashboard.js          shell: left rail with 7 screens (Work / Track / Setup), the Settings tab strip (General,
+                          Tone, Models & costs, Safety are separate routes under one rail item), engine bar, routes
+                          (#screen?param=..), storage watch + redraw, Full-auto confirm, safety-stop review dialog
     components.js         DOM helpers (h(), no innerHTML with untrusted text), fields, drawer, sheets, tables
     charts.js             inline SVG charts (sparklines, bars, history with event ticks, heatmap)
-    tabs/*.js             one module per screen: overview (Today), review, targets, discover, scores,
-                          history (Results), tones (Tone), models, safety, settings (with Diagnostics)
+    tabs/*.js             one module per screen: overview (Today), review, targets, discover (tabs: smartdb_ui.js
+                          database | Find targets), scores, history (Comments | Stats | Spend), and the Settings
+                          tabs settings (General, with Diagnostics), tones (Tone), models, safety
     css/*.css             per-screen styles on the shared tokens in dashboard.css (light + dark)
 ```
 

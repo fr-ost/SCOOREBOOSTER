@@ -1,5 +1,5 @@
-// Results (#results, #history): three views under one 7 d / 30 d / All + tier filter.
-//   Overview: follow-back funnel, every day (posted bars + follow-back squares, 12-week heatmap), views per reply,
+// History (#history; #results and #comments open it too): three views under one 7 d / 30 d / All + tier filter.
+//   Comments (the default, all time): every comment ScoreX wrote. Stats: follow-back funnel, every day (posted bars + follow-back squares, 12-week heatmap), views per reply,
 //     conversion by tier and tone / preset, days to a follow-back, top responders, author replies, A/B summary.
 //   Comments: the history table (Date, Target, Comment, Status with its reason, Results; a row opens the details
 //     drawer), filters, CSV export, totals by period, history retention and Clear history.
@@ -24,7 +24,7 @@ import { PRESET_LABEL } from "./models.js";
 
 const STATUS_OPTS = [["", "All statuses"], [HS.POSTED, "Posted"], [HS.PENDING_REVIEW, "Pending review"], [HS.APPROVED, "Approved"], [HS.QUEUED, "Queued"], [HS.POSTING, "Posting"], [HS.SKIPPED, "Skipped"], [HS.FAILED, "Failed"]];
 const OUTCOME_OPTS = [["", "Any outcome"], ["liked", "Reply got likes"], ["replied", "Reply got replies"], ["author", "Author replied"], ["followed", "Followed back"], ["none", "No response"], ["unchecked", "Not checked yet"]];
-const VIEWS = [["ov", "Overview"], ["comments", "Comments"], ["spend", "Spend"]];
+const VIEWS = [["comments", "Comments"], ["ov", "Stats"], ["spend", "Spend"]];
 const RANGES = [["7", "7 d"], ["30", "30 d"], ["all", "All"]];
 const TIERS = [["", "All tiers"], ["1", "T1"], ["2", "T2"]];
 
@@ -52,11 +52,11 @@ const outcomeOk = (r, o) => {
 
 export default {
   id: "history",
-  title: "Results",
+  title: "History",
   async render(root, ctx) {
     const readP = (q = ctx.params || {}) => ({
-      view: VIEWS.some(([v]) => v === q.view) ? q.view : "ov",
-      range: RANGES.some(([v]) => v === q.r) ? q.r : "30",
+      view: VIEWS.some(([v]) => v === q.view) ? q.view : "comments",
+      range: RANGES.some(([v]) => v === q.r) ? q.r : "all",
       tier: q.t === "1" || q.t === "2" ? q.t : "",
     });
     const p = readP();
@@ -77,7 +77,7 @@ export default {
     const createdIn = () => { const since = sinceTs(); return recsT().filter((r) => !since || (r.createdAt || 0) >= since); };
 
     // ------------------------------------------------ filter bar + panes
-    const viewSeg = segmented(VIEWS, p.view, (v) => setP({ view: v }), { label: "Results view" });
+    const viewSeg = segmented(VIEWS, p.view, (v) => setP({ view: v }), { label: "History view" });
     viewSeg.id = "resultsView";
     const rangeSeg = segmented(RANGES, p.range, (v) => setP({ range: v }), { label: "Time range" });
     rangeSeg.id = "resultsRange";
@@ -90,7 +90,7 @@ export default {
 
     function setP(patch) {
       Object.assign(p, patch);
-      // Explicit values (#comments opens with view=comments and all time; a cleared value would fall back to those).
+      // Explicit values in the URL (a cleared value would fall back to the defaults: Comments, all time).
       ctx.setParams({ view: p.view, r: p.range, t: p.tier || null });
       markAll();
       show();

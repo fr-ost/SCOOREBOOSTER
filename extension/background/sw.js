@@ -246,7 +246,7 @@ const handlers = {
   scoreJobCancel: async () => { if (scoreJob) scoreJob.cancel = true; return { ok: true }; },
 
   // ---- smart-follower database (TwitterScore paid API; Discover > Database) ----
-  smartDbBuild: (m) => startScoreJob("smartdb", "Smart follower database", (ctl) => SB.buildSmartDb((m.handles || []).map(String), { size: m.size, maxPages: m.maxPages, ...ctl }), { provider: "twitterscore" }),
+  smartDbBuild: (m) => startScoreJob("smartdb", "Smart follower database", (ctl) => SB.buildSmartDb((m.handles || []).map(String), ctl), { provider: "twitterscore" }),
   smartDbList: async () => { const rows = await SDB.listRows(); return { ok: true, rows, count: rows.length }; },
   smartDbRemove: async (m) => ({ ok: true, removed: await SDB.removeRows(Array.isArray(m.handles) ? m.handles.map(String) : []) }),
   smartDbClear: async () => { await SDB.clearRows(); return { ok: true }; },

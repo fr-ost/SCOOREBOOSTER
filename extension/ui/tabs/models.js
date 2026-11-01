@@ -1,6 +1,6 @@
 // Models & costs tab. Essentials: OpenAI key + test, the three presets, the preset per tier, the cost
 // estimator and the monthly budget. Advanced: editable model/price table, fallback models, quality checker.
-// Spend reports (totals per model / day / week / month, performance per model and tone) live in Results > Spend.
+// Spend reports (totals per model / day / week / month, performance per model and tone) live in History > Spend.
 
 import { K, EFFORTS, PRESET_KEYS } from "../../lib/constants.js";
 import { getSecrets, setSecrets } from "../../lib/store.js";
@@ -225,10 +225,10 @@ export default {
         ctx.field({ path: "budget.warnAtPct", type: "number", label: "Warn at (%)", min: 10, max: 100, step: 5 })),
       budgetStatusHost);
 
-    // ------------------------------------------------ spend reports (moved to Results > Spend)
+    // ------------------------------------------------ spend reports (in History > Spend)
     const reportsSec = section({ title: "Spend reports", hint: "Totals per model, day, week and month and performance per model and tone are in Results." },
       h("p", { class: "small muted" }, "See what each model and tone costs per posted comment and per follow-back, next to the daily cost chart and your budget."),
-      h("a", { href: "#results?view=spend", class: "btn btn-sm", id: "spendReportsLink" }, "Open Results › Spend"));
+      h("a", { href: "#history?view=spend", class: "btn btn-sm", id: "spendReportsLink" }, "Open History › Spend"));
 
     add(root, keySec, presetsSec, matrixSec, estSec, budgetSec, reportsSec,
       advanced({ key: "models.advanced", desc: "Model and price table, fallback models, quality checker" },

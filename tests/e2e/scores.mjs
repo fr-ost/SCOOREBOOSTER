@@ -103,6 +103,35 @@ try {
   assert(r.results.twitterscore.list.length === 4 && apiCalls() === api0 + 1, "smart followers use the API (mode Auto, key saved)");
   M.twitterscore.mode = "ok";
 
+  // ---- the smart follower database: every page (25 per request), duplicates merged, the daily cap does not stop it ----
+  M.twitterscore.smart.whale = Array.from({ length: 60 }, (_, i) => ({ handle: "w_" + i, score: 900 - i }));
+  M.twitterscore.smart.shark = [...Array.from({ length: 10 }, (_, i) => ({ handle: "w_" + i, score: 905 - i })), ...Array.from({ length: 5 }, (_, i) => ({ handle: "s_" + i, score: 300 }))];
+  await H.settings({ providers: { twitterscore: { dailyCap: 2 } } });
+  const dbCalls0 = apiCalls();
+  r = await H.msg("smartDbBuild", { handles: ["https://x.com/Whale", "twitterscore.io/twitter/shark", "@nobody_here"] });
+  assert(r.ok && r.started, "database scan runs as a background job");
+  let dbJob = await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.kind === "smartdb" && b.job.status !== "running" ? b.job : null; }, "database scan finishes", 60000);
+  assert(dbJob.status === "done" && dbJob.result.found === 75 && dbJob.result.added === 65, "scan: 60 + 15 smart followers read, 65 different accounts: " + JSON.stringify(dbJob.result));
+  assert(apiCalls() - dbCalls0 === 5 && dbJob.result.requests === 5, "25 per request: whale 3 pages (25 + 25 + 10), shark 1, nobody 1 - with a daily cap of 2 (" + (apiCalls() - dbCalls0) + ")");
+  assert(M.twitterscore.calls.slice(-5).every((c) => /size=25/.test(c)), "every page asks for 25 (the API's cap)");
+  assert(JSON.stringify(dbJob.result.empty) === JSON.stringify(["nobody_here"]), "an account with no smart followers is named: " + JSON.stringify(dbJob.result.empty));
+  let db = await H.msg("smartDbList", {});
+  const w0 = db.rows.find((x) => x.handle === "w_0");
+  assert(db.count === 65 && w0 && w0.score === 905 && JSON.stringify(w0.sources) === JSON.stringify(["whale", "shark"]) && w0.scannedAt > 0, "merged: one row per username with the newest score, the date of scan and both accounts it was found under");
+  assert(db.rows[0].handle === "w_0", "best score first");
+  // the deprecated endpoint gone: get_followers takes over
+  M.twitterscore.oldGone = true;
+  M.twitterscore.smart.orca = Array.from({ length: 30 }, (_, i) => ({ handle: "o_" + i, score: 500 }));
+  await H.msg("smartDbBuild", { handles: ["orca"] });
+  dbJob = await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.kind === "smartdb" && b.job.status !== "running" && b.job.result && b.job.result.found === 30 ? b.job : null; }, "scan via get_followers", 60000);
+  assert(M.twitterscore.calls.slice(-2).every((c) => c.startsWith("/api/v1/get_followers")), "top_followers_paginate answers 404: get_followers is used");
+  M.twitterscore.oldGone = false;
+  db = await H.msg("smartDbList", {});
+  assert(db.count === 95, "the second scan adds to the database (95)");
+  r = await H.msg("smartDbRemove", { handles: ["o_0", "o_1"] });
+  assert(r.ok && r.removed === 2 && (await H.msg("smartDbList", {})).count === 93, "remove selected rows");
+  await H.settings({ providers: { twitterscore: { dailyCap: 100 } } });
+
   // ---- Ethos (free, no key) and Moni (your free key) ----
   M.ethos.scores["0x_nation"] = 1460;
   M.moni.scores["0x_nation"] = 37;

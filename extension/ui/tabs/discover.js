@@ -4,7 +4,9 @@
 // background sweep (sx.scoreboard.job, kind "sweep") whose finds land in the candidates. "Big accounts swept" shows the
 // cached lists (sx.scoreboard.smart, 3 days). The candidates table (sx.candidates) has provider score columns, the
 // "listed by" overlap, the filter result and "Add N as Tier X".
-// Route params: #discover?h=<handle> prefills and runs the smart-follower lookup; ?s=<source> picks the source.
+// Two tabs: "Smart follower database" (ui/tabs/smartdb_ui.js: paste usernames, scan every smart follower on TwitterScore,
+// download) and "Find targets" (everything above). Route params: ?view=db|find; #discover?h=<handle> opens Find targets
+// and runs the smart-follower lookup; ?s=<source> picks the source.
 
 import { K } from "../../lib/constants.js";
 import { parseHandleList, normalizeHandle, num } from "../../lib/util.js";
@@ -77,11 +79,31 @@ function mergeResults(results) {
 }
 const listTotal = (results) => Math.max(0, ...Object.values(results || {}).map((r) => num(r && r.total)));
 
+const VIEWS = [["db", "Smart follower database"], ["find", "Find targets"]];
+const viewFrom = (prm) => (prm && (prm.h || prm.s) ? "find" : prm && VIEWS.some(([v]) => v === prm.view) ? prm.view : lsGet("sx.discover.view", "db") === "find" ? "find" : "db");
+
 export default {
   id: "discover",
   title: "Discover",
-  hint: "Find new accounts to target. Nothing is followed or posted.",
   async render(root, ctx) {
+    // ------------------------------------------------ tabs: the database tool | find targets
+    let view = viewFrom(ctx.params);
+    const dbPane = h("div", { class: "disc-pane stack-lg", id: "discDbPane" });
+    const findPane = h("div", { class: "disc-pane stack-lg", id: "discFindPane" });
+    const viewSeg = segmented(VIEWS, view, (v) => { setView(v); ctx.setParams({ view: v, h: null, s: null }); }, { label: "Discover tool" });
+    viewSeg.id = "discView";
+    function setView(v) {
+      view = v;
+      lsSet("sx.discover.view", v);
+      viewSeg.set(v);
+      dbPane.hidden = v !== "db";
+      findPane.hidden = v !== "find";
+    }
+    add(root, h("div", { class: "filterbar disc-tabs" }, viewSeg), dbPane, findPane);
+    add(dbPane, smartDbSection(ctx));
+    setView(view);
+    root = findPane; // everything below builds the Find targets tab
+
     let providers = [];
     let src = SOURCES.some(([v]) => v === ctx.params.s) ? ctx.params.s : SOURCES.some(([v]) => v === lsGet("sx.discover.src", "")) ? lsGet("sx.discover.src", "") : "smart";
     let focus = null; // handle shown in "Smart followers of @x"
@@ -522,11 +544,11 @@ export default {
 
     // ------------------------------------------------ layout
     add(root,
+      h("p", { class: "page-hint" }, "Find new accounts to target: smart followers of big accounts, followers or following of an account, common follows, people search. Nothing is followed or posted."),
       h("div", { class: "disc-top" }, h("div", { class: "filterbar" }, srcSeg), formRow, optRow, hintEl, filtersAdv, discHost, sweepHost),
       lookHost,
       sweptHost,
-      candSec,
-      smartDbSection(ctx));
+      candSec);
 
     await loadProviders();
     drawForm();
@@ -545,7 +567,9 @@ export default {
     ctx.on("settings", reloadProviders);
     ctx.on("secrets", reloadProviders);
     const applyParams = (prm) => {
-      if (prm && SOURCES.some(([v]) => v === prm.s) && prm.s !== src) { src = prm.s; drawForm(); }
+      const v = viewFrom(prm);
+      if (v !== view) setView(v);
+      if (prm && SOURCES.some(([v2]) => v2 === prm.s) && prm.s !== src) { src = prm.s; drawForm(); }
       const hd = prm && normalizeHandle(prm.h);
       if (hd && hd !== lookupBusy && (hd !== focus || !(board().smart || {})[hd])) {
         if (smartProviders().length) lookup(hd);

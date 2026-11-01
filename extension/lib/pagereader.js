@@ -74,11 +74,28 @@ function matchRegex(text, re) {
 }
 
 // Map a JSON list spec to [{ handle, name, score, followers }] (invalid handles dropped, deduped).
+// The first array (breadth first, 4 levels deep) whose rows carry a valid handle under one of handleKeys.
+function findList(json, handleKeys) {
+  const queue = [[json, 0]];
+  while (queue.length) {
+    const [node, d] = queue.shift();
+    if (!node || typeof node !== "object") continue;
+    if (Array.isArray(node)) {
+      if (node.slice(0, 5).some((it) => it && typeof it === "object" && cleanHandle(pluck(it, handleKeys)))) return node;
+      continue;
+    }
+    if (d < 4) for (const v of Object.values(node)) if (v && typeof v === "object") queue.push([v, d + 1]);
+  }
+  return null;
+}
+
 export function pickList(spec, json) {
   if (!spec || spec.path == null) return [];
-  const arr = pluck(json, spec.path);
-  if (!Array.isArray(arr)) return [];
   const f = spec.fields || {};
+  let arr = pluck(json, spec.path);
+  // spec.auto: the list moved to another key (an API change) - still found, never an empty "no smart followers".
+  if (!Array.isArray(arr) && spec.auto) arr = findList(json, f.handle || ["username", "screen_name", "handle", "twitter_username"]);
+  if (!Array.isArray(arr)) return [];
   const out = [];
   const seen = new Set();
   for (const item of arr) {

@@ -41,7 +41,9 @@ const { chromium } = require("playwright");
 const EXT = "/home/user/SCOOREBOOSTER/extension";
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "out");
 // [route, rail label / screen title]
-const SCREENS = [["overview", "Today"], ["review", "Review"], ["targets", "Targets"], ["discover", "Discover"], ["scores", "Scores"], ["history", "Results"], ["comments", "History"], ["tones", "Tone"], ["models", "Models & costs"], ["safety", "Safety"], ["settings", "Settings"]];
+const SCREENS = [["overview", "Today"], ["review", "Review"], ["targets", "Targets"], ["discover", "Discover"], ["history", "History"], ["scores", "Scores"], ["settings", "Settings"]];
+// Settings tabs (their own routes under the Settings rail item) and the other routes every theme/width pass renders.
+const SETUP = [["settings", "General"], ["tones", "Tone"], ["models", "Models & costs"], ["safety", "Safety"]];
 const READY = { results: "history", diagnostics: "settings", comments: "history" }; // route aliases -> the screen that renders them
 const FAKE_KEY = "sk-test-UIsmoke1234567890abcdWXYZ";
 
@@ -342,7 +344,7 @@ try {
 
   // ---------------------------------------------------------------- every screen, both themes, 3 widths
   await section("screens (light + dark at 1360 / 800 / 560)", async () => {
-    const routes = [...SCREENS.map(([r]) => r), "diagnostics"];
+    const routes = [...SCREENS.map(([r]) => r), "tones", "models", "safety", "diagnostics", "discover?view=find"];
     for (const theme of ["light", "dark"]) {
       await setTheme(page, theme);
       for (const w of [1360, 800, 560]) {
@@ -357,7 +359,7 @@ try {
           }
           const ov = await overflowX(page);
           check(ov <= 0, `${theme} ${w}px ${r}: no horizontal page scroll` + (ov > 0 ? ` (overflow ${ov}px: ${await wideElements(page)})` : ""));
-          await shot(page, `${theme}-${r}${w === 1360 ? "" : "-" + w}.png`, w !== 560);
+          await shot(page, `${theme}-${r.replace(/[?=&]/g, "-")}${w === 1360 ? "" : "-" + w}.png`, w !== 560);
         }
       }
     }
@@ -380,7 +382,7 @@ try {
     check(await page.evaluate(() => [...document.querySelectorAll("#targetStatus .ct")].every((el) => getComputedStyle(el).opacity === "1")), "filter counts are drawn at full text colour");
     await page.setViewportSize({ width: 560, height: 900 });
     await openTab(page, base, "history?view=comments");
-    check(await headIn("#historyTable", "status"), "560px Results › Comments: the Status column is fully in view");
+    check(await headIn("#historyTable", "status"), "560px History › Comments: the Status column is fully in view");
     await page.setViewportSize({ width: 1360, height: 900 });
   });
 
@@ -438,8 +440,8 @@ try {
   await section("shell: rail, engine bar, aliases, menu sheet", async () => {
     await openTab(page, base, "overview");
     const labels = await page.locator("#nav .tab .tab-label").allInnerTexts();
-    check(JSON.stringify(labels) === JSON.stringify(SCREENS.map((x) => x[1])), "rail lists the 11 screens in order: " + labels.join(", "));
-    check((await page.locator("#nav .rail-group").allInnerTexts()).join("|").toUpperCase() === "WORK|GROWTH|SETUP", "rail groups WORK / GROWTH / SETUP");
+    check(JSON.stringify(labels) === JSON.stringify(SCREENS.map((x) => x[1])), "rail lists the 7 screens in order: " + labels.join(", "));
+    check((await page.locator("#nav .rail-group").allInnerTexts()).join("|").toUpperCase() === "WORK|TRACK|SETUP", "rail groups WORK / TRACK / SETUP");
     check((await page.locator('#nav .tab.active[aria-current="page"] .tab-label').innerText()).trim() === "Today", "active screen is marked with aria-current (Today)");
     check(await waitFor(page, () => document.querySelector('#nav [data-tab="review"] .tab-count')?.textContent === "3", null, 8000), "Review rail item shows a count of 3");
     for (const [r, label] of SCREENS) {
@@ -449,10 +451,19 @@ try {
       check(ok && (await page.locator("#screenTitle").innerText()).trim() === label && (await page.locator(`#nav .tab[data-tab="${r}"]`).getAttribute("aria-current")) === "page", `rail click opens ${label} (#view[data-ready="${r}"], title, aria-current)`);
     }
     await openTab(page, base, "results");
-    check((await page.locator("#screenTitle").innerText()).trim() === "Results" && (await page.locator("#nav .tab.active").getAttribute("data-tab")) === "history", "#results opens Results (rail item history active)");
+    check((await page.locator("#screenTitle").innerText()).trim() === "History" && (await page.locator("#nav .tab.active").getAttribute("data-tab")) === "history" && (await page.locator('#resultsView [aria-checked="true"]').getAttribute("data-value")) === "ov", "#results (old link) opens History › Stats");
     await openTab(page, base, "comments");
-    check((await page.locator("#screenTitle").innerText()).trim() === "History" && (await page.locator("#nav .tab.active").getAttribute("data-tab")) === "comments" && (await page.locator("#resultsComments").isVisible()) && (await page.locator("#historyTable").count()) === 1, "#comments opens History: every comment (Results > Comments, all time), its own rail item active");
-    check((await page.locator('#resultsRange [aria-checked="true"]').getAttribute("data-value")) === "all" && (await page.locator('#resultsView [aria-checked="true"]').getAttribute("data-value")) === "comments", "History opens on Comments, all time");
+    check((await page.locator("#nav .tab.active").getAttribute("data-tab")) === "history" && (await page.locator("#resultsComments").isVisible()) && (await page.locator("#historyTable").count()) === 1, "#comments (old link) opens History › Comments");
+    await openTab(page, base, "history");
+    check((await page.locator('#resultsRange [aria-checked="true"]').getAttribute("data-value")) === "all" && (await page.locator('#resultsView [aria-checked="true"]').getAttribute("data-value")) === "comments" && JSON.stringify(await page.locator("#resultsView [data-value]").allInnerTexts()) === JSON.stringify(["Comments", "Stats", "Spend"]), "History opens on Comments, all time (views Comments | Stats | Spend)");
+    // Settings: one rail item, four tabs (each its own route).
+    for (const [r, label] of SETUP) {
+      await openTab(page, base, r);
+      const tabs = await page.locator("#setupTabs a").allInnerTexts();
+      check(JSON.stringify(tabs) === JSON.stringify(SETUP.map((x) => x[1])) && (await page.locator("#setupTabs a.active").innerText()).trim() === label && (await page.locator("#nav .tab.active").getAttribute("data-tab")) === "settings" && (await page.locator("#screenTitle").innerText()).trim() === "Settings", `#${r}: Settings › ${label} (tabs General | Tone | Models & costs | Safety, rail item Settings)`);
+    }
+    await page.click('#setupTabs a[data-value="safety"]');
+    check(await waitFor(page, () => !!document.querySelector('#view[data-ready="safety"]'), null, 8000) && (await page.locator("#setupTabs a.active").innerText()).trim() === "Safety", "clicking a Settings tab opens it");
     await openTab(page, base, "diagnostics");
     check((await page.locator("#diagnostics").count()) === 1, "#diagnostics opens Settings › Diagnostics");
     await openTab(page, base, "overview");
@@ -718,7 +729,21 @@ try {
 
   // ---------------------------------------------------------------- Discover
   await section("discover", async () => {
+    // The database tab: paste, Scan, download - and nothing else in the way.
+    await openTab(page, base, "discover?view=db");
+    await page.waitForTimeout(300);
+    check(JSON.stringify(await page.locator("#discView [data-value]").allInnerTexts()) === JSON.stringify(["Smart follower database", "Find targets"]) && (await page.locator("#discDbPane").isVisible()) && !(await page.locator("#discFindPane").isVisible()), "Discover has two tabs; the database tab shows only the database tool");
+    check((await page.locator("#smartDb #sdbHandles").isVisible()) && (await page.locator("#sdbScanBtn").isVisible()) && (await page.locator("#sdbCsv").isVisible()) && (await page.locator("#sdbXlsx").isVisible()), "database tool: the box for usernames or links, Scan, Download CSV / Excel");
+    check(/empty/i.test(await page.locator("#sdbTable").textContent()) && (await page.locator("#sdbSelBar button").count()) === 0, "an empty database says how to start; no selection buttons until rows are selected");
+    await page.click("#sdbCsv");
+    check(await waitFor(page, () => [...document.querySelectorAll(".toast")].some((t) => /Nothing to download/.test(t.textContent)), null, 4000), "Download with an empty database explains there is nothing yet");
+    await page.click("#sdbScanBtn");
+    check(await waitFor(page, () => [...document.querySelectorAll(".toast")].some((t) => /Paste at least one username/.test(t.textContent)), null, 4000), "Scan with an empty box asks for a username or link");
+    await page.click('#discView [data-value="find"]');
+    check(await waitFor(page, () => !document.getElementById("discFindPane").hidden && document.getElementById("discDbPane").hidden, null, 4000) && /view=find/.test(page.url()), "Find targets tab (kept in the URL)");
     await openTab(page, base, "discover");
+    check(await page.locator("#discFindPane").isVisible(), "Discover reopens on the tab used last");
+    await openTab(page, base, "discover?view=find");
     await page.waitForTimeout(300);
     check((await page.locator("#discSource [data-value]").count()) === 5 && (await page.locator('#discSource [data-value="myFollowers"]').count()) === 0, "5 discovery sources, no \"My followers\"");
     check((await page.locator("#swept .swept-block").count()) === 3 && /of 1,284 shown/.test(await page.locator('#swept .swept-block[data-handle="cobie"]').textContent()), "Big accounts swept: a block per seeded sx.scoreboard.smart account (cobie: N of 1,284 shown)");
@@ -735,6 +760,7 @@ try {
     check(/followers of @karpathy: 64 accounts/.test(await page.locator("#discProgress").textContent()) && await page.locator("#discMax").isVisible(), "X sources: discovery progress from sx.discovery and the max-accounts field");
     // Smart followers of one account: the tier picked for "Add N as Tier X" survives sx.scoreboard writes.
     await openTab(page, base, "discover?h=cobie");
+    check(await page.locator("#discFindPane").isVisible(), "#discover?h= opens Find targets");
     if (await waitFor(page, () => !!document.querySelector("#smartLookup .look-merged select"), null, 8000)) {
       await page.locator("#smartLookup .look-merged select").selectOption("1");
       await page.evaluate(async () => { const b = (await chrome.storage.local.get("sx.scoreboard"))["sx.scoreboard"]; await chrome.storage.local.set({ "sx.scoreboard": { ...b, touchedAt: Date.now() } }); });
@@ -940,10 +966,10 @@ try {
     await page.evaluate(async () => (await import(chrome.runtime.getURL("lib/history.js"))).remove("rec_smoke_draft"));
   });
 
-  // ---------------------------------------------------------------- Results
-  await section("results", async () => {
-    await openTab(page, base, "history");
-    check((await page.locator("#screenTitle").innerText()).trim() === "Results", "the rail's Results opens the Overview");
+  // ---------------------------------------------------------------- History › Stats / Comments
+  await section("history", async () => {
+    await openTab(page, base, "history?view=ov&r=30");
+    check((await page.locator("#screenTitle").innerText()).trim() === "History", "History › Stats");
     check((await page.locator("#resultsOverview:not([hidden]) #resFunnel svg.funnel").count()) === 1, "Overview draws the follow-back funnel");
     check((await page.locator("#resDaily svg").count()) >= 2 && (await page.locator("#resDaily svg.heatmap").count()) === 1, "Every day: daily bars and the 12-week follow-back heatmap");
     check((await page.locator("#resViews").count()) === 1 && /proxy/.test(await page.locator("#resViews").innerText()) && (await page.locator("#resViews svg").count()) >= 1, "Views per reply chart (results.views) with the caveat");
@@ -954,6 +980,7 @@ try {
     check(fv.length === 5 && fv.every((v, i) => !i || v <= fv[i - 1]), "the follow-back funnel narrows at every stage: " + fl);
     const ax = (await page.locator("#resDaily svg.chart:not(.heatmap) text.axis").allTextContents()).filter((x) => /^\d+$/.test(x));
     check(ax.length >= 1 && new Set(ax).size === ax.length, "Every day: the y-axis labels are distinct whole numbers (" + ax.join(", ") + ")");
+    await page.click('#resultsRange [data-value="all"]');
     await page.click('#resultsView [data-value="comments"]');
     check(/view=comments/.test(page.url()) && await waitFor(page, () => document.getElementById("historyCount")?.textContent === "14"), "Comments lists the 14 records (view kept in the URL)");
     await page.selectOption("#hStatus", "posted");
@@ -1150,7 +1177,7 @@ try {
     check(ms && ms.presetMatrix.B1 === "cheap" && ms.presetMatrix.B2 === "human", "tier 1 preset saves presetMatrix.B1 (tier 2 stays on the default Human preset)");
     await page.getByLabel("Preset for tier 1").selectOption("high");
     await waitSetting(page, (x) => x.presetMatrix.B1 === "high");
-    check((await page.locator('#spendReportsLink[href="#results?view=spend"]').count()) === 1, "Models links to Results › Spend for the reports");
+    check((await page.locator('#spendReportsLink[href="#history?view=spend"]').count()) === 1, "Models links to History › Spend for the reports");
   });
 
   // ---------------------------------------------------------------- theme
@@ -1253,18 +1280,18 @@ try {
     check(await page.locator('details[data-adv="models.advanced"]').evaluate((d) => d.open), "Models: Advanced stays open after reload (localStorage)");
     check((await page.locator('details[data-adv="models.advanced"] #modelsTable tbody tr').count()) >= 3, "Models: the model/price table lives in Advanced");
     await page.locator('details[data-adv="models.advanced"] summary').click();
-    for (const [route, keys] of [["safety", ["safety.advanced"]], ["settings", ["settings.review", "settings.cleanup", "settings.data"]], ["tones", ["tones.advanced", "tones.ab"]], ["history?view=comments", ["history.totals", "history.retention"]], ["scores", ["scores.providers", "scores.overrides"]], ["discover", ["discover.filters"]]]) {
+    for (const [route, keys] of [["safety", ["safety.advanced"]], ["settings", ["settings.review", "settings.cleanup", "settings.data"]], ["tones", ["tones.advanced", "tones.ab"]], ["history?view=comments", ["history.totals", "history.retention"]], ["scores", ["scores.others", "scores.providers", "scores.overrides"]], ["discover?view=find", ["discover.filters"]]]) {
       await openTab(page, base, route);
       for (const k of keys) check((await page.locator(`details[data-adv="${k}"]`).count()) === 1 && !(await page.locator(`details[data-adv="${k}"]`).evaluate((d) => d.open)), `${route.split("?")[0]}: "${k}" is a collapsed section`);
     }
     await openTab(page, base, "settings");
     check((await page.locator("#cleanupEnabled").isChecked()) === false, "cleanup stays OFF by default");
     // Screenshots with every collapsed section open (to review the hidden parts), then close them again.
-    for (const route of ["models", "safety", "settings", "tones", "scores", "discover"]) {
+    for (const route of ["models", "safety", "settings", "tones", "scores", "discover?view=find"]) {
       await openTab(page, base, route);
       await page.evaluate(() => { for (const d of document.querySelectorAll("#view details.adv")) d.open = true; });
       await page.waitForTimeout(150);
-      await shot(page, `light-${route}-open.png`);
+      await shot(page, `light-${route.replace(/[?=&]/g, "-")}-open.png`);
       await page.evaluate(() => { for (const d of document.querySelectorAll("#view details.adv")) d.open = false; });
     }
     await setTheme(page, "dark");

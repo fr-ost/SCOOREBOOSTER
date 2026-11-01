@@ -82,23 +82,23 @@ After editing any file, press the reload button on the ScoreX card in `chrome://
 
 ## 4. Dashboard guide
 
-The dashboard has a left rail in three groups (**Work**, **Growth**, **Setup**) and an engine bar at the top
-with the status, Start / Pause / Stop and the Review / Full auto switch. Details open in a drawer on the right,
-so the list stays where it was. Light and dark themes (Settings); narrow windows get a compact rail.
+The dashboard has seven screens in a left rail (**Work**: Today, Review, Targets, Discover; **Track**: History,
+Scores; **Setup**: Settings) and an engine bar at the top with the status, Start / Pause / Stop and the Review / Full
+auto switch. Details open in a drawer on the right, so the list stays where it was. Light and dark themes (Settings);
+narrow windows get a compact rail.
 
 | Screen | What you do there |
 |---|---|
 | **Today** | Engine state and **Run a check now**, the day's rhythm and counters vs limits, the setup steps until ScoreX is ready, this week's figures (comments, follow-backs, cost, your main score), replies waiting for review (expiring first), **Needs you** (reach alert, authors who answered your replies, page-load budget near its cap, targets close to their give-up day, new candidates, budget, health) and the activity log in plain words. After a safety stop a banner offers **Review stop...**: you confirm that you checked your account before ScoreX resumes. |
 | **Review** | Keyboard-first queue: **J/K** move, **A** approve, **E** edit, **S** skip, **R** regenerate, **O** open the post, **Z** undo (5 s), **?** lists the keys. Sort by expiring first, newest or priority. Approve is disabled for accounts that follow you now. **Approve all** asks whether to keep your unsaved edits. Approved replies show when they will post, with Cancel. |
 | **Targets** | Status chips with counts (Commenting, Checking, Followed back, Follow you, Off, Not found), search (**/**), tier and **High value** filters, a Columns menu, and bulk actions (tier, tone, preset, on/off, re-check, fetch scores, blacklist, remove). Click a row (or press Enter) for the target drawer: profile, scores, value and follow-back chance with the reason, the timeline (every comment and its results, follow checks, the planned give-up day) and per-account settings. **Add targets** and **Edit rules** (follow rules, check frequency, value ranking) open as sheets; the blacklist is a sub-view. |
-| **Discover** | Find new targets: smart followers of big accounts (score sites), followers or following of an account, common follows, people search. Shows the big accounts already swept and a candidates table with per-site scores, overlap ("listed by 3 of 5"), filter verdicts and **Add N as Tier X**. **Smart follower database**: every smart follower TwitterScore's paid API lists for the accounts you enter (all pages, merged across runs), searchable, **Add as Tier 1 / 2**, **Export CSV / XLSX**. |
-| **Scores** | Your score on each connected site (tier, 7- and 30-day change, history chart with follow-back ticks), **Follow-backs that count**, **Check any account**, score coverage of your targets with a refresh job (progress and Cancel), and the providers setup (on/off, mode, key, daily cap, usage, Test, overrides). |
-| **History** | Every comment ScoreX wrote, all time, newest first: date, target, the post it answered (linked), your reply (with **Open your reply**), status with the reason (posted, skipped, failed...) and the outcome (likes, replies, views, author replied, followed back). Filters, a details drawer, **Export CSV / XLSX** (links and post text included). The same list as Results > Comments. |
-| **Results** | **Overview** (funnel, activity, which tones, models and tiers bring follow-backs), **Comments** (every attempt with filters, a drawer with model, tokens, cost and quality notes, CSV export, history retention) and **Spend** (budget, daily cost, totals and performance per model). Ranges 7 d / 30 d / All. |
-| **Tone** | Your Tone prompt, **Try it**, **Learn from my edits** with this week's edit rate, extra rules, built-in and custom tones, A/B tests and suggestions. |
-| **Models & costs** | API key, model list with **editable model names** and the **price table** (per 1M tokens: input, cached input, cache write, output), presets High quality / Balanced / Cheap with reasoning effort, fallback models, preset per tier, quality checker, cost estimator, budget. |
-| **Safety** | Risk report, reach alert, **Safety profile** (Careful / Standard / Max / Custom), daily limits and ramp, gaps and breaks, active hours (off by default), like before replying, typing speed, skip rules, **X page loads** in the last 24 hours (with an optional cap), the **reply reach monitor**, adaptive watching and the list of auto-stop reasons. |
-| **Settings** | **Diagnostics** first (quick check, live X test, copy a redacted report), then account, watching, comment window, review expiry, learning and conversation alerts, cleanup, worker tab, selector overrides, theme, backup export / import, reset. |
+| **Discover** | Two tabs. **Smart follower database**: paste usernames or links, press **Scan**, and every smart follower TwitterScore lists for them lands in one list (username, score, date of scan, the accounts it was found under; duplicates merged), with search, **Download CSV / Excel**, Clear and **Add as Tier 1 / 2 targets** for selected rows. **Find targets**: smart followers of big accounts (score sites), followers or following of an account, common follows, people search; the big accounts already swept and a candidates table with per-site scores, overlap ("listed by 3 of 5"), filter verdicts and **Add N as Tier X**. Discover reopens on the tab you used last. |
+| **History** | **Comments** (the default, all time): every comment ScoreX wrote, newest first - date, target, the post it answered (linked), your reply (**Open your reply**), status with the reason (posted, skipped, failed...) and the outcome (likes, replies, views, author replied, followed back); filters, a details drawer (model, tokens, cost, quality notes), **Export CSV / XLSX**, history retention. **Stats**: funnel, activity, which tones, models and tiers bring follow-backs. **Spend**: budget, daily cost, totals and performance per model. Ranges 7 d / 30 d / All. |
+| **Scores** | Your score on each connected site (tier, 7- and 30-day change, history chart with follow-back ticks), **Follow-backs that count**, **Other accounts' scores** (Check any account and target scores - off by default, folded away) and **Providers** (on/off, mode, key, daily cap, usage, Test, overrides). |
+| **Settings** | Four tabs. **General**: Diagnostics first (quick check, live X test, copy a redacted report), then account, watching, comment window, review expiry, learning and conversation alerts, cleanup, worker tab, selector overrides, theme, backup export / import, reset. **Tone**: your Tone prompt, **Try it**, **Learn from my edits**, extra rules, built-in and custom tones, A/B tests. **Models & costs**: API key, model list with editable names and the price table, presets High quality / Balanced / Cheap with reasoning effort, fallback models, preset per tier, quality checker, cost estimator, budget. **Safety**: risk report, reach alert, Safety profile (Careful / Standard / Max / Custom), daily limits and ramp, gaps and breaks, active hours, like before replying, typing speed, skip rules, X page loads (24 h), the reply reach monitor and the auto-stop reasons. |
+
+Old links still work: `#results` opens History > Stats, `#comments` History > Comments, `#tones`, `#models` and `#safety`
+the Settings tabs.
 
 The **extension icon** shows how many replies were posted in the last 24 hours while ScoreX runs (green number),
 a red **!** after a safety stop or reach alert, **II** while paused, and otherwise the number of replies waiting for
@@ -304,7 +304,7 @@ Provider keys are stored like the OpenAI key (the extension's IndexedDB) and are
   bot check blocks that ("Blocked by the site's bot check") it reads the same page in a background browser tab,
   which a real browser passes. Chrome asks once for the tab access when you turn TwitterScore on (already on:
   turn it off and on). **TwitterScore's API key is spent only on smart followers** (Discover and the smart
-  follower database). Checking other accounts' scores is **off** (Scores > Check any account > *Check other
+  follower database). Checking other accounts' scores is **off** (Scores > Other accounts' scores > *Check other
   accounts*): Check any account, target scores and Sorsa target refreshes send nothing until you turn it on.
 * **A key that doesn't work**: a refused key (401 / 403, or an error answer about the key) shows "Your
   TwitterScore API key doesn't work - get a new key (twitterscore.io/api/prices) and paste it in Scores >
@@ -317,11 +317,19 @@ Provider keys are stored like the OpenAI key (the extension's IndexedDB) and are
   smart-follower provider (TwitterScore's API, and Sorsa if you use it; never Moni or Ethos) for their smart followers, merges the lists, skips accounts that already follow you, your
   targets and the blacklist, and shows the rest as candidates with their scores. Accounts listed under several
   big accounts rank higher. Nothing is added or followed until you choose.
-* **Smart follower database** (Discover, needs TwitterScore's API key): enter big accounts (or fill in your Tier 1
-  targets), choose pages per account (100 accounts a page) and build. Every page is one API request; an account
-  stops at its last page. Rows are merged across runs (TwitterScore, followers, bio, tags, whose smart follower
-  they are, first and last seen). Raise TwitterScore's daily cap in Scores > Providers for big sweeps (a free
-  trial has 2,000 requests in total).
+* **Smart follower database** (Discover > Smart follower database, needs TwitterScore's API key - the tool asks for
+  it right there if it is missing): paste usernames or links (`@cobie`, `x.com/cobie`, `twitterscore.io/twitter/cobie`)
+  and press **Scan**. ScoreX reads **every** smart follower TwitterScore lists for each account: its API serves at most
+  25 per request, so an account with 1,000 smart followers takes 40 requests (about a minute; ScoreX sends at most 50 a
+  minute, under TwitterScore's limit of 60, and waits a minute on a "too many requests" answer). Rows are merged
+  across scans: one row per username with the newest score, the date of scan and the accounts it was found under.
+  **Stop** keeps what was read. **Download CSV / Excel** saves the list (columns: Username, TwitterScore, Date of scan,
+  Smart follower of). ScoreX's daily request cap does not stop a scan you started; your TwitterScore plan does (a free
+  trial has 2,000 requests in total), and the request count is shown while it runs.
+* **Why Find targets showed only 20 before**: ScoreX asked TwitterScore for one page of 20. Find targets now reads the
+  best 100 of each account (4 requests); the database reads all of them. TwitterScore marks the endpoint ScoreX uses
+  (`top_followers_paginate`) as deprecated: when it stops answering, ScoreX switches to its replacement
+  (`get_followers`) by itself.
 * **Target scores** (off by default, see above): fetch provider scores for your targets (a background job with
   progress and Cancel).
 * **Daily request caps** per provider protect your free quotas and the sites; requests are paced and cached
@@ -367,7 +375,7 @@ the **combined** rank blends both (50/50 by default).
   score sites when available, otherwise ScoreX rank) x its chance to follow back (learned from your own
   results), plus a boost for tier 1. The weights are heuristics. **High value** on Targets shows value 70+,
   and the drawer explains each value.
-* **History retention** (Results > Comments): skipped and failed attempts older than 30 days are shortened to
+* **History retention** (History > Comments): skipped and failed attempts older than 30 days are shortened to
   the essentials, and deleted after 90 days. Posted replies (with their results) and anything still waiting are
   never touched.
 * **Cleanup** (default **OFF**): unfollows targets you follow that did not follow back within 7+ days. It has its
@@ -387,11 +395,11 @@ Load the extension (section 1), add your API key, then:
 2. Within a few minutes of one of them posting, a reply should appear in **Review**. Check the post link,
    the model and the cost.
 3. Edit it and **Approve**. Watch the pinned X tab: it opens the post, types the reply and posts it.
-4. Check: the reply on x.com is exactly your text; **Results > Comments** shows it as posted with tokens and cost;
-   **Results > Spend** and the estimator in Models & costs update; skipped posts (giveaways, links, too old) show a reason.
+4. Check: the reply on x.com is exactly your text; **History > Comments** shows it as posted with tokens and cost;
+   **History > Spend** and the estimator in Settings > Models & costs update; skipped posts (giveaways, links, too old) show a reason.
 
 **Phase 2: full auto and safety**
-1. **Safety** shows the daily limits (200/day, 2 per account, 100 accounts). Try a narrow active-hours window:
+1. **Settings > Safety** shows the daily limits (200/day, 2 per account, 100 accounts). Try a narrow active-hours window:
    the status says "Sleeping".
 2. Switch to Full auto on Today and check that replies are posted with 2-6 minute gaps, at most
    2 per account per 24 hours, each post liked first.
@@ -399,7 +407,7 @@ Load the extension (section 1), add your API key, then:
    out of X in that profile (ScoreX stops with "Logged out", notifies you and shows a red badge).
 
 **Phase 3: learning and cleanup**
-1. A day after posting, **Results > Comments** fills in the result columns (reply likes, replies, author replied).
+1. A day after posting, **History > Comments** fills in the result columns (reply likes, replies, author replied).
    When an account you commented on follows you, the Targets screen shows **Followed back** and it gets no more
    replies; an account with no follow-back 14 days after the first reply moves to **Targets > Blacklist**.
 2. **Tone > A/B testing** shows arms and, once there is enough data, suggestions.
