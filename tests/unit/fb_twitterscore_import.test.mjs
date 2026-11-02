@@ -169,7 +169,7 @@ describe("targets: Clear all (one click, Undo) and Load TwitterScore (only on th
     assert.equal((await T.clearAll()).removed, 0, "nothing left");
   });
 
-  test("Load TwitterScore: every target through the API, also with 'Check other accounts' off; a recent score is skipped; tiers unchanged", async () => {
+  test("Load TwitterScore: every target through the API, also with 'Check other accounts' off; scores already there are refreshed; tiers unchanged", async () => {
     await setup({ checkOthers: false });
     await S.save({ [K.targets]: {
       big: { handle: "big", tier: 2 },
@@ -182,17 +182,20 @@ describe("targets: Clear all (one click, Undo) and Load TwitterScore (only on th
     const fetchImpl = async (url) => {
       asked.push(url);
       if (url.includes("username=ghost")) return res(404, { detail: "no data for this account" });
-      return res(200, { twitter_score: url.includes("username=big") ? 812 : url.includes("username=old") ? 44 : 120 });
+      return res(200, { twitter_score: url.includes("username=big") ? 812 : url.includes("username=old") ? 44 : url.includes("username=recent") ? 333 : 120 });
     };
     const r = await SB.loadTargetTwitterScores({ fetchImpl, ...FAST });
     assert.equal(r.ok, true, JSON.stringify(r));
-    assert.deepEqual([r.updated, r.fresh, r.missing], [3, 1, 1]);
-    assert.equal(asked.length, 4, "big, small, old and ghost (recent was skipped)");
+    assert.deepEqual([r.updated, r.fresh, r.missing], [4, 0, 1]);
+    assert.equal(asked.length, 5, "every target, also the one with a score from yesterday (no waiting period)");
     assert.ok(asked.every((u) => /\/api\/v1\/get_twitter_score\?username=\w+&api_key=ts-paid-key/.test(u)), "the paid API only");
     const all = await S.getTargets();
     assert.deepEqual([all.big.score.providers.twitterscore.score, all.small.score.providers.twitterscore.score, all.old.score.providers.twitterscore.score], [812, 120, 44]);
-    assert.equal(all.recent.score.providers.twitterscore.score, 300, "kept");
+    assert.equal(all.recent.score.providers.twitterscore.score, 333, "refreshed");
     assert.equal(all.ghost.score.providers.twitterscore.score, null);
+    // Pressed again right away: everything is asked again.
+    await SB.loadTargetTwitterScores({ fetchImpl, ...FAST });
+    assert.equal(asked.length, 10);
     assert.deepEqual([all.big.tier, all.small.tier], [2, 1], "tiers are not changed by loading scores");
     // The selection's "Fetch scores" (not this button) still follows the 'Check other accounts' switch.
     assert.equal((await SB.refreshTargetScores(["big"], "twitterscore", { fetchImpl, ...FAST })).error, SB.OTHERS_OFF);

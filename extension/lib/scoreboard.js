@@ -387,12 +387,12 @@ export async function twitterScoreApiReady() {
   return { ok: true };
 }
 // Targets > Load TwitterScore: the TwitterScore of every target through TwitterScore's paid API (your key), only when you
-// press the button. A target whose TwitterScore is less than a week old (loaded or imported) is skipped; tiers are not
-// changed.
+// press the button. Every press loads them all again - a score that is already there (loaded or imported) is refreshed,
+// with no waiting period. Tiers are not changed.
 export async function loadTargetTwitterScores(extra = {}) {
   const ready = await twitterScoreApiReady();
   if (!ready.ok) return ready;
-  return refreshTargetScores([], "twitterscore", { ...extra, want: "api", explicit: true });
+  return refreshTargetScores([], "twitterscore", { ...extra, want: "api", explicit: true, maxAgeMs: 0 });
 }
 
 // ---------- TwitterScore of the accounts that followed you back (History > Follow-backs) ----------

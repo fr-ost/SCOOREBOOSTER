@@ -148,17 +148,17 @@ export default {
     const colsSlot = h("span", { class: "tg-cols" });
 
     // ------------------------------------------------ Load TwitterScore (only on this button) and Clear all (one click)
-    const TS_FRESH = 7 * 864e5; // a TwitterScore less than a week old is not asked again (lib/scoreboard.js)
+    // Load TwitterScore loads every target again on each press: scores already there are refreshed (no waiting period).
     const tsStatus = h("span", { class: "small muted tg-ts-status", id: "tsLoadStatus", "aria-live": "polite" });
     const tsJob = () => { const j = board().job; return j && j.kind === "targets" && j.provider === "twitterscore" ? j : null; };
-    const tsNeeds = (all, at = Date.now()) => all.filter((t) => { const p = t.score && t.score.providers && t.score.providers.twitterscore; return !(p && p.at && at - p.at < TS_FRESH); });
+    const hasTs = (t) => { const p = t.score && t.score.providers && t.score.providers.twitterscore; return !!(p && p.score != null); };
     const tsBtn = btn("Load TwitterScore", async (e) => {
       const all = list();
-      const need = tsNeeds(all).length;
-      if (!need) { toast("Every target has a TwitterScore from the last 7 days.", { type: "info" }); return; }
+      const need = all.length;
+      if (!need) { toast("There are no targets yet.", { type: "info" }); return; }
       const el = e.currentTarget;
-      const skip = all.length - need;
-      if (!(await confirmDialog(`Load the TwitterScore of ${plural(need, "target")} through your TwitterScore API key? That is one request each from your TwitterScore plan${skip ? ` (${plural(skip, "target")} with a TwitterScore from the last 7 days ${skip === 1 ? "is" : "are"} skipped)` : ""}. Tiers are not changed.`, { title: "Load TwitterScore", okLabel: `Load ${fmtNum(need)}` }))) return;
+      const have = all.filter(hasTs).length;
+      if (!(await confirmDialog(`Load the TwitterScore of all ${plural(need, "target")} through your TwitterScore API key${have ? ` (${fmtNum(have)} that already have one are refreshed)` : ""}? That is one request each from your TwitterScore plan. Tiers are not changed.`, { title: "Load TwitterScore", okLabel: `Load ${fmtNum(need)}` }))) return;
       await busy(el, async () => {
         const r = await ctx.send("targetsTwitterScore", {}, { label: "Load TwitterScore", raw: true, quiet: true });
         if (!r || !r.ok) {
@@ -169,7 +169,7 @@ export default {
         if (cols && provIds.includes("twitterscore") && !cols.isVisible("p_twitterscore")) cols.set([...cols.visible(), "p_twitterscore"]);
         toast(`Loading TwitterScore for ${plural(need, "target")}. The TwitterScore column fills in as they arrive.`, { type: "success" });
       });
-    }, { size: "sm", iconName: "scores", id: "loadTsBtn", title: "Load the TwitterScore of all targets through your TwitterScore API key (only when you press this)" });
+    }, { size: "sm", iconName: "scores", id: "loadTsBtn", title: "Load or refresh the TwitterScore of all targets through your TwitterScore API key (only when you press this)" });
     function drawTsStatus() {
       const j = tsJob();
       const running = !!(j && j.status === "running");
