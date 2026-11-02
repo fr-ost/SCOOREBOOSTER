@@ -146,8 +146,60 @@ export default {
     let cols = null;
     let provIds = [];
     const colsSlot = h("span", { class: "tg-cols" });
+
+    // ------------------------------------------------ Load TwitterScore (only on this button) and Clear all (one click)
+    const TS_FRESH = 7 * 864e5; // a TwitterScore less than a week old is not asked again (lib/scoreboard.js)
+    const tsStatus = h("span", { class: "small muted tg-ts-status", id: "tsLoadStatus", "aria-live": "polite" });
+    const tsJob = () => { const j = board().job; return j && j.kind === "targets" && j.provider === "twitterscore" ? j : null; };
+    const tsNeeds = (all, at = Date.now()) => all.filter((t) => { const p = t.score && t.score.providers && t.score.providers.twitterscore; return !(p && p.at && at - p.at < TS_FRESH); });
+    const tsBtn = btn("Load TwitterScore", async (e) => {
+      const all = list();
+      const need = tsNeeds(all).length;
+      if (!need) { toast("Every target has a TwitterScore from the last 7 days.", { type: "info" }); return; }
+      const el = e.currentTarget;
+      const skip = all.length - need;
+      if (!(await confirmDialog(`Load the TwitterScore of ${plural(need, "target")} through your TwitterScore API key? That is one request each from your TwitterScore plan${skip ? ` (${plural(skip, "target")} with a TwitterScore from the last 7 days ${skip === 1 ? "is" : "are"} skipped)` : ""}. Tiers are not changed.`, { title: "Load TwitterScore", okLabel: `Load ${fmtNum(need)}` }))) return;
+      await busy(el, async () => {
+        const r = await ctx.send("targetsTwitterScore", {}, { label: "Load TwitterScore", raw: true, quiet: true });
+        if (!r || !r.ok) {
+          const msg = (r && r.error) || "no answer";
+          toast("Load TwitterScore: " + msg, { type: "error", ...(/Scores/.test(msg) ? { action: { label: "Open Scores", onClick: () => ctx.navigate("scores") } } : {}) });
+          return;
+        }
+        if (cols && provIds.includes("twitterscore") && !cols.isVisible("p_twitterscore")) cols.set([...cols.visible(), "p_twitterscore"]);
+        toast(`Loading TwitterScore for ${plural(need, "target")}. The TwitterScore column fills in as they arrive.`, { type: "success" });
+      });
+    }, { size: "sm", iconName: "scores", id: "loadTsBtn", title: "Load the TwitterScore of all targets through your TwitterScore API key (only when you press this)" });
+    function drawTsStatus() {
+      const j = tsJob();
+      const running = !!(j && j.status === "running");
+      tsBtn.disabled = running;
+      if (running) {
+        fill(tsStatus, `TwitterScore ${fmtNum(num(j.done))} / ${fmtNum(num(j.total))}`, " · ",
+          h("button", { type: "button", class: "linkish", id: "tsLoadStop", onClick: () => ctx.send("scoreJobCancel", {}, { label: "Stop" }).then((r) => { if (r) toast("Stopping after the current request"); }) }, "Stop"));
+        return;
+      }
+      if (!j || !j.finishedAt || Date.now() - j.finishedAt > 30 * 60e3) { clear(tsStatus); return; }
+      const r = j.result || {};
+      const extra = [num(r.missing) ? `${fmtNum(num(r.missing))} unknown to TwitterScore` : "", num(r.failed) ? `${fmtNum(num(r.failed))} failed` : ""].filter(Boolean).join(", ");
+      fill(tsStatus, j.status === "done" ? `TwitterScore loaded for ${plural(num(r.updated), "target")}${extra ? ` (${extra})` : ""}`
+        : j.status === "cancelled" ? `TwitterScore stopped: ${plural(num(r.updated), "target")} loaded`
+        : `TwitterScore: ${j.error || "error"}`);
+    }
+    const clearAllBtn = btn("Clear all", (e) => busy(e.currentTarget, async () => {
+      const r = await ctx.send("targetsClear", {}, { label: "Clear all" });
+      if (!r) return;
+      selected.clear();
+      if (!num(r.removed)) { toast("There are no targets to clear.", { type: "info" }); return; }
+      toast(`Cleared ${plural(num(r.removed), "target")}. History and follow-backs are kept.`, {
+        type: "success", timeout: 15000,
+        action: { label: "Undo", onClick: async () => { const u = await ctx.send("targetsUndoClear", {}, { label: "Undo" }); if (u) toast(`Restored ${plural(num(u.restored), "target")}`, { type: "success" }); } },
+      });
+    }), { size: "sm", kind: "danger-soft", iconName: "trash", id: "clearAllTargetsBtn", title: "Remove every target in one click (history and follow-backs stay; Undo right after)" });
+
     const tools = h("div", { class: "filterbar tg-tools" },
       h("div", { class: "search" }, icon("search"), search), tierSeg, highBtn, colsSlot, h("span", { class: "spacer" }),
+      tsStatus, tsBtn, clearAllBtn,
       h("span", { class: "small muted tg-tip" }, "Click a row for details. ", kbd("/"), " search"));
 
     // ------------------------------------------------ table
@@ -910,6 +962,7 @@ export default {
     ctx.on(K.targets, () => { dataRev++; drawCounts(); drawEmpty(); drawTable(); drawFoot(); refreshDrawer(); });
     ctx.on(K.blacklist, () => { blRev++; drawCounts(); drawBlacklist(); });
     ctx.on(K.scoreboard, () => {
+      drawTsStatus();
       const sig = boardSig();
       if (sig === checksSig) return;
       checksSig = sig; dataRev++; drawTable();
@@ -923,6 +976,7 @@ export default {
     ctx.on("tick", () => { if (Date.now() - lastTickDraw < 10 * 60e3) return; lastTickDraw = Date.now(); dataRev++; drawTable(); });
     ctx.on("params", applyParams);
     applyParams(ctx.params);
+    drawTsStatus();
   },
 };
 

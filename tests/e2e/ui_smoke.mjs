@@ -620,6 +620,14 @@ try {
     }
     check((await page.locator("#targetStatus [data-value]").allTextContents()).every((x) => !/group/i.test(x)), "status chips replace the group filter");
 
+    // Load TwitterScore (a button, never on its own) and Clear all (one click, Undo from the toast).
+    check((await page.locator("#loadTsBtn").count()) === 1 && (await page.locator("#clearAllTargetsBtn").count()) === 1, "Targets: Load TwitterScore and Clear all buttons");
+    const totalBefore = await page.evaluate(() => document.querySelector('#targetsSummary [data-sum="total"] .summary-num')?.textContent);
+    await page.click("#clearAllTargetsBtn");
+    check(await waitFor(page, () => { const e = document.querySelector("#targetsEmpty"); return !!e && !e.hidden; }, null, 6000), "Clear all: every target removed in one click (the empty state shows)");
+    await page.locator("#toasts .toast-act", { hasText: "Undo" }).last().click();
+    check(await waitFor(page, (n) => document.querySelector('#targetsSummary [data-sum="total"] .summary-num')?.textContent === n && document.querySelectorAll("#targetsTable tbody tr[data-key]").length > 0, totalBefore, 8000), "Undo brings every target back (" + totalBefore + ")");
+
     // drawer: row click, J/K, Esc, deep link
     await page.click('#targetsTable tr[data-key="naval"] td[data-col="followers"]');
     check(await waitFor(page, () => !!document.querySelector("#targetDrawer"), null, 3000) && /[?&]h=naval/.test(await page.evaluate(() => location.hash)), "a row click opens the target drawer and sets #targets?h=naval");

@@ -226,6 +226,18 @@ try {
   assert(r.ok && r.fetched === 1 && fbStored.find((e) => e.handle === "fb_fan").twitterscore === 615 && tsNew.length >= 1 && tsNew.every((c) => /^\/api\/v1\/get_twitter_score\?username=fb_fan&/.test(c)),
     "a follow-back without a TwitterScore gets it through the API key, and only follow-backs are asked: " + JSON.stringify(tsNew));
 
+  // ---- Targets > Load TwitterScore: every target through the API, only when the button is pressed ----
+  M.twitterscore.scores.delta = 555;
+  const tsCalls2 = M.twitterscore.calls.length;
+  const jobAt = Date.now();
+  r = await H.msg("targetsTwitterScore");
+  assert(r.ok && r.started, "Load TwitterScore starts a background job: " + JSON.stringify(r));
+  const tsJob = await H.waitFor(async () => { const b = await H.store("sx.scoreboard"); return b.job && b.job.provider === "twitterscore" && b.job.startedAt >= jobAt && b.job.status !== "running" ? b.job : null; }, "Load TwitterScore finished", 90000);
+  const tDelta2 = (await H.store("sx.targets")).delta;
+  const loadCalls = M.twitterscore.calls.slice(tsCalls2);
+  assert(tsJob.status === "done" && tDelta2.score.providers.twitterscore.score === 555 && loadCalls.some((c) => /^\/api\/v1\/get_twitter_score\?username=delta&/.test(c)) && loadCalls.every((c) => c.startsWith("/api/v1/get_twitter_score")),
+    "Load TwitterScore: the targets' TwitterScore through the API (" + JSON.stringify(tsJob.result) + ")");
+
   // ---- privacy: only handles go out, keys never in logs ----
   const logs = JSON.stringify(await H.store("sx.logs"));
   assert(!/sorsa-test|ts-test/.test(logs), "provider keys never appear in the activity log");

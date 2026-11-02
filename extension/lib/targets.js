@@ -249,6 +249,23 @@ export async function removeMany(handles) {
   return n;
 }
 
+// Targets > Clear all: every target is removed at once (history, follow-backs and the blacklist stay). Returns the
+// removed targets so the service worker can put them back (Undo).
+export async function clearAll() {
+  let snapshot = {};
+  await updateTargets((all) => { snapshot = all; return {}; });
+  return { removed: Object.keys(snapshot).length, snapshot };
+}
+// Undo of Clear all: the cleared targets come back as they were; one you added again meanwhile keeps its new entry.
+export async function restoreTargets(snapshot) {
+  let restored = 0;
+  await updateTargets((all) => {
+    for (const [h, t] of Object.entries(snapshot || {})) if (t && !Object.hasOwn(all, h)) { all[h] = t; restored++; }
+    return all;
+  });
+  return restored;
+}
+
 export async function bulk(handles, p) {
   const set = new Set((handles || []).map(normalizeHandle));
   const clean = sanitizePatch(p || {});

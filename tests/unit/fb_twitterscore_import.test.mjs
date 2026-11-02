@@ -147,3 +147,66 @@ describe("import: tiers from TwitterScore (CSV / JSON)", () => {
     assert.equal(T.importScore({ own: 3 }), null, "a ScoreX score object is not a TwitterScore");
   });
 });
+
+describe("targets: Clear all (one click, Undo) and Load TwitterScore (only on the button)", () => {
+  beforeEach(() => { resetStorage(); useMemoryDb(); globalThis.chrome.permissions = { contains: async () => true }; });
+  afterEach(() => { delete globalThis.chrome.permissions; });
+
+  test("Clear all removes every target and keeps the follow-back record; Undo brings them back, a re-added one keeps its new entry", async () => {
+    await T.upsert([{ handle: "a", tier: 1 }, { handle: "b" }, { handle: "c" }], { source: "manual" });
+    await S.save({ [K.followbacks]: [entry("a", NOW - 1000)] });
+    const r = await T.clearAll();
+    assert.equal(r.removed, 3);
+    assert.deepEqual(await S.getTargets(), {});
+    assert.equal(rawGet(K.followbacks).length, 1, "follow-backs are kept");
+    await T.upsert([{ handle: "b", tier: 1, notes: "added again" }], { source: "manual" });
+    assert.equal(await T.restoreTargets(r.snapshot), 2);
+    const all = await S.getTargets();
+    assert.deepEqual(Object.keys(all).sort(), ["a", "b", "c"]);
+    assert.equal(all.a.tier, 1, "restored as it was");
+    assert.equal(all.b.notes, "added again", "the one added meanwhile keeps its new entry");
+    assert.deepEqual(await T.clearAll().then((x) => x.removed), 3);
+    assert.equal((await T.clearAll()).removed, 0, "nothing left");
+  });
+
+  test("Load TwitterScore: every target through the API, also with 'Check other accounts' off; a recent score is skipped; tiers unchanged", async () => {
+    await setup({ checkOthers: false });
+    await S.save({ [K.targets]: {
+      big: { handle: "big", tier: 2 },
+      small: { handle: "small", tier: 1 },
+      recent: { handle: "recent", tier: 2, score: { providers: { twitterscore: { score: 300, max: 1000, at: NOW - DAY, from: "import" } } } },
+      old: { handle: "old", tier: 2, score: { providers: { twitterscore: { score: 10, max: 1000, at: NOW - 9 * DAY } } } },
+      ghost: { handle: "ghost", tier: 2 },
+    } });
+    const asked = [];
+    const fetchImpl = async (url) => {
+      asked.push(url);
+      if (url.includes("username=ghost")) return res(404, { detail: "no data for this account" });
+      return res(200, { twitter_score: url.includes("username=big") ? 812 : url.includes("username=old") ? 44 : 120 });
+    };
+    const r = await SB.loadTargetTwitterScores({ fetchImpl, ...FAST });
+    assert.equal(r.ok, true, JSON.stringify(r));
+    assert.deepEqual([r.updated, r.fresh, r.missing], [3, 1, 1]);
+    assert.equal(asked.length, 4, "big, small, old and ghost (recent was skipped)");
+    assert.ok(asked.every((u) => /\/api\/v1\/get_twitter_score\?username=\w+&api_key=ts-paid-key/.test(u)), "the paid API only");
+    const all = await S.getTargets();
+    assert.deepEqual([all.big.score.providers.twitterscore.score, all.small.score.providers.twitterscore.score, all.old.score.providers.twitterscore.score], [812, 120, 44]);
+    assert.equal(all.recent.score.providers.twitterscore.score, 300, "kept");
+    assert.equal(all.ghost.score.providers.twitterscore.score, null);
+    assert.deepEqual([all.big.tier, all.small.tier], [2, 1], "tiers are not changed by loading scores");
+    // The selection's "Fetch scores" (not this button) still follows the 'Check other accounts' switch.
+    assert.equal((await SB.refreshTargetScores(["big"], "twitterscore", { fetchImpl, ...FAST })).error, SB.OTHERS_OFF);
+  });
+
+  test("Load TwitterScore needs TwitterScore on and your API key: otherwise nothing is asked", async () => {
+    let calls = 0;
+    const fetchImpl = async () => { calls++; return res(200, { twitter_score: 1 }); };
+    await S.save({ [K.targets]: { a: { handle: "a" } } });
+    await setup({ key: "" });
+    assert.match((await SB.loadTargetTwitterScores({ fetchImpl, ...FAST })).error, /API key/);
+    await setup({ enabled: false });
+    assert.match((await SB.loadTargetTwitterScores({ fetchImpl, ...FAST })).error, /Turn TwitterScore on/);
+    assert.equal((await SB.twitterScoreApiReady()).ok, false);
+    assert.equal(calls, 0);
+  });
+});

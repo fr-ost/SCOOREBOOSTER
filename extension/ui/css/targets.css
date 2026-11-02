@@ -18,6 +18,8 @@
 .tg-chip .ct:empty { display: none; }
 .tg-chip[aria-pressed="true"], .tg-chip[aria-pressed="true"]:hover { background: var(--invert-bg); color: var(--invert-text); border-color: var(--invert-bg); }
 .tg-tip { white-space: nowrap; }
+.tg-ts-status { white-space: nowrap; }
+.tg-ts-status:empty { display: none; }
 
 /* table cells */
 #targetsTable .cell-handle .handle { font-weight: 650; }

@@ -332,21 +332,23 @@ export async function sweepSmartFollowers(handles, extra = {}) {
 // TARGET_SCORE_MAX_AGE; an account the provider has no data for is remembered as { score: null } for as long, so it
 // is not asked again every run. The run stops at an error every request would hit (key, cap, bot check...) and after
 // FAIL_STREAK failures in a row; it reports ok:false when nothing could be updated.
-export async function refreshTargetScores(handles, providerId, { maxAgeMs = TARGET_SCORE_MAX_AGE, ...extra } = {}) {
+// want: a mode to use ("api": TwitterScore's paid API); explicit: you pressed a button for exactly this (Targets > Load
+// TwitterScore), so the "Check other accounts" switch does not hold it back.
+export async function refreshTargetScores(handles, providerId, { maxAgeMs = TARGET_SCORE_MAX_AGE, want = null, explicit = false, ...extra } = {}) {
   const ctx = await context(extra);
   const def = ctx.defs[providerId];
   if (!def) return { ok: false, error: "Unknown provider" };
-  if (!ctx.settings.scores.checkOthers) return { ok: false, error: OTHERS_OFF, updated: 0, failed: 0 };
+  if (!explicit && !ctx.settings.scores.checkOthers) return { ok: false, error: OTHERS_OFF, updated: 0, failed: 0 };
   const blend = ctx.settings.scores.blendSorsa;
   const targets = await getTargets();
   const list = (handles && handles.length ? handles.map(normalizeHandle) : Object.keys(targets)).filter((h) => h && Object.hasOwn(targets, h) && targets[h]);
-  let updated = 0, done = 0, failed = 0, streak = 0, lastError = "";
+  let updated = 0, done = 0, failed = 0, streak = 0, fresh = 0, missingN = 0, lastError = "";
   for (const h of list) {
     if (extra.shouldStop && (await extra.shouldStop())) break;
     if (extra.onProgress) await extra.onProgress({ done: done++, total: list.length, current: h, updated });
     const prev = targets[h].score && targets[h].score.providers && targets[h].score.providers[providerId];
-    if (prev && prev.at && now() - prev.at < maxAgeMs) continue;
-    const r = await call(providerId, "score", h, ctx);
+    if (prev && prev.at && now() - prev.at < maxAgeMs) { fresh++; continue; }
+    const r = await call(providerId, "score", h, ctx, {}, want);
     if (stale(ctx)) return { ok: false, error: RESET.message, updated, failed }; // the targets are gone
     const missing = !r.ok && r.error === "not_found";
     if (!r.ok && !missing) {
@@ -367,11 +369,30 @@ export async function refreshTargetScores(handles, providerId, { maxAgeMs = TARG
       t.score.combined = combinedScore(t.score.own, t.score.sorsa, blend);
       return all;
     });
-    if (!missing) updated++;
+    if (!missing) updated++; else missingN++;
   }
+  if (extra.onProgress) await extra.onProgress({ done: list.length, total: list.length, current: "", updated });
   if (updated) log("info", `${def.name}: updated ${updated} target score${updated === 1 ? "" : "s"}`);
-  if (!updated && failed) return { ok: false, error: `${def.name}: no target score could be updated (${lastError})`, updated, failed };
-  return { ok: true, updated, failed };
+  if (!updated && failed) return { ok: false, error: `${def.name}: no target score could be updated (${lastError})`, updated, failed, fresh, missing: missingN };
+  return { ok: true, updated, failed, fresh, missing: missingN };
+}
+
+// Targets > Load TwitterScore: is TwitterScore's paid API usable (turned on, your key saved)? { ok } | { ok:false, error }.
+export async function twitterScoreApiReady() {
+  const [settings, secrets, defs] = await Promise.all([getSettings(), getSecrets(), getDefs()]);
+  const def = defs.twitterscore;
+  if (!def || !def.modes || !def.modes.api) return { ok: false, error: "TwitterScore's API is not available" };
+  if (!(settings.providers && settings.providers.twitterscore && settings.providers.twitterscore.enabled)) return { ok: false, error: "Turn TwitterScore on in Scores first" };
+  if (!secrets[def.keyName]) return { ok: false, error: "Add your TwitterScore API key in Scores first" };
+  return { ok: true };
+}
+// Targets > Load TwitterScore: the TwitterScore of every target through TwitterScore's paid API (your key), only when you
+// press the button. A target whose TwitterScore is less than a week old (loaded or imported) is skipped; tiers are not
+// changed.
+export async function loadTargetTwitterScores(extra = {}) {
+  const ready = await twitterScoreApiReady();
+  if (!ready.ok) return ready;
+  return refreshTargetScores([], "twitterscore", { ...extra, want: "api", explicit: true });
 }
 
 // ---------- TwitterScore of the accounts that followed you back (History > Follow-backs) ----------

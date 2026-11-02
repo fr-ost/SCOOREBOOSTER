@@ -106,6 +106,7 @@ async function keepAlive(fn) {
 // Long provider jobs (smart-follower search, target scores) run in the background; progress is written to
 // sx.scoreboard.job so the dashboard can show it. One job at a time; Stop in the dashboard cancels it.
 let scoreJob = null;
+let clearedTargets = null; // { at, snapshot }: the last Clear all, for Undo
 // extra: fields kept on the job for the dashboard (e.g. { provider } for target scores).
 function startScoreJob(kind, label, run, extra = {}) {
   if (scoreJob) return { ok: false, error: "Another score job is still running" };
@@ -217,6 +218,27 @@ const handlers = {
   },
   targetsBulk: async (m) => { await T.bulk(m.handles || [], m.patch || {}); return { ok: true }; },
   targetsRemove: async (m) => ({ ok: true, removed: await T.removeMany(m.handles || []) }),
+  // Targets > Clear all (one click) and its Undo (the cleared targets are kept here for 10 minutes).
+  targetsClear: async () => {
+    const r = await T.clearAll();
+    clearedTargets = r.removed ? { at: now(), snapshot: r.snapshot } : null;
+    if (r.removed) log("info", `Cleared all targets (${r.removed}); history and follow-backs are kept`);
+    return { ok: true, removed: r.removed };
+  },
+  targetsUndoClear: async () => {
+    const c = clearedTargets;
+    if (!c || now() - c.at > 10 * 60e3) return { ok: false, error: "Undo is no longer available" };
+    clearedTargets = null;
+    const restored = await T.restoreTargets(c.snapshot);
+    log("info", `Restored ${restored} cleared target${restored === 1 ? "" : "s"}`);
+    return { ok: true, restored };
+  },
+  // Targets > Load TwitterScore: every target's TwitterScore through your TwitterScore API key (only on this button).
+  targetsTwitterScore: async () => {
+    const ready = await SB.twitterScoreApiReady();
+    if (!ready.ok) return ready;
+    return startScoreJob("targets", "TwitterScore of your targets", (ctl) => SB.loadTargetTwitterScores(ctl), { provider: "twitterscore" });
+  },
   targetRefresh: (m) => engine.refreshTargetsNow(m.handles || (m.handle ? [m.handle] : [])),
 
   candidatesAdd: async (m) => {
