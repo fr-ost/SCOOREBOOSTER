@@ -347,10 +347,38 @@ export function mergePosts(t, posts) {
 
 function stripUndefined(o) { const r = {}; for (const [k, v] of Object.entries(o)) if (v !== undefined && v !== null && v !== "") r[k] = v; return r; }
 
-// Can this target be watched and commented on? Only enabled targets that are known NOT to follow you.
+// Accounts that follow very few people for their size - following below settings.targeting.minFollowingPct % of their
+// followers, e.g. 2,500 following with 100,000 followers = 2.5% - rarely follow anyone back. With
+// settings.targeting.skipSelective on (the default) they are not watched, commented on or followed first. Only from
+// SELECTIVE_MIN_FOLLOWERS followers; an account whose counts are not known yet is never excluded.
+export const SELECTIVE_MIN_FOLLOWERS = 1000;
+export const DEFAULT_MIN_FOLLOWING_PCT = 5;
+export function followingPct(t) {
+  const p = (t && t.profile) || {};
+  const fr = Number(p.followers), fg = Number(p.following);
+  if (!Number.isFinite(fr) || !Number.isFinite(fg) || fr <= 0 || fg < 0 || p.followers === "" || p.following === "" || p.followers == null || p.following == null) return null;
+  return (fg / fr) * 100;
+}
+export function tooSelective(t, settings) {
+  const tg = (settings && settings.targeting) || {};
+  if (tg.skipSelective === false) return false;
+  const pct = followingPct(t);
+  if (pct == null || Number(t.profile.followers) < SELECTIVE_MIN_FOLLOWERS) return false;
+  return pct < clamp(num(tg.minFollowingPct, DEFAULT_MIN_FOLLOWING_PCT), 0, 100);
+}
+// Why an account is left out for following too few: "Follows only 2.5% of its followers (2,500 of 100,000) - rarely follows back".
+export function selectiveReason(t) {
+  const pct = followingPct(t);
+  const p = (t && t.profile) || {};
+  const fmt = (n) => Number(n).toLocaleString("en-US");
+  return `Follows only ${pct < 10 ? pct.toFixed(1) : Math.round(pct)}% of its followers (${fmt(p.following)} of ${fmt(p.followers)}) - rarely follows back`;
+}
+
+// Can this target be watched and commented on? Only enabled targets that are known NOT to follow you, and not
+// accounts that follow too few people to follow back (tooSelective).
 export function isActive(t, settings, ts = now()) {
   if (!t || !t.enabled) return false;
-  return followStatus(t) === FS.ACTIVE;
+  return followStatus(t) === FS.ACTIVE && !tooSelective(t, settings);
 }
 export function isCold(t, ts = now()) { return !!(t && t.coldUntil && t.coldUntil > ts); }
 

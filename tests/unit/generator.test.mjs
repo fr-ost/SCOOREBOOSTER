@@ -86,7 +86,10 @@ describe("generator.js", () => {
       assert.ok(ins.startsWith("You write replies on X like a real human scrolling fast on their phone."));
       assert.ok(ins.includes("you write as @0x_nation; this is the authority on style"));
       assert.ok(ins.includes("\nBold and confident.\n"), "the owner's voice is the main block");
-      assert.ok(ins.includes("THIS REPLY LENGTH: a real thought, 11 to 18 words"));
+      assert.ok(ins.includes("THIS REPLY LENGTH: a real thought, 12 to 20 words"));
+      assert.ok(ins.includes("=== THE GOAL OF THIS REPLY ===") && ins.includes("the AUTHOR wants to answer it"), "every reply has to give the author a reason to answer");
+      assert.ok(/What this reply adds: \S/.test(ins), "a strategy per reply");
+      assert.ok(ins.includes("Never invent facts, numbers, names"));
       assert.ok(ins.includes("THIS REPLY EMOJI: no emoji, pure text."));
       assert.ok(ins.includes("THIS REPLY ENDING: end with NO punctuation at all."));
       assert.ok(ins.includes("Start this one in lowercase"));
@@ -108,17 +111,20 @@ describe("generator.js", () => {
       assert.ok(a.includes("owner_best_past_replies in the data did well"));
       assert.ok(a.includes("do NOT over-polish"), "reasoning models get the note");
       assert.ok(a.includes("GREETING POST"));
+      assert.ok(!a.includes("THE GOAL OF THIS REPLY"), "a pure greeting gets a tiny reply, no strategy");
       assert.ok(a.includes("THIS REPLY LENGTH: a fuller take"));
       assert.ok(a.includes("THIS REPLY ENDING: a single period at the very end is allowed"));
       assert.ok(a.includes("Start this one with a capital letter"));
       assert.ok(!a.includes("extra rules"));
     });
 
-    test("replyKnobs: length 20/50/30, emoji 15%, no final period 82%, a point of view, the first letter's case", () => {
+    test("replyKnobs: length 10/55/35, emoji 15%, no final period 82%, a point of view, the first letter's case, a strategy", () => {
       const seq = (...v) => { let i = 0; return () => v[i++ % v.length]; };
-      assert.match(gen.replyKnobs(seq(0.1, 0.5, 0.5, 0, 0.9)).shape, /short and punchy, 6 to 10 words/);
-      assert.match(gen.replyKnobs(seq(0.69, 0.5, 0.5, 0, 0.9)).shape, /11 to 18 words/);
-      assert.match(gen.replyKnobs(seq(0.7, 0.5, 0.5, 0, 0.9)).shape, /16 to 24 words/);
+      assert.match(gen.replyKnobs(seq(0.05, 0.5, 0.5, 0, 0.9)).shape, /short and sharp, 8 to 12 words/);
+      assert.match(gen.replyKnobs(seq(0.64, 0.5, 0.5, 0, 0.9)).shape, /12 to 20 words/);
+      assert.match(gen.replyKnobs(seq(0.7, 0.5, 0.5, 0, 0.9)).shape, /18 to 28 words/);
+      assert.match(gen.replyKnobs(seq(0.5, 0.5, 0.5, 0, 0.9, 0)).strategy, /ask ONE sharp, specific question/);
+      assert.match(gen.replyKnobs(seq(0.5, 0.5, 0.5, 0, 0.9, 0.999)).strategy, /sharper, more quotable/);
       const k = gen.replyKnobs(seq(0.5, 0.1, 0.9, 0.999, 0.1));
       assert.match(k.emoji, /MAY end with ONE fitting emoji/);
       assert.equal(k.keepPeriod, true);
@@ -127,11 +133,11 @@ describe("generator.js", () => {
       const counts = { short: 0, mid: 0, long: 0, period: 0 };
       for (let i = 0; i < 2000; i++) {
         const kk = gen.replyKnobs(Math.random);
-        counts[/6 to 10/.test(kk.shape) ? "short" : /11 to 18/.test(kk.shape) ? "mid" : "long"]++;
+        counts[/8 to 12/.test(kk.shape) ? "short" : /12 to 20/.test(kk.shape) ? "mid" : "long"]++;
         if (kk.keepPeriod) counts.period++;
       }
-      assert.ok(counts.short > 300 && counts.short < 520, JSON.stringify(counts));
-      assert.ok(counts.mid > 850 && counts.mid < 1150, JSON.stringify(counts));
+      assert.ok(counts.short > 120 && counts.short < 290, JSON.stringify(counts));
+      assert.ok(counts.mid > 960 && counts.mid < 1240, JSON.stringify(counts));
       assert.ok(counts.period > 260 && counts.period < 460, JSON.stringify(counts));
     });
 
@@ -222,6 +228,26 @@ describe("generator.js", () => {
     const cheap = settings.models.find((m) => m.id === "m_cheap");
     const genCost = costOf({ input: 1200, cached: 300, output: 500, reasoning: 400 }, balanced.prices);
     const checkCost = costOf({ input: 1200, cached: 300, output: 500, reasoning: 400 }, cheap.prices);
+
+    test("engagement: a reply the author has no reason to answer is rewritten with the editor's hint; the last try is used if that is its only fault", async () => {
+      const checkEng = (n, issue = "") => ({ status: 200, body: okBody(JSON.stringify({ pass: true, generic: false, off_topic: false, same_language: true, bot_like: false, engagement: n, issue })) });
+      let f = router({ gen: [genOk(GOOD), genOk(GOOD + " tho")], check: [checkEng(3, "just agrees, nothing to answer"), checkEng(8)] });
+      let { out } = await run(f);
+      assert.equal(out.ok, true);
+      assert.equal(out.attempts, 2, "rewritten once");
+      assert.equal(out.quality.engagement, 8);
+      const second = f.calls.filter((c) => c.kind === "gen")[1];
+      assert.match(dataOf(second.body.input[0].content[0].text).previous_attempt_was_rejected_because, /engagement 3\/10 .*just agrees/);
+      assert.ok(f.calls.find((c) => c.kind === "check").body.instructions.includes("rate engagement from 1 to 10"));
+      f = router({ gen: [genOk(GOOD), genOk(GOOD + " tho"), genOk(GOOD + " fr")], check: [checkEng(4), checkEng(4), checkEng(5)] });
+      ({ out } = await run(f));
+      assert.equal(out.ok, true, "never skipped only for a low score");
+      assert.equal(out.attempts, gen.MAX_ATTEMPTS);
+      assert.equal(out.quality.reasons[0].code, "low_engagement");
+      f = router({ gen: [genOk(GOOD)], check: [checkPass()] });
+      ({ out } = await run(f));
+      assert.equal(out.attempts, 1, "an answer without a score is not held back");
+    });
 
     test("success with model check pass", async () => {
       const f = router({ gen: [genOk(GOOD)], check: [checkPass()] });

@@ -9,7 +9,7 @@ import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
 import { effectiveMode, dailyLimit, generationLimit, likeLimit, accountsLimit, activeHours, afterPost, nextCheckMs, nextGapMs, postGate, generateGate, GATE_LABEL, rampStage, daysSinceStart, watchCadence, riskReport } from "./safety.js";
 import { skipReason } from "./filters.js";
-import { effectiveTone, effectivePreset, isActive, followStatus, FS } from "./targets.js";
+import { effectiveTone, effectivePreset, isActive, followStatus, FS, tooSelective, selectiveReason, followingPct } from "./targets.js";
 import { generate, pickOwnerEdits } from "./generator.js";
 import { weightedLength } from "./quality.js";
 import { workerTab, releaseGuard, withPurpose, withAbort, pageBudget, footprintSummary } from "./tabs.js";
@@ -569,7 +569,7 @@ async function tickBody(settings, secrets, reason = "timer") {
   for (const item of due) {
     const target = Object.hasOwn(targetsNow, item.target) ? targetsNow[item.target] : null;
     if (!target || !isActive(target, settings)) {
-      const why = !target ? "Target removed" : target.enabled === false ? "Target turned off" : followStatus(target) === FS.CHECKING ? "Follow status unknown - not posted" : "Follows you now - no more comments to this account";
+      const why = !target ? "Target removed" : target.enabled === false ? "Target turned off" : followStatus(target) === FS.CHECKING ? "Follow status unknown - not posted" : tooSelective(target, settings) ? selectiveReason(target) : "Follows you now - no more comments to this account";
       await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: why } : null));
       continue;
     }
@@ -779,11 +779,18 @@ export async function tick(reason = "alarm") {
 
 // ---------- generation ----------
 
+// Which fresh post gets a reply first: the target's priority, fresh posts and early momentum, and accounts that follow
+// back readily - the more people an account follows for its size, the likelier it follows you back (following 50%+ of
+// its followers: +20, 20%+: +12, 10%+: +6).
+export function followBackBoost(t) {
+  const pct = followingPct(t);
+  return pct == null ? 0 : pct >= 50 ? 20 : pct >= 20 ? 12 : pct >= 10 ? 6 : 0;
+}
 function scorePost(p, t, ts) {
   const ageMin = p.createdAt ? (ts - p.createdAt) / MIN : 10;
   const m = p.metrics || {};
   const velocity = ((m.likes || 0) + 2 * (m.replies || 0)) / Math.max(1, ageMin);
-  return (Number.isFinite(t.priority) ? t.priority : 50) + (t.tier === 1 ? 15 : 0) - ageMin * 0.8 + Math.min(20, Math.log10(1 + velocity) * 10);
+  return (Number.isFinite(t.priority) ? t.priority : 50) + (t.tier === 1 ? 15 : 0) + followBackBoost(t) - ageMin * 0.8 + Math.min(20, Math.log10(1 + velocity) * 10);
 }
 
 async function handleFresh(posts, ctx) {
@@ -864,7 +871,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
     if (c && c.stop) { if (await errorStop(settings, c.stop, c.detail)) return "stopped"; return "skipped"; }
     if ((c && c.aborted) || !(await stillRunning())) return "stopped"; // Pause/Stop during the profile visit
     t = c;
-    if (!isActive(t, settings)) { log("info", `Not commenting on @${t.handle}: follows you now`); return "skipped"; }
+    if (!isActive(t, settings)) { log("info", `Not commenting on @${t.handle}: ${tooSelective(t, settings) ? selectiveReason(t) : "follows you now"}`); return "skipped"; }
   }
   let arm = {};
   if (settings.learning.enabled && settings.learning.abTesting) {

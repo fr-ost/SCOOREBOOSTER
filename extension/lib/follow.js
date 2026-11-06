@@ -19,7 +19,7 @@ import { pageVerdict } from "./guard.js";
 import { followOnProfile } from "./poster.js";
 import { refreshProfile } from "./watcher.js";
 import { processFollowBacks } from "./learning.js";
-import { applyFollow, followStatus, followDays, FS } from "./targets.js";
+import { applyFollow, followStatus, followDays, FS, tooSelective } from "./targets.js";
 import { normalizeHandle, now, DAY, HOUR, MIN, sleep, humanDelay, randInt } from "./util.js";
 
 const BADGE_TRUST_MS = 3 * DAY; // negatives are trusted this long after the badge was last seen working
@@ -315,7 +315,7 @@ export function followConfirmed(t, ts = now()) {
 // is waiting.
 export function wantsFollow(t, settings, ts = now()) {
   const rel = (t && t.rel) || {};
-  return !!(settings.follow.followFirst && t && t.enabled !== false && followStatus(t) === FS.ACTIVE && !followConfirmed(t, ts) && !rel.followRequestedAt);
+  return !!(settings.follow.followFirst && t && t.enabled !== false && followStatus(t) === FS.ACTIVE && !tooSelective(t, settings) && !followConfirmed(t, ts) && !rel.followRequestedAt);
 }
 // Record a follow-first outcome on the target (lib/poster.js followOnProfile):
 //   "followed"   Follow clicked, and a fresh load of the profile shows Following

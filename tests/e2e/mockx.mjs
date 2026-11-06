@@ -50,7 +50,7 @@ export function createMock(opts = {}) {
     nextId: 1900000000000000000n,
   };
 
-  M.addUser = (h, u = {}) => { M.users[h] = { handle: h, name: u.name || h.toUpperCase(), bio: u.bio || `Building things. Thoughts on ${h}.`, followers: u.followers ?? 12000, following: u.following ?? 800, verified: !!u.verified, followsMe: !!u.followsMe, iFollow: !!u.iFollow, id: u.id || String(1000 + Object.keys(M.users).length), joined: u.joined || "March 2019" }; return M.users[h]; };
+  M.addUser = (h, u = {}) => { M.users[h] = { handle: h, name: u.name || h.toUpperCase(), bio: u.bio || `Building things. Thoughts on ${h}.`, followers: u.followers ?? 12000, following: u.following ?? Math.max(800, Math.round((u.followers ?? 12000) * 0.3)), verified: !!u.verified, followsMe: !!u.followsMe, iFollow: !!u.iFollow, id: u.id || String(1000 + Object.keys(M.users).length), joined: u.joined || "March 2019" }; return M.users[h]; };
   M.addPost = (author, text, minutesAgo, extra = {}) => {
     const id = String(M.nextId++);
     const p = { id, author, text, createdAt: Date.now() - minutesAgo * MIN, lang: "en", likes: 10, replies: 3, reposts: 2, views: 900, liked: false, ...extra };

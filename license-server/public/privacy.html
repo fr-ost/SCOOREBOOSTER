@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy · ScoreX</title>
+  <meta name="description" content="How the ScoreX Chrome extension handles your data.">
+  <link rel="stylesheet" href="privacy.css">
+</head>
+<body>
+  <main class="doc">
+    <header>
+      <p class="brand">ScoreX <span>by Unique Labs</span></p>
+      <h1>Privacy Policy</h1>
+      <p class="meta">Effective November 6, 2026 · applies to the ScoreX Chrome extension (version 1.0.0 and later)</p>
+    </header>
+
+    <section>
+      <h2>The short version</h2>
+      <ul>
+        <li>ScoreX runs in your own browser, in your own logged-in X (Twitter) session. It never asks for or stores your X password.</li>
+        <li>Your targets, reply history, settings and API keys are stored <strong>only in your browser</strong>.</li>
+        <li>Post text is sent to OpenAI, with <strong>your own</strong> API key, to write replies. Score sites are contacted only if you turn them on.</li>
+        <li>Our license server sees only what it needs to check your license key.</li>
+        <li>We do not sell or share your data, and ScoreX has no ads, analytics or trackers.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>What ScoreX stores on your device</h2>
+      <p>Everything ScoreX works with stays in your browser's extension storage (<code>chrome.storage</code> and the extension's own IndexedDB):</p>
+      <ul>
+        <li>the accounts you choose to reply to, and what ScoreX reads from their public X profiles and posts (name, bio, follower and following counts, recent posts);</li>
+        <li>the replies it drafted and posted, their results (likes, replies, views, follow-backs) and the activity log;</li>
+        <li>your settings, your tone prompt and your license status;</li>
+        <li>your API keys (OpenAI and, if you add them, score sites). Keys are kept in the extension's own IndexedDB, which web pages and other extensions cannot read. They are never written to logs, never included in a backup export and never sent anywhere except to the service they belong to.</li>
+      </ul>
+      <p>You can export this data (API keys are never exported). Removing the extension deletes all of it. <em>Settings &gt; Reset everything</em> deletes your settings, targets, history and logs; it keeps your API keys, the cost ledger and the replies from the last 8 days, which the daily safety limits depend on.</p>
+    </section>
+
+    <section>
+      <h2>What leaves your device, and why</h2>
+      <table>
+        <thead><tr><th>Sent to</th><th>What</th><th>Why</th></tr></thead>
+        <tbody>
+          <tr><td>x.com (X Corp.)</td><td>Normal page views, likes, follows and the replies you approve, in your own logged-in session.</td><td>To read posts from the accounts you chose and to post your replies. This is the same as using X yourself; X's own privacy policy applies.</td></tr>
+          <tr><td>OpenAI (api.openai.com)</td><td>The text of the post being replied to (plus its quoted post and image links), the author's bio, your tone prompt and a few of your recent replies.</td><td>To write a reply, with <strong>your own</strong> API key. OpenAI's API data-usage policy applies to your account. ScoreX asks OpenAI not to store the requests (<code>store: false</code>).</td></tr>
+          <tr><td>Score sites you turn on (TwitterScore, Sorsa, Ethos, Moni)</td><td>X usernames: yours, and those of accounts you look up or choose as targets.</td><td>To show scores and smart followers. Each site is contacted only after you turn it on and grant Chrome's permission for it.</td></tr>
+          <tr><td>ScoreX license server (scorex-license.vercel.app)</td><td>Your license key, a random install ID created by the extension, and the extension version.</td><td>To check that the license key is valid and used on one installation. See below.</td></tr>
+        </tbody>
+      </table>
+      <p>ScoreX sends nothing else. It does not collect your browsing history, contacts, location or any data from websites other than those listed above.</p>
+    </section>
+
+    <section>
+      <h2>The license server</h2>
+      <p>ScoreX is currently invite only and needs a license key. When you activate it, and every few hours afterwards, the extension sends your license key, a random install ID and the extension version to our license server. The server keeps:</p>
+      <ul>
+        <li>a one-way SHA-256 hash of the key (not the key itself) and its last four characters, so we can recognise it;</li>
+        <li>the install ID it was activated on, the extension version, and when it was activated and last checked;</li>
+        <li>an optional note we wrote when issuing the key (for example, who it was issued to).</li>
+      </ul>
+      <p>Your IP address is used only to limit repeated attempts: it is kept in a short-lived counter that expires after 10 minutes and is not stored with your key. The server is hosted on Vercel with an Upstash Redis database.</p>
+    </section>
+
+    <section>
+      <h2>How we use data</h2>
+      <p>Data is used only to provide ScoreX's single purpose: helping you reply to the accounts you choose on X and track the results. We do not sell data, use it for advertising, use it to determine creditworthiness or lending, or transfer it to third parties except as described above. ScoreX's use of information received from Chrome APIs follows the Chrome Web Store User Data Policy, including the Limited Use requirements.</p>
+    </section>
+
+    <section>
+      <h2>Your choices</h2>
+      <ul>
+        <li>Review mode (the default) lets you approve every reply before it is posted.</li>
+        <li>Score sites are off until you turn them on, and you can turn them off at any time.</li>
+        <li>Removing the extension deletes everything ScoreX stores on your device; <em>Settings &gt; Reset everything</em> deletes almost all of it (see above).</li>
+        <li>To have your license record deleted from our server, contact us with your key's last four characters.</li>
+      </ul>
+    </section>
+
+    <section>
+      <h2>Children</h2>
+      <p>ScoreX is not intended for anyone under 13, or under the minimum age to use X in their country.</p>
+    </section>
+
+    <section>
+      <h2>Changes</h2>
+      <p>If this policy changes, we will update this page and the date at the top. Material changes will also be noted in the extension's store listing.</p>
+    </section>
+
+    <section>
+      <h2>Contact</h2>
+      <p>Unique Labs · Developed by Shahriar Ahmed<br>Email: <a href="mailto:support@example.com">support@example.com</a></p>
+    </section>
+
+    <footer>
+      <p>ScoreX is not affiliated with or endorsed by X Corp., OpenAI or any score site.</p>
+    </footer>
+  </main>
+</body>
+</html>

@@ -183,10 +183,21 @@ The reply generator is the **UniqueFarm** algorithm (ported with its owner's per
 * **Your voice is the authority**: your Tone prompt (default: the UniqueFarm voice) is sent as the main block.
   Built-in voice presets you can pick per target or test against it: **Casual** (JIBEX), **Delta**, **Chill**,
   **Sharp** and **Question** (one genuine question).
-* **Per-reply knobs** drawn at random every time, so replies never sound the same: length (20% 6-10 words, 50%
-  11-18, 30% 16-24 in one block), an emoji about 15% of the time (only natural ones), no final period about 82% of
-  the time, a different point of view (a casual follower, a skeptical lurker, someone who knows the topic...) and
-  lowercase or capital first letter.
+* **Every reply has one goal: a reply the author wants to answer.** Smart accounts follow back people whose replies
+  they notice, so each reply must add something specific to the post - never agreement, praise, a restatement or an
+  empty reaction. Each reply is given one approach at random: a sharp question about their point (25%), an
+  implication they did not spell out (20%), an honest doubt or trade-off with a reason (15%), a concrete example from
+  the space (15%), the practical next step (15%) or a sharper take on their point (10%). It talks to the author as a
+  peer (no flattery) and never invents facts, numbers, names or personal stories.
+* **Engagement score**: the editor check rates every reply 1-10 for how likely the author is to answer it, like it
+  or look at your profile. Under 6 it is rewritten with the editor's hint (the third try is used if a low score is
+  its only fault). The score is kept with the reply.
+* **Per-reply knobs** drawn at random every time, so replies never sound the same: length (10% 8-12 words, 55%
+  12-20, 35% 18-28 in one block), an emoji about 15% of the time (only natural ones), no final period about 82% of
+  the time, a different point of view (someone in the niche who uses this stuff, a skeptical regular, a builder, an
+  outsider who spots what insiders miss...) and lowercase or capital first letter. If your Tone prompt was still the
+  old default voice, it moves to the new one (its examples now add something instead of "bro fr" reactions); a Tone
+  prompt you wrote yourself is never changed.
 * **Greetings**: a pure "gm" / "gn" / "wagmi" post gets a 1-4 word greeting back; a real post that opens with "gm"
   gets the greeting mirrored, then a reply to its content. (The gm skip rule in Safety is on by default; turn it
   off to reply to greeting posts.)
@@ -316,6 +327,14 @@ ScoreX only comments on accounts that **don't follow you**. Import a list of 100
    accounts are never added again by import, paste or discovery until you remove them from the blacklist
    (Targets > Blacklist). The number of days, automatic removal and the blacklist are switches on the
    Targets screen (**Edit rules**).
+
+**Accounts that follow very few people** (Targets > Edit rules > Who goes first, on by default): an account with
+100,000 followers that follows only 2,500 (2.5%) rarely follows anyone back. ScoreX reads both counts on the profile
+check and leaves out accounts whose following is below **5% of their followers** (you can change the line): they are
+not watched, commented on or followed first, and the Targets table marks them **Follows few** (point at it for the
+numbers). Accounts under 1,000 followers and accounts whose counts are not known yet are never left out. Among the
+rest, accounts that follow many people for their size get their posts answered first (following 10%+ of their
+followers ranks higher, 50%+ highest).
 
 **Follow them first** (Targets > Edit rules, on): a reply from someone who does not follow you is easy to ignore, so
 ScoreX **follows an account before it likes or replies to it**. Before the like and the reply it opens the account's

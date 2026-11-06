@@ -19,7 +19,7 @@ import { STOP } from "../../extension/lib/constants.js";
 
 const H = 3600e3;
 const active = (h, lastCheckedAt) => { const t = newTarget(h); t.rel.followsYou = false; t.rel.checkedAt = Date.now(); t.group = "B"; t.lastCheckedAt = lastCheckedAt; return t; };
-const profile = (h) => ({ handle: h, userId: "1", name: h.toUpperCase(), bio: "", followers: 1000, following: 10, verified: false, protected: false, followsYou: false, youFollow: false, followPending: false, defaultAvatar: false, avatar: "", joinedAt: null, location: "" });
+const profile = (h) => ({ handle: h, userId: "1", name: h.toUpperCase(), bio: "", followers: 1000, following: 300, verified: false, protected: false, followsYou: false, youFollow: false, followPending: false, defaultAvatar: false, avatar: "", joinedAt: null, location: "" });
 const go = { shouldStop: async () => false };
 const rotation = (n) => sanitizeSettings({ watch: { strategy: "rotation", rotationPerTick: n, scrolls: 0 } });
 const visited = (env) => env.calls.filter((c) => c.cmd === "navigate").map((c) => c.url.replace("https://x.com/", ""));

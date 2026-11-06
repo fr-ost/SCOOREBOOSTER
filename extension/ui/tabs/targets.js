@@ -10,7 +10,7 @@
 
 import { K, HS, PRESET_KEYS, HARD } from "../../lib/constants.js";
 import { parseHandleList, normalizeHandle, toCsv, num, DAY } from "../../lib/util.js";
-import { parseImport, hasScores, autoTiers, T1_MIN_TWITTERSCORE, allToneKeys, followStatus, followDays, FS, FS_LABEL, MAIN_TONE } from "../../lib/targets.js";
+import { parseImport, hasScores, autoTiers, T1_MIN_TWITTERSCORE, tooSelective, selectiveReason, allToneKeys, followStatus, followDays, FS, FS_LABEL, MAIN_TONE } from "../../lib/targets.js";
 import * as history from "../../lib/history.js";
 import {
   h, clear, fill, btn, busy, toast, icon, announce, stableTable, tierBadge, followBadge, followDay, dayMeter, FS_COLOR, tag, statusSquare,
@@ -209,6 +209,7 @@ export default {
         h("div", { class: "cell-handle" }, h("span", { class: "handle" }, "@" + t.handle),
           t.profile && t.profile.verified ? h("span", { class: "verified", title: "Verified" }, icon("check")) : null,
           isOn(t) ? null : tag("Off", "", "Turned off: ScoreX does not reply to this account"),
+          isOn(t) && tooSelective(t, ctx.settings) ? tag("Follows few", "amber", selectiveReason(t) + ": ScoreX does not comment on it or follow it (Edit rules > Who goes first)") : null,
           h("a", { class: "tg-x", href: xUrl(t.handle), target: "_blank", rel: "noopener noreferrer", tabindex: "-1", title: `Open @${t.handle} on X`, "aria-label": `Open @${t.handle} on X` }, icon("external"))),
         h("div", { class: "cell-sub", title: (t.profile && t.profile.bio) || null }, name));
     }
@@ -531,7 +532,10 @@ export default {
           sec("When nobody follows back", "Accounts that follow you are never commented on, and comments stop as soon as someone follows back. The day counter starts with the first comment.",
             h("div", { class: "form-row" }, giveUp), autoRemove, blacklist),
           sec("Who goes first", null,
-            ctx.field({ path: "targeting.useValue", type: "toggle", label: "Rank accounts by score × chance of a follow-back", id: "useValue", hint: "On: high-score accounts that often follow back get replies first. Off: the priority numbers decide. A priority you set by hand always stays." })),
+            ctx.field({ path: "targeting.useValue", type: "toggle", label: "Rank accounts by score × chance of a follow-back", id: "useValue", hint: "On: high-score accounts that often follow back get replies first. Off: the priority numbers decide. A priority you set by hand always stays. Accounts that follow many people for their size go first either way." }),
+            ctx.field({ path: "targeting.skipSelective", type: "toggle", label: "Skip accounts that follow very few people", id: "skipSelective", hint: "An account with 100,000 followers that follows only 2,500 (2.5%) rarely follows anyone back. On: such accounts are not commented on and not followed first; they show a \"Follows few\" tag. From 1,000 followers; counts come from each profile check." }),
+            h("div", { class: "form-row" },
+              ctx.field({ path: "targeting.minFollowingPct", type: "number", label: "Skip when following is below", suffix: "% of followers", min: 0, max: 100, step: 0.5, id: "minFollowingPct", hint: "Default 5%. Higher skips more accounts." }))),
           sec("Follow checks", "Checks run while the engine is idle, between comments, and use the same X tab.",
             h("div", { class: "form-row" },
               ctx.field({ path: "follow.scanEveryHours", type: "number", label: "Scan my followers every", suffix: "h", min: 1, max: 24, id: "followScanHours", hint: "Your newest followers, where follow-backs show up (1-24)" }),

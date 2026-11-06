@@ -199,6 +199,19 @@ try {
     "\"Who can reply?\" after Reply: the post is skipped (" + sk.reason + "), \"Got It\" is never clicked, ScoreX keeps running");
   M.replyMode = "ok";
 
+  // ---- an account that follows very few people for its size (100k followers, 2.5k following) is not commented on ----
+  M.addUser("aloof", { followers: 100000, following: 2500 });
+  await H.msg("targetsUpsert", { rows: ["aloof"], defaults: { tier: 1 } });
+  await H.untilChecked(["aloof"]); // the follow check reads its profile, including the counts
+  const pa = M.addPost("aloof", "Most people underestimate how long it takes to build real distribution in crypto.", 2);
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: 0, consecutiveFailures: 0, lastWatchAt: 0 });
+  await H.runNow();
+  await sleep(8000);
+  await H.waitFor(async () => { const x = await H.store("sx.state"); return !x.job || x.job.leaseUntil < Date.now(); }, "idle after aloof", 120000, 500);
+  const aloofT = (await H.store("sx.targets")).aloof;
+  assert(aloofT.profile.following === 2500 && !(await H.history()).some((x) => x.postId === pa.id && ["queued", "posted", "pending_review"].includes(x.status)) && !M.replies.some((r) => r.inReplyTo === pa.id) && !M.follows.includes("aloof"),
+    "an account following 2.5% of its followers gets no comment and is not followed first");
+
   // ---- a target's reply inside someone else's thread is not commented (only original posts) ----
   M.hideReplyBox = false;
   M.addUser("gina", { followers: 15000 });

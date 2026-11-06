@@ -11,7 +11,7 @@ import { K, STATUS, MODE, HARD, SCHEMA_VERSION } from "./constants.js";
 import { deepClone, clamp, num, isValidTimeZone, parseHHMM, now, redact, parseHandleList } from "./util.js";
 import { DEFAULT_MODELS, DEFAULT_PRESETS, DEFAULT_FALLBACK, MODELS_REV } from "./models.js";
 import { PROVIDER_DEFS } from "./providerdefs.js";
-import { DEFAULT_VOICE, VOICE_PRESETS } from "./voices.js";
+import { DEFAULT_VOICE, PREVIOUS_DEFAULT_VOICE, VOICE_PRESETS } from "./voices.js";
 import { db, STORES } from "./db.js";
 
 const area = () => globalThis.chrome.storage.local;
@@ -252,8 +252,9 @@ export const DEFAULT_SETTINGS = {
     enrichMax: 25, // profiles visited for scoring per run
   },
 
-  // Score-aware targeting: priorities use provider scores x how likely the account is to follow back.
-  targeting: { useValue: true },
+  // Score-aware targeting: priorities use provider scores x how likely the account is to follow back. skipSelective:
+  // accounts following fewer than minFollowingPct % of their followers are left out (lib/targets.js tooSelective).
+  targeting: { useValue: true, skipSelective: true, minFollowingPct: 5 },
   // History retention: skipped/failed records are compacted after N days and deleted after M days; posted ones are kept.
   history: { compactAfterDays: 30, keepUnpostedDays: 90 },
 
@@ -437,6 +438,7 @@ export function sanitizeSettings(raw) {
     if (ab && !Array.isArray(ab)) for (const g of ["A", "B"]) if (JSON.stringify(ab[g]) === JSON.stringify(oldAb[g])) ab[g] = [];
   }
   s.prompt.tone = String(s.prompt.tone || "").trim().slice(0, TONE_MAX) || DEFAULT_TONE_PROMPT;
+  if (s.prompt.tone === PREVIOUS_DEFAULT_VOICE.trim()) s.prompt.tone = DEFAULT_TONE_PROMPT; // the old default voice moves to the new one
   s.prompt.useImages = s.prompt.useImages !== false;
   s.prompt.temperature = clamp(num(s.prompt.temperature, 1.0), 0, 1.5);
   for (const k of Object.keys(s.tones || {})) s.tones[k] = String(s.tones[k] == null ? "" : s.tones[k]).slice(0, TONE_MAX);
@@ -477,7 +479,10 @@ export function sanitizeSettings(raw) {
   const cv = l.conversations && typeof l.conversations === "object" ? l.conversations : {};
   l.conversations = { enabled: cv.enabled !== false, everyMin: clamp(num(cv.everyMin, 40), 15, 240) };
 
-  s.targeting = { useValue: !(s.targeting && s.targeting.useValue === false) };
+  {
+    const tg = s.targeting || {};
+    s.targeting = { useValue: tg.useValue !== false, skipSelective: tg.skipSelective !== false, minFollowingPct: clamp(Math.round(num(tg.minFollowingPct, 5) * 10) / 10, 0, 100) };
+  }
   const hi = s.history && typeof s.history === "object" ? s.history : {};
   const compactAfterDays = clamp(Math.round(num(hi.compactAfterDays, 30)), 7, 365);
   s.history = { compactAfterDays, keepUnpostedDays: clamp(Math.round(num(hi.keepUnpostedDays, 90)), Math.max(14, compactAfterDays), 3650) };
