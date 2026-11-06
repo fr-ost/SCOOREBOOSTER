@@ -73,6 +73,10 @@
   // Fail closed on prompts X shows while ScoreX posts: any dialog / sheet / interstitial that is neither the
   // reply composer nor a toast (or a known harmless overlay) is unknown, and text matching text.aiLabel
   // ("made with AI", "may be hidden", ...) is a stop wherever it shows up. ScoreX never clicks such a prompt.
+  // X's "Who can reply? Only some accounts can reply. Got it" (a sheet or a toast when you try to reply to a post whose
+  // replies are limited) is known: the post is skipped as "replies restricted" - not an error, never a stop. Nothing on
+  // it is clicked; the next page ScoreX opens replaces it.
+  const restrictedNotice = (t) => ({ ok: false, error: "replies_restricted", detail: sample(t) });
   function promptCheck() {
     // Text nodes joined with spaces (innerText runs adjacent inline elements together: "Made with" + "AI").
     const words = (el) => D.textExcluding(el, [], 1500);
@@ -83,17 +87,20 @@
       if (isComposerDialog(el)) { // the reply composer (or a layer around it)
         const around = composerChrome(el);
         if (D.re("aiLabel").test(around)) return unknownPrompt(around, "ai_label");
+        if (D.re("replyRestricted").test(around) && !composer().box) return restrictedNotice(around);
         continue;
       }
       if (D.matches(el, "knownOverlay") || D.closest(el, "knownOverlay")) {
         if (D.re("aiLabel").test(own)) return unknownPrompt(own, "ai_label");
         continue;
       }
+      if (D.re("replyRestricted").test(own) && !D.re("aiLabel").test(own)) return restrictedNotice(own);
       return unknownPrompt(own, D.re("aiLabel").test(own) ? "ai_label" : "dialog");
     }
     for (const t of D.qa("toast")) {
       const txt = words(t);
       if (D.re("aiLabel").test(txt)) return unknownPrompt(txt, "ai_label");
+      if (D.re("replyRestricted").test(txt) && !X.toastState()) return restrictedNotice(txt); // an X warning is never this
     }
     return null;
   }

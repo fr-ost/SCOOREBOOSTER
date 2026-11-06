@@ -289,3 +289,21 @@ describe("poster: X page-load budget", () => {
   });
 });
 
+
+describe("poster: replies restricted (\"Who can reply?\") at any step -> skipped, never a stop", () => {
+  beforeEach(() => resetStorage());
+  const RESTRICTED = { ok: false, error: "replies_restricted", detail: "Who can reply? Only some accounts can reply. Got It" };
+  for (const step of ["like", "openComposer", "type", "submitReply", "replyResult"]) {
+    test(`at ${step}: the post is skipped, nothing more is typed or clicked`, async (t) => {
+      fast(t);
+      const env = fakeTab(xPage({ [step]: () => RESTRICTED }));
+      const r = await run(env);
+      assert.equal(r.ok, false);
+      assert.equal(r.skip, true, JSON.stringify(r));
+      assert.equal(r.stop, undefined, "never a stop");
+      assert.match(r.reason, /restricted/);
+      assert.deepEqual(env.after(step), [], "nothing else is sent to the page after X's notice");
+      assert.equal(env.count("submitReply"), ["replyResult"].includes(step) ? 1 : step === "submitReply" ? 1 : 0, "Reply clicked only if the notice came after the click");
+    });
+  }
+});

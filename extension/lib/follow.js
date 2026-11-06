@@ -374,7 +374,13 @@ export async function followFirstStep({ tabId, settings, me, shouldStop }) {
   const r = await followOnProfile(tabId, pick.handle, settings, { stopped: shouldStop || (async () => false) });
   if (r.result) await recordFollow(pick.handle, r.result);
   if (r.aborted) return { did: "aborted" };
-  if (r.stop) return { stop: r.stop, detail: r.detail };
+  if (r.stop) {
+    // (e.g. a prompt ScoreX does not know, which stops the engine only with "Stop when errors repeat" on): this account is
+    // not picked again for a day, and the next follow-ahead waits its usual gap.
+    if (!r.result) await recordFollow(pick.handle, "missing");
+    await patchState({ lastFollowAt: now(), nextFollowGapMin: randInt(10, 20) });
+    return { stop: r.stop, detail: r.detail };
+  }
   if (r.budget) return null;
   if (r.gone) await recordFollow(pick.handle, "missing");
   await patchState({ nextFollowGapMin: randInt(3, 8) });

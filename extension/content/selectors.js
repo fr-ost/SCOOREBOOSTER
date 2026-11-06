@@ -98,7 +98,7 @@
       postGone: "this (?:post|tweet) (?:is unavailable|was deleted|has been deleted)|this page doesn.t exist|post unavailable|you.re unable to view this post|this post is from an account that no longer exists",
       accountGone: "this account doesn.t exist|account suspended|these posts are protected|this account has been withheld|caution: this account is temporarily restricted",
       replySent: "your post was sent|your reply was sent|post sent|reply sent",
-      replyRestricted: "who can reply|people .* mentioned can reply|only (?:people|accounts) .* can reply|replies are limited",
+      replyRestricted: "who can reply|(?:people|accounts) [^.]{0,60}(?:mentioned|follows?|followed|verified|subscribed|subscribers)[^.]{0,30} can reply|only (?:[a-z@_]+ ){0,3}(?:people|accounts)[^.]{0,60} can reply|some accounts can reply|replies (?:are|have been) (?:limited|restricted|turned off|off)|can.t reply to this (?:post|conversation)|you can.t reply|limited who can reply",
       reposted: "reposted|retweeted",
       pinned: "pinned",
       promoted: "^(?:ad|promoted|promoted by)$",

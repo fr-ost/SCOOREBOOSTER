@@ -33,24 +33,51 @@ function abortBackground() { for (const j of backgroundJobs) j.abort = true; bac
 export const backgroundAbort = { requested: false };
 
 const SAFETY_STOPS = new Set(Object.values(STOP).filter((s) => s !== STOP.USER));
-// ScoreX's own failures - not X telling you something. They stop the engine only with Settings > Safety > "Stop when
-// errors repeat" on (safety.stopOnErrors, off by default). Off: logged in the activity (at most every 30 min per kind),
-// no stop, no notification, and ScoreX goes on with the next task (each caller backs off first). X's own signals -
-// captcha, "unusual activity" warning, rate limit, locked, logged out, wrong account, an unknown prompt - always stop.
-export const ERROR_STOPS = new Set([STOP.POST_FAILURES, STOP.DOM_CHANGED, STOP.TAB_UNAVAILABLE, STOP.INTERNAL, STOP.ACCOUNT_UNKNOWN]);
+// ScoreX's own failures - and an X prompt ScoreX does not know. They stop the engine only with Settings > Safety >
+// "Stop when errors repeat" on (safety.stopOnErrors, off by default). Off: logged in the activity (at most every 30 min
+// per kind), no stop, and ScoreX goes on with the next task (each caller backs off first); an unknown prompt is never
+// clicked, its post is skipped and you get a notification (at most once an hour). X's explicit warnings - captcha,
+// "unusual activity", rate limit, locked, logged out, wrong account - always stop: going on cannot work or hurts the account.
+export const ERROR_STOPS = new Set([STOP.POST_FAILURES, STOP.DOM_CHANGED, STOP.TAB_UNAVAILABLE, STOP.INTERNAL, STOP.ACCOUNT_UNKNOWN, STOP.UNKNOWN_PROMPT]);
 export const stopsOnErrors = (settings) => !!(settings && settings.safety && settings.safety.stopOnErrors);
 async function errorNote(reason, detail) {
+  if (reason === STOP.UNKNOWN_PROMPT) await promptNotice(detail);
   const st = await getState();
   const last = (st.errorLogAt && st.errorLogAt[reason]) || 0;
   if (now() - last < 30 * MIN) return;
   await patchState((x) => ({ errorLogAt: { ...(x.errorLogAt || {}), [reason]: now() } }));
   log("warn", `${STOP_LABEL[reason] || reason}${detail ? ": " + detail : ""} - carrying on (stopping on errors is off)`);
 }
-// Stop for `reason`, unless it is one of ScoreX's own failures and stopping on errors is off. Returns true when stopped.
+// An X prompt ScoreX does not know, while it carries on: a notification at most once an hour, so you can look at it.
+async function promptNotice(detail) {
+  const st = await getState();
+  if (st.promptNotifiedAt && now() - st.promptNotifiedAt < HOUR) return;
+  await patchState({ promptNotifiedAt: now() });
+  const what = truncate(String(detail || "").replace(/\s+/g, " ").trim(), 140);
+  await notify("sx-prompt", "ScoreX: X showed something new", `${what ? `"${what}" - ` : ""}ScoreX did not click it, skipped that step and keeps going. Have a look at x.com when you can.`);
+}
+// Stop for `reason`, unless it is one of ScoreX's own failures (or an unknown prompt) and stopping on errors is off.
+// Returns true when stopped.
 async function errorStop(settings, reason, detail) {
   if (!ERROR_STOPS.has(reason) || stopsOnErrors(settings)) { await stop(reason, detail); return true; }
   await errorNote(reason, detail);
   return false;
+}
+// Posting: an X prompt ScoreX does not know, with stopping on errors off. Nothing on it was clicked. The item is
+// skipped - or, when it came after the Reply click, kept as "may have been sent" (it counts toward the limits) - and
+// replies wait 10, 20, 40, then 60 minutes (each prompt in a row waits longer; a reply that goes through resets it),
+// in a fresh X tab, before ScoreX goes on.
+async function promptSkip(rec, r, state, ts = now()) {
+  const what = truncate(String(r.detail || "").replace(/\s+/g, " ").trim(), 160) || "a dialog without text";
+  const n = (state.promptStreak || 0) + 1;
+  const wait = Math.min(60, 10 * 2 ** (n - 1)) * MIN;
+  const liked = { liked: !!r.liked, likedAt: r.liked ? ts : null };
+  if (r.unsure) await H.patch(rec.id, { status: HS.FAILED, maybePosted: true, replyUrl: r.replyUrl || "", reason: `X showed a prompt ScoreX does not know after the Reply click (it may have been sent): ${what}`, ...liked });
+  else await H.patch(rec.id, { status: HS.SKIPPED, reason: `X showed a prompt ScoreX does not know - skipped, nothing was clicked: ${what}`, ...liked });
+  await patchState({ promptStreak: n, nextCommentAt: ts + wait, workerTabFreshAt: 0 });
+  log("warn", `X showed a prompt ScoreX does not know ("${what}"): the reply to @${rec.target} was ${r.unsure ? "left as may-have-been-sent" : "skipped"}, nothing was clicked; replies wait ${Math.round(wait / MIN)} min, then ScoreX goes on`);
+  await promptNotice(what);
+  return r.unsure ? "failed" : "skipped";
 }
 // A safety stop (captcha, X warning, rate limit...) not reviewed yet (same rule as the dashboard's isSafetyStop): only
 // resume() - the dashboard's "Review stop..." - ends it, and until then nothing drives the X tab (no discovery; re-checks
@@ -680,8 +707,9 @@ async function tickBody(settings, secrets, reason = "timer") {
     if (bg && bg.stop) {
       if (await errorStop(settings, bg.stop, bg.detail)) return null;
       // Carrying on (e.g. the followers list showed no "Follows you" badge): that check waits 2 hours; follow tracking
-      // marks nobody as "doesn't follow you" meanwhile, so nobody new gets comments because of it.
-      await patchState({ followersScanRetryAt: now() + 2 * HOUR });
+      // marks nobody as "doesn't follow you" meanwhile, so nobody new gets comments because of it. (An unknown prompt in
+      // a background step already put that step's account off for a day.)
+      if (bg.stop !== STOP.UNKNOWN_PROMPT) await patchState({ followersScanRetryAt: now() + 2 * HOUR });
     }
     if (await stopIfAccountUnknown(settings)) return null;
   }
@@ -974,7 +1002,7 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     // follow: what follow-first saw right before this reply ("followed" now / "already" following, both on the profile).
     const follow = ["followed", "already"].includes(pctx.followResult) ? pctx.followResult : null;
     await H.patch(rec.id, { status: HS.POSTED, postedAt: ts, replyUrl: r.replyUrl || "", replyId: r.replyId || "", liked: !!r.liked, likedAt: r.liked ? ts : null, reason: r.already ? "Reply was already in the thread" : "", ...(follow ? { follow, followCheckedAt: ts } : {}) });
-    await patchState({ ...afterPost(settings, state, ts), consecutiveFailures: 0, lastLikeAt: r.liked ? ts : state.lastLikeAt, internalErrors: 0 });
+    await patchState({ ...afterPost(settings, state, ts), consecutiveFailures: 0, promptStreak: 0, lastLikeAt: r.liked ? ts : state.lastLikeAt, internalErrors: 0 });
     await updateTargets((all) => {
       const t = all[rec.target];
       if (t) {
@@ -989,6 +1017,7 @@ async function postOne(rec, { tabId, settings, me, counts }) {
     await refreshBadge(); // the icon counts posted replies
     return "posted";
   }
+  if (r.stop === STOP.UNKNOWN_PROMPT && !stopsOnErrors(settings)) return promptSkip(rec, r, state, ts);
   if (r.stop && !(ERROR_STOPS.has(r.stop) && !stopsOnErrors(settings))) {
     // unsure: the stop came after the Reply click without a clear rejection, so the reply may be on X (counts
     // toward every limit, like an unconfirmed post).

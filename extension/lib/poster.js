@@ -89,6 +89,10 @@ function accountRefusal(resp, want) {
 }
 // Soft "could not verify the account" result: the item stays queued, nothing was typed or submitted.
 const accountUnknown = (liked) => ({ ok: false, retry: true, soft: "account_unknown", reason: "account_unknown", liked: !!liked });
+// X's "Who can reply? Only some accounts can reply" at any step (content/actions.js promptCheck): the post is skipped -
+// not a failure, never a stop - and nothing more is typed or clicked.
+export const RESTRICTED_REASON = "Replies are restricted on this post (only some accounts can reply)";
+const restricted = (resp, liked) => (resp && resp.error === "replies_restricted" ? { ok: false, skip: true, reason: RESTRICTED_REASON, liked: !!liked } : null);
 
 // Clean up after a failure so nothing half-written stays in the page.
 async function cleanup(tabId) {
@@ -172,7 +176,7 @@ export async function postReply(rec, ctx) {
   // You already replied under this post yourself (by hand, other text): no second reply from your account, and the
   // item is not recorded as posted (it was not).
   if (st.myReplies && st.myReplies.length) return { ok: false, skip: true, reason: "already_replied_by_you" };
-  if (st.canReply === false) return { ok: false, skip: true, reason: "replies_restricted" };
+  if (st.canReply === false) return { ok: false, skip: true, reason: RESTRICTED_REASON };
   if (st.focalIndex > 0) return { ok: false, skip: true, reason: "reply_in_thread_not_original_post" };
   // Nothing is liked, typed or submitted unless this page is logged in as your account.
   const av = accountVerdict(st.page, want);
@@ -189,6 +193,8 @@ export async function postReply(rec, ctx) {
   let liked = false;
   if (ctx.allowLike && !st.focal.liked) {
     const lk = await send(tabId, CMD.LIKE, { tweetId, expectMe: want || undefined }, 15000);
+    const rs0 = restricted(lk, false);
+    if (rs0) return rs0;
     v = verdictOf(lk, settings);
     if (v) return { ok: false, stop: v.stop, detail: v.detail };
     const ar = accountRefusal(lk, want);
@@ -210,7 +216,7 @@ export async function postReply(rec, ctx) {
     if (ar && ar.stop) return { ok: false, stop: ar.stop, detail: ar.detail, liked };
     if (ar) return accountUnknown(liked);
     if (!oc.ok) {
-      if (oc.error === "replies_restricted") return { ok: false, skip: true, reason: "replies_restricted", liked };
+      if (oc.error === "replies_restricted") return { ok: false, skip: true, reason: RESTRICTED_REASON, liked };
       if (oc.error === "post_not_found") return { ok: false, skip: true, reason: "post_not_found", liked };
       return { ok: false, fail: true, reason: oc.error || "composer_failed", liked };
     }
@@ -222,6 +228,8 @@ export async function postReply(rec, ctx) {
     const typeMs = typingMs(text, sf.typingCpm.min, sf.typingCpm.max);
     if (!(await pauseFor(Math.round(typeMs * 0.7), stopped))) { await cleanup(tabId); return { ok: false, aborted: true, liked }; }
     const r = await send(tabId, CMD.TYPE, { text, whole: true }, 15000);
+    const rs1 = restricted(r, liked);
+    if (rs1) return rs1;
     if (r.state) return { ok: false, stop: stopFor(r.state), detail: r.detail || r.state, liked, unsure: false }; // prompt: touch nothing
     if (r.page) { const vv = pageVerdict(r.page, settings); if (vv && vv.stop) { await cleanup(tabId); return { ok: false, stop: vv.stop, detail: vv.detail, liked }; } }
     // Verify; if the text did not land, clear the box and insert it once more.
@@ -230,6 +238,8 @@ export async function postReply(rec, ctx) {
       await send(tabId, CMD.CLEAR_COMPOSER, {}, 8000);
       await sleep(humanDelay(400, 900));
       const t2 = await send(tabId, CMD.TYPE, { text, whole: true }, 15000);
+      const rs2 = restricted(t2, liked);
+      if (rs2) return rs2;
       if (t2.state) return { ok: false, stop: stopFor(t2.state), detail: t2.detail || t2.state, liked, unsure: false };
       ct = await send(tabId, CMD.COMPOSER_TEXT, {}, 8000);
       if (loose(ct.text) !== loose(text)) {
@@ -242,6 +252,8 @@ export async function postReply(rec, ctx) {
 
     // The content script checks the account and looks for prompts once more right before the click.
     const sb = await send(tabId, CMD.SUBMIT_REPLY, { expectText: text, expectMe: want || undefined }, 15000);
+    const rs3 = restricted(sb, liked); // seen before the click: nothing was sent
+    if (rs3) return rs3;
     v = verdictOf(sb, settings);
     // (sb.ok: the click happened before the page showed the stop, so the reply may be on X unless X refused it)
     if (v) { await cleanup(tabId); return { ok: false, stop: v.stop, detail: v.detail, liked, unsure: !!sb.ok && !REJECTED.has(v.stop) }; }
@@ -261,6 +273,8 @@ export async function postReply(rec, ctx) {
       const rr2 = await send(tabId, CMD.REPLY_RESULT, { tweetId, expectText: text, me, timeoutMs: 15000 }, 30000);
       if (!rr2.noAnswer) rr = rr2;
     }
+    const rs4 = restricted(rr, liked); // X answered the click with "Who can reply?": it refused the reply
+    if (rs4) return rs4;
     if (rr.state === "unknown_prompt") {
       // Leave the page exactly as it is (no cleanup clicks). It may have been sent if X cleared the box or showed its
       // "sent" toast (X keeps the text while sending, so the page watches the box a few seconds after the prompt).

@@ -133,7 +133,12 @@ export async function cleanupStep({ tabId, settings, me, shouldStop }) {
   if (v3 && v3.stop) return v3;
   if (r.error === "wrong_account") return { stop: "wrong_account", detail: `Logged in as @${r.me || "?"}, expected @${expectMe}` };
   if (r.error === "account_unknown") return postpone(false);
-  if (r.state === "unknown_prompt") return { stop: "unknown_prompt", detail: r.detail || "X showed a prompt ScoreX does not know" };
+  if (r.state === "unknown_prompt") {
+    // Nothing on it was clicked. This account waits a day (so the same profile is not reloaded on every check); the
+    // engine stops only with "Stop when errors repeat" on.
+    await postpone(false);
+    return { stop: "unknown_prompt", detail: r.detail || "X showed a prompt ScoreX does not know" };
+  }
   if (r.state) return { stop: r.state === "rate_limit" ? "rate_limit" : "unusual_activity", detail: r.detail || "X warning after unfollow" };
   if (r.dom) return { stop: "dom_changed", detail: "Unfollow button not found: " + r.error };
   await patchState((s) => ({

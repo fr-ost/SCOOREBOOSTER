@@ -241,6 +241,42 @@ ${cell("newfan", { badge: true, bio: "404 vibes only. This page doesn’t exist,
     } finally { await p.close(); }
   });
 
+  // X's "Who can reply?" sheet (replies limited by the author): known - the post is skipped, it is not an unknown prompt.
+  const WHO_CAN_REPLY = `<div data-testid="sheetDialog" role="dialog" aria-modal="true" style="position:fixed;top:0;left:0;width:300px;height:200px;background:#fff"><div><span>Who can reply?</span><span>Only some accounts can reply.</span><button data-testid="sheetGotIt">Got It</button></div></div>`;
+
+  test("\"Who can reply?\" after the Reply click: replies_restricted (not an unknown prompt), the sheet is never clicked", async () => {
+    const p = await open(`https://x.com/bigbob/status/${TID}`, statusPage("", { composer: "" }));
+    try {
+      await p.page.evaluate((html) => {
+        document.querySelector('[data-testid="reply"]').addEventListener("click", () => { document.getElementById("layers").innerHTML = html; });
+      }, WHO_CAN_REPLY);
+      const r = await p.call({ sx: "openComposer", tweetId: TID });
+      assert.equal(r.error, "replies_restricted", JSON.stringify(r));
+      assert.equal(r.state, undefined, "not a stop");
+      assert.match(r.detail, /Who can reply/);
+      assert.deepEqual(await p.clicks(), ["reply"], "only the reply icon was clicked, not \"Got It\"");
+    } finally { await p.close(); }
+  });
+
+  test("\"Who can reply?\" up before typing or submitting: replies_restricted, nothing typed, Reply not clicked; as a toast too", async () => {
+    let p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(WHO_CAN_REPLY));
+    try {
+      assert.equal((await p.call({ sx: "type", text: "Hello" })).error, "replies_restricted");
+      assert.equal(await p.page.evaluate(() => document.querySelector('[data-testid="tweetTextarea_0"]').textContent), "");
+      const r = await p.call({ sx: "submitReply", expectText: "Hello", expectMe: "0x_nation" });
+      assert.equal(r.error, "replies_restricted");
+      assert.ok(!(await p.clicks()).includes("tweetButtonInline"), "Reply was not clicked");
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(`<div data-testid="toast" role="alert"><span>Only some accounts can reply to this post.</span></div>`));
+    try {
+      assert.equal((await p.call({ sx: "openComposer", tweetId: TID })).error, "replies_restricted");
+    } finally { await p.close(); }
+    p = await open(`https://x.com/bigbob/status/${TID}`, statusPage(PROMPT));
+    try {
+      assert.equal((await p.call({ sx: "openComposer", tweetId: TID })).state, "unknown_prompt", "any other dialog is still unknown (never clicked)");
+    } finally { await p.close(); }
+  });
+
   test("AI-label wording around the composer stops; the same words in your reply or the quoted post do not", async () => {
     const modal = (notice) => `<div role="dialog" aria-modal="true" style="position:fixed;top:0;left:0;width:500px;height:400px;background:#fff">
 ${tweet("bigbob", TID, "This image was made with AI, thoughts?")}

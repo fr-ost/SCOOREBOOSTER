@@ -29,7 +29,7 @@ const TRIGGERS = [
   ["account_locked", "Account locked or restricted"],
   ["logged_out", "Logged out of X, or logged into a different account"],
   ["account_unknown", "The logged-in account could not be verified several times in a row (only with \"Stop when errors repeat\" on)"],
-  ["unknown_prompt", "X shows a prompt or notice ScoreX does not know (it never clicks it)"],
+  ["unknown_prompt", "X shows a prompt or notice ScoreX does not know (only with \"Stop when errors repeat\" on; off, it never clicks it, skips that post and goes on)"],
   ["repeated_post_failures", "Repeated posting failures (only with \"Stop when errors repeat\" on)"],
   ["dom_changed", "X page changed (selectors no longer match; only with \"Stop when errors repeat\" on)"],
   ["reach_drop", "Your replies' views fall sharply (only when the reach monitor is set to stop)"],
@@ -307,8 +307,8 @@ export default {
     const errorsNote = h("p", { class: "field-hint", id: "errorsNote" });
     const drawErrorsNote = () => {
       errorsNote.textContent = ctx.settings.safety.stopOnErrors
-        ? `On: after ${ctx.settings.safety.maxConsecutiveFailures} failed posts in a row, or when pages keep failing, ScoreX stops and notifies you. Press Resume to continue.`
-        : "Off (the default): errors go to the activity log and ScoreX moves on to the next task by itself - no stop, no pop-up. After failed posts in a row it waits a little longer before the next one (5, 10, 20, then 30 minutes).";
+        ? `On: after ${ctx.settings.safety.maxConsecutiveFailures} failed posts in a row, when pages keep failing, or when X shows a prompt ScoreX does not know, ScoreX stops and notifies you. Press Resume to continue.`
+        : "Off (the default): errors go to the activity log and ScoreX moves on to the next task by itself - no stop, no pop-up. After failed posts in a row it waits a little longer before the next one (5, 10, 20, then 30 minutes). A prompt X shows that ScoreX does not know is never clicked: that post is skipped, you get a notification, and replies wait 10-60 minutes before ScoreX goes on.";
     };
 
     root.append(reachHost,
@@ -335,12 +335,12 @@ export default {
           f({ path: "timezone", type: "select", label: "Time zone", options: tzOptions }))),
       section({ title: "Like before replying", hint: "Likes every post right before replying to it. No separate like limit: at most one like per comment." },
         f({ path: "safety.like.enabled", type: "toggle", label: "Like the post, then reply" })),
-      section({ title: "Errors", id: "errorsSec", hint: "When something of ScoreX's own fails: a reply that does not go through, a page that does not load, X's page looking different." },
+      section({ title: "Errors", id: "errorsSec", hint: "When something of ScoreX's own fails (a reply that does not go through, a page that does not load, X's page looking different) or X shows a prompt ScoreX does not know." },
         f({ path: "safety.stopOnErrors", type: "toggle", label: "Stop and notify me when errors repeat", id: "stopOnErrors" }),
         errorsNote,
         h("div", { class: "form-row" },
           f({ path: "safety.maxConsecutiveFailures", type: "number", label: "Stop after N failed posts in a row", min: 1, max: HARD.maxPostFailures, hint: `Used only while the switch above is on. Cap ${HARD.maxPostFailures}` })),
-        h("p", { class: "field-hint", id: "errorsAlways" }, "Always stops, whatever this is set to: X's own warnings - a captcha, \"unusual activity\", a rate limit, a locked account, being logged out or into another account, or a prompt ScoreX does not know. Carrying on after those is how accounts get restricted.")),
+        h("p", { class: "field-hint", id: "errorsAlways" }, "Always stops, whatever this is set to: X's explicit warnings - a captcha, \"unusual activity\", a rate limit, a locked account, being logged out or into another account. Carrying on after those cannot work or is how accounts get restricted. A post whose replies are restricted (\"Who can reply?\") is simply skipped - never an error.")),
       section({ title: "Skip rules", hint: "Posts ScoreX never replies to." },
         h("div", { class: "toggle-grid" },
           f({ path: "safety.skip.ads", type: "toggle", label: "Ads / promoted posts" }),

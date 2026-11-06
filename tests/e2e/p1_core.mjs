@@ -184,20 +184,28 @@ try {
   const attemptsBefore = M.log.filter((x) => x.kind === "reply").length;
   await H.patchState({ nextCommentAt: 0, lastCommentAt: Date.now() - 15 * 60000 });
   await H.runNow();
-  st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" ? s : null; }, "stop on an unknown prompt", 150000);
-  assert(st.stopReason === "unknown_prompt" && st.alert && st.alert.reason === "unknown_prompt", "AUTO-STOP on an unknown X prompt after Reply (" + st.stopReason + ")");
+  // "Stop when errors repeat" off (the default): the prompt is left alone, that post is skipped and ScoreX goes on.
+  const skippedP = await H.waitFor(async () => (await H.history()).find((x) => two.some((y) => y.id === x.id) && x.status === "skipped" && /prompt ScoreX does not know/.test(x.reason || "")), "unknown prompt -> post skipped", 150000);
+  const stP = await H.store("sx.state");
+  assert(stP.status === "running" && !stP.alert && /Before you reply/.test(skippedP.reason), "an unknown X prompt after Reply does not stop ScoreX by default: that post is skipped with what X showed (" + skippedP.reason.slice(0, 110) + ")");
+  assert(stP.promptStreak === 1 && stP.nextCommentAt > Date.now() + 8 * 60000, "replies wait about 10 minutes after an unknown prompt, then ScoreX goes on");
+  assert(!M.log.some((x) => x.kind === "promptClick") && M.replies.length === repliesBefore, "ScoreX never clicked the prompt and nothing was posted");
+  // With "Stop when errors repeat" on, the same prompt stops ScoreX, as before.
+  await H.settings({ safety: { stopOnErrors: true } });
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: Date.now() - 15 * 60000 });
+  await H.runNow();
+  st = await H.waitFor(async () => { const s = await H.store("sx.state"); return s.status === "stopped" ? s : null; }, "stop on an unknown prompt (switch on)", 150000);
+  assert(st.stopReason === "unknown_prompt" && st.alert && st.alert.reason === "unknown_prompt", "with the switch on: AUTO-STOP on an unknown X prompt after Reply (" + st.stopReason + ")");
   assert(st.stopDetail.includes("Before you reply") && st.stopDetail.length <= 300, "the stop shows the prompt's text: " + st.stopDetail);
   assert(!M.log.some((x) => x.kind === "promptClick"), "ScoreX never clicked the prompt");
   assert(M.replies.length === repliesBefore, "nothing was posted");
-  let h4 = await H.history();
+  const h4 = await H.history();
   const tried = h4.filter((x) => two.some((y) => y.id === x.id) && x.status === "failed");
   assert(tried.length === 1 && !tried[0].maybePosted, "the attempted item failed and does not count as maybe posted (the text was still in the box)");
   assert((await H.msg("runNow")).ok === false, "the engine stays stopped until you resume");
   await sleep(6000);
-  h4 = await H.history();
-  const left = h4.find((x) => two.some((y) => y.id === x.id) && x.id !== tried[0].id);
-  assert(left.status === "approved" && M.replies.length === repliesBefore && M.log.filter((x) => x.kind === "reply").length === attemptsBefore + 1, "nothing further was posted or submitted after the stop");
-  await H.msg("reviewAction", { id: left.id, action: "skip" });
+  assert(M.replies.length === repliesBefore && M.log.filter((x) => x.kind === "reply").length === attemptsBefore + 2, "nothing further was posted or submitted after the stop");
+  await H.settings({ safety: { stopOnErrors: false } });
   M.replyMode = "ok";
   assert((await H.msg("resume")).ok, "resume after reviewing the prompt");
 

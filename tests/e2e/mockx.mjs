@@ -21,7 +21,7 @@ export function createMock(opts = {}) {
     me: opts.me || "0x_nation",
     loggedIn: true,
     pageMode: "ok", // ok | captcha | locked | error | logged_out | wrong_account
-    replyMode: "ok", // ok | warning | rate_limit | duplicate | silent | hang | prompt (an unknown dialog after Reply, nothing posted)
+    replyMode: "ok", // ok | warning | rate_limit | duplicate | silent | hang | prompt (an unknown dialog after Reply, nothing posted) | restricted (X's "Who can reply?" sheet after Reply, nothing posted)
     promptText: "Before you reply: review how replies work on X before you continue.",
     hideReplyBox: false,
     users: {},
@@ -200,6 +200,9 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
     fetch('/__mock/reply',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({inReplyTo:id,text:text})}).then(function(r){return r.json();}).then(function(j){
       if(j.toast){ toast('<span>'+j.toast+'</span>'); return; }
       if(j.prompt){ prompt(j.prompt); return; }
+      if(j.restricted){ var d=document.createElement('div'); d.setAttribute('role','dialog'); d.setAttribute('aria-modal','true'); d.setAttribute('data-testid','sheetDialog'); d.style.cssText='position:fixed;top:20%;left:20%;width:60%;background:#fff;border:1px solid #333;padding:16px';
+        d.innerHTML='<span>Who can reply?</span> <span>Only some accounts can reply.</span> '; var g=document.createElement('button'); g.textContent='Got It'; g.addEventListener('click', function(){ fetch('/__mock/promptClick',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({button:'Got It'})}); }); d.appendChild(g);
+        document.getElementById('layers').appendChild(d); return; }
       if(j.silent){ box.innerHTML=''; sync(); return; }
       box.innerHTML=''; sync();
       toast('<span>Your post was sent.</span> <a href="/'+j.author+'/status/'+j.id+'">View</a>');
@@ -390,6 +393,7 @@ ${timeline(M.posts.filter((x) => x.author === h))}`, { title: user.name }) };
           if (M.replyMode === "duplicate") return send(200, { toast: "Whoops! You already said that." });
           if (M.replyMode === "drop") return send(200, { silent: true });
           if (M.replyMode === "prompt") return send(200, { prompt: M.promptText });
+          if (M.replyMode === "restricted") return send(200, { restricted: true });
           const id = String(M.nextId++);
           M.replies.push({ id, inReplyTo: j.inReplyTo, text: j.text, at: Date.now() });
           if (M.replyMode === "silent") return send(200, { silent: true });

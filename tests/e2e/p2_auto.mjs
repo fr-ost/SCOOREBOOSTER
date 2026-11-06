@@ -180,6 +180,25 @@ try {
   const sf = await H.waitFor(async () => (await H.history()).find((x) => x.id === qf.id && x.status === "skipped"), "restricted skipped", 120000);
   assert(/restricted/.test(sf.reason) && (await H.store("sx.state")).status === "running", "restricted replies are skipped without stopping");
 
+  // ---- X's "Who can reply?" sheet after the Reply click: skipped, never clicked, ScoreX keeps running ----
+  M.hideReplyBox = false;
+  M.replyMode = "restricted";
+  M.addUser("kim", { followers: 21000 });
+  await H.msg("targetsUpsert", { rows: ["kim"], defaults: { tier: 2 } });
+  await H.markNotFollowing(["kim"]);
+  const pk = M.addPost("kim", "Only people I follow can reply here, but the post itself is worth reading today.", 2);
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: 0, consecutiveFailures: 0 });
+  await H.runNow();
+  const qk = await H.waitFor(async () => (await H.history()).find((x) => x.postId === pk.id && x.status === "queued"), "queued pk", 90000);
+  await H.patchHistory(qk.id, { scheduledFor: 0 });
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: 0 });
+  await H.runNow();
+  const sk = await H.waitFor(async () => (await H.history()).find((x) => x.id === qk.id && x.status === "skipped"), "restricted sheet -> skipped", 150000);
+  const stK = await H.store("sx.state");
+  assert(/restricted/i.test(sk.reason) && stK.status === "running" && !stK.alert && !M.log.some((x) => x.kind === "promptClick") && !M.replies.some((r) => r.inReplyTo === pk.id),
+    "\"Who can reply?\" after Reply: the post is skipped (" + sk.reason + "), \"Got It\" is never clicked, ScoreX keeps running");
+  M.replyMode = "ok";
+
   // ---- a target's reply inside someone else's thread is not commented (only original posts) ----
   M.hideReplyBox = false;
   M.addUser("gina", { followers: 15000 });

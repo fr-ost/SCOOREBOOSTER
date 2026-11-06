@@ -234,17 +234,28 @@ text that does not match.
 **Auto-stop**: ScoreX stops immediately, shows a desktop notification and a red **!** badge, and does **not**
 retry when it sees: a captcha / verification page, X's "this request looks like it might be automated" or any
 unusual-activity warning, a rate-limit message (including "unable to follow more people"), a locked or restricted
-account, the login page, a different logged-in account, a dialog or notice ScoreX does not know (for example a new
-"label AI content" question: it is never clicked, and its text is shown with the stop), a rejected OpenAI key,
-exhausted OpenAI quota, the monthly budget, or a reach collapse when the reach monitor is set to *Stop*. **Resume is
-always manual**: press **Review stop...**, check your account on x.com, tick the box and resume.
+account, the login page, a different logged-in account, a rejected OpenAI key, exhausted OpenAI quota, the monthly
+budget, or a reach collapse when the reach monitor is set to *Stop*. **Resume is always manual**: press **Review
+stop...**, check your account on x.com, tick the box and resume.
+
+**Restricted replies**: a post whose replies are limited ("Who can reply? Only some accounts can reply", "People
+@name mentioned can reply"...) is **skipped** - wherever X says so: under the post, or as the sheet X shows when you
+try to reply. Nothing on it is clicked, it is not an error and it never stops ScoreX.
+
+**A dialog or notice ScoreX does not know** (for example a new "label AI content" question) is never clicked. By
+default it does **not** stop ScoreX either: that post is skipped (or kept as "may have been sent" if it came after the
+Reply click), the activity log shows what X said, you get a desktop notification (at most once an hour), and replies
+wait 10, 20, 40, then 60 minutes - longer each time in a row - in a fresh X tab before ScoreX goes on. With **Stop and
+notify me when errors repeat** on, it stops as before.
 
 **Errors** (Settings > Safety > Errors): ScoreX's own failures - posts that do not go through several times in a
 row, watch pages that keep failing or show no posts (X changed its markup), "Something went wrong" pages three times
 in a row, the X tab not opening, an account name it cannot read, internal errors - do **not** stop it by default.
 They go to the activity log and ScoreX moves on to the next task by itself (no stop, no pop-up), waiting a little
 longer after each failure in a row. Turn on **Stop and notify me when errors repeat** to get the stops back (after
-the number of failed posts you set). X's own warnings in the paragraph above always stop, whatever this is set to.
+the number of failed posts you set; a prompt ScoreX does not know then stops it too). X's explicit warnings in the
+Auto-stop paragraph above always stop, whatever this is set to: carrying on after those cannot work or is how
+accounts get restricted.
 
 **Account check before every action**: right before each like, reply and unfollow click the page checks again
 that it is logged in as your account. If the account cannot be read, nothing is clicked or typed and the reply
