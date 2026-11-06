@@ -1,0 +1,30 @@
+ScoreX is invite only: it needs a license key to get past the activation screen.
+
+TEST CREDENTIALS
+License key: SCX-XXXX-XXXX-XXXX-XXXX   (single-use, issued for this review)
+OpenAI API key (optional, limited to $5): sk-...
+
+HOW TO TEST (about 5 minutes)
+1. Install, then click the ScoreX icon > Open dashboard. Enter the license key and press Activate.
+2. Settings > General: enter any X handle you are logged in with (or leave it empty to explore without posting).
+3. Settings > Models & costs: paste the OpenAI key above (optional; without it nothing is generated).
+4. Targets > Add targets: paste a few public accounts, e.g.
+   naval
+   balajis
+   vitalikbuterin
+   ScoreX first opens each profile in its own X tab to read follower counts and whether the account follows you.
+5. Today > Start. Review mode is the default: when a target posts, ScoreX drafts a reply and it appears under
+   Review. Nothing is posted until you press Approve. You can Edit, Skip or Approve each draft.
+6. History shows every draft and its result; History > Follow-backs lists accounts that followed back.
+7. Settings > Safety shows the hard daily limits, pacing and skip rules (ads, political posts, restricted replies).
+
+WHAT TO EXPECT
+- All actions happen in the user's own logged-in x.com tab; ScoreX never asks for an X password.
+- Full auto (optional, Today > mode switch) posts approved-style replies within strict daily caps and stops on any
+  X warning (captcha, rate limit, "unusual activity").
+- Data stays in the browser. Network requests go only to x.com, api.openai.com (with the user's own key), the
+  license server (scorex-license.vercel.app) and score sites the user turns on (off by default).
+- The optional "scripting" permission is requested only if the user enables a score site's browser-tab mode.
+- No remote code: all JavaScript ships in the package.
+
+Contact: contact@shahriarahmed.net
