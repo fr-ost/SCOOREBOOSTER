@@ -91,7 +91,7 @@ async function seed() {
   const T = (handle, o) => ({
     handle, name: o.name, group: o.followsYou ? "A" : "B", tier: o.tier, enabled: o.enabled !== false, tone: o.tone || "", preset: o.preset || "", notes: "", source: "manual",
     addedAt: now - 20 * DAY,
-    profile: { handle, name: o.name, bio: o.bio, followers: o.followers, following: o.following || 800, verified: !!o.verified, updatedAt: now - DAY },
+    profile: { handle, name: o.name, bio: o.bio, followers: o.followers, following: o.following || Math.max(800, Math.round((o.followers || 0) * 0.3)), verified: !!o.verified, updatedAt: now - DAY },
     recentPosts: [], lastPostAt: now - 2 * HR, lastCheckedAt: now - HR,
     rel: { followsYou: o.followsYou, youFollow: true, checkedAt: o.followsYou == null ? null : now - DAY, followedBackAt: o.followedBackAt || null, ...(o.gone ? { gone: true } : {}) },
     score: { own: o.own, sorsa: o.sorsa == null ? null : o.sorsa, combined: o.own, flags: [], bot: false, updatedAt: now - DAY },
@@ -380,6 +380,13 @@ try {
     check(await headIn("#targetsTable", "follow") && await headIn("#targetsTable", "propensity"), "800px Targets: Follow status and Follows back? are fully in view");
     const edges = await page.evaluate(() => { const cs = getComputedStyle(document.querySelector("#targetsTable .table-wrap")); return [cs.borderLeftColor, cs.borderRightColor]; });
     check(edges[0] !== edges[1], "800px Targets: an ink edge marks the side with more columns (" + edges.join(" / ") + ")");
+    // An account following very few people for its size gets the "Follows few" tag, without widening the table.
+    const setFollowing = (hd, n) => page.evaluate(async ([hd, n]) => { const t = (await chrome.storage.local.get("sx.targets"))["sx.targets"]; const before = t[hd].profile.following; t[hd].profile.following = n; await chrome.storage.local.set({ "sx.targets": t }); return before; }, [hd, n]);
+    const navalFollowing = await setFollowing("naval", 2500);
+    check(await waitFor(page, () => /Follows few/i.test(document.querySelector('#targetsTable tr[data-key="naval"]')?.innerText || ""), null, 5000)
+      && /Follows only 0\.\d% of its followers/.test(await page.locator('#targetsTable tr[data-key="naval"] .tag', { hasText: /follows few/i }).getAttribute("title")), "an account following under 5% of its followers shows a \"Follows few\" tag with the numbers");
+    check(await headIn("#targetsTable", "follow") && await headIn("#targetsTable", "propensity"), "800px: the tag does not push Follow status or Follows back? out of view");
+    await setFollowing("naval", navalFollowing);
     check(await page.evaluate(() => { const tr = document.querySelector("#targetsTable tr.is-disabled"); return !!tr && [...tr.cells].every((td) => getComputedStyle(td).opacity === "1") && [...tr.querySelectorAll(".tag")].some((x) => x.textContent === "Off"); }), "a turned-off target row is not dimmed below AA and is tagged Off");
     check(await page.evaluate(() => [...document.querySelectorAll("#targetStatus .ct")].every((el) => getComputedStyle(el).opacity === "1")), "filter counts are drawn at full text colour");
     await page.setViewportSize({ width: 560, height: 900 });

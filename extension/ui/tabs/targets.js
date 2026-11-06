@@ -209,9 +209,11 @@ export default {
         h("div", { class: "cell-handle" }, h("span", { class: "handle" }, "@" + t.handle),
           t.profile && t.profile.verified ? h("span", { class: "verified", title: "Verified" }, icon("check")) : null,
           isOn(t) ? null : tag("Off", "", "Turned off: ScoreX does not reply to this account"),
-          isOn(t) && tooSelective(t, ctx.settings) ? tag("Follows few", "amber", selectiveReason(t) + ": ScoreX does not comment on it or follow it (Edit rules > Who goes first)") : null,
           h("a", { class: "tg-x", href: xUrl(t.handle), target: "_blank", rel: "noopener noreferrer", tabindex: "-1", title: `Open @${t.handle} on X`, "aria-label": `Open @${t.handle} on X` }, icon("external"))),
-        h("div", { class: "cell-sub", title: (t.profile && t.profile.bio) || null }, name));
+        h("div", { class: "cell-sub", title: (t.profile && t.profile.bio) || null },
+          // (on the second line, which truncates, so the tag never widens the column)
+          isOn(t) && tooSelective(t, ctx.settings) ? [tag("Follows few", "amber", selectiveReason(t) + ": ScoreX does not comment on it or follow it (Edit rules > Who goes first)"), " "] : null,
+          name));
     }
     function colDefs() {
       const s = ctx.settings, b = board(), now = Date.now();
