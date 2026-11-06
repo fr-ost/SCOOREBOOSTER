@@ -106,7 +106,7 @@ user chooses, from the user's own logged-in X session, and tracking the results.
 Certify: data is not sold, not used for unrelated purposes, not used for creditworthiness or lending.
 
 **Privacy policy URL:** `https://scorex-license.vercel.app/privacy.html` (the page is `license-server/public/privacy.html`,
-published with the license server on its next deploy). Replace the placeholder contact email in it first.
+published with the license server on its next deploy).
 
 ---
 
