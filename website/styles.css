@@ -43,7 +43,8 @@ a { color: var(--accent-text); }
 .dot { width: 8px; height: 8px; background: var(--lime); border: 1px solid var(--lime-edge); border-radius: 2px; }
 h1 { font-size: clamp(2.2rem, 5.4vw, 3.9rem); line-height: 1.06; letter-spacing: -0.03em; margin: 0 auto 20px; max-width: 16ch; text-wrap: balance; }
 .lead { font-size: clamp(1.05rem, 1.6vw, 1.25rem); color: var(--text-2); max-width: 62ch; margin: 0 auto 28px; }
-.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 52px; }
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-bottom: 14px; }
+.hero-note { margin: 0 auto 44px; }
 .shot { margin: 0; border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden; background: var(--card); box-shadow: 0 24px 60px -30px rgba(23, 21, 15, .35); }
 
 /* facts band */
@@ -91,6 +92,7 @@ p { margin: 0 0 14px; }
 .invite h2 { margin: 0 auto 12px; }
 .invite p { color: color-mix(in srgb, var(--invert-text) 72%, transparent); max-width: 52ch; margin: 0 auto 26px; }
 .invite .small { margin-top: 22px; margin-bottom: 0; }
+.invite a:not(.btn) { color: var(--lime); }
 
 /* footer */
 .foot { padding: 36px 0 28px; border-top: 1px solid var(--border); }
