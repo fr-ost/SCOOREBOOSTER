@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ScoreX: Boost your Influencer Score on Twitter",
   "short_name": "ScoreX",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Grow your influencer score on X (Twitter): AI replies to the accounts that matter, written in your voice, with you in control.",
   "minimum_chrome_version": "116",
   "permissions": [
