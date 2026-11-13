@@ -3,7 +3,7 @@
 // exactly where it left off. A job lease in state.job prevents overlapping work.
 
 import { STATUS, MODE, HS, STOP, STOP_LABEL, ALARM, K, HARD, OPEN_STATUSES } from "./constants.js";
-import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, getBlacklist, log, load, save } from "./store.js";
+import { getSettings, getSecrets, getState, patchState, getTargets, updateTargets, getBlacklist, log, load, save, update } from "./store.js";
 import { now, DAY, HOUR, MIN, dayKey, humanDelay, randInt, uid, truncate, fmtDuration, normalizeHandle, sleep } from "./util.js";
 import * as H from "./history.js";
 import { recordSpend, getSpend, budgetStatus, wouldExceed, estimate, usageStats, modelById } from "./costs.js";
@@ -19,7 +19,7 @@ import { notify, setBadge } from "./notify.js";
 import { chooseArm, learningStep, recordOutcomeForTarget } from "./learning.js";
 import { cleanupStep } from "./cleanup.js";
 import { followStep, badgeTrusted, followRoom, followRoomAt, wantsFollow, recordFollow, followFirstStep, pruneFollowers } from "./follow.js";
-import { conversationsStep } from "./conversations.js";
+import { conversationsStep, getConversations, pendingAnswers, markAuto, ANSWER_WINDOW_MS } from "./conversations.js";
 import { catchUpCandidates, catchUpMaxAgeMin } from "./catchup.js";
 import { cancelDiscovery } from "./discovery.js";
 
@@ -228,17 +228,18 @@ export async function computeCounts(settings, ts = now(), opts = {}) {
     if (countsAsPosted(r)) {
       const pt = postedTime(r);
       if (ts - pt < DAY) {
-        c.postedToday++; c.postedGroup[r.group] = (c.postedGroup[r.group] || 0) + 1; tgt(r.target).day++;
+        // (an answer in a conversation counts toward the daily total, not toward the account's own comment limits)
+        c.postedToday++; c.postedGroup[r.group] = (c.postedGroup[r.group] || 0) + 1; if (!r.conversation) tgt(r.target).day++;
         if (!c.firstPostedAt || pt < c.firstPostedAt) c.firstPostedAt = pt; // the time postedToday covers (risk pace)
       }
       if (dayKey(pt, tz) === today) c.postedCalendarDay++;
-      if (ts - pt < 7 * DAY) tgt(r.target).week++;
+      if (ts - pt < 7 * DAY && !r.conversation) tgt(r.target).week++;
     }
   }
   for (const r of open) {
     c.openQueue++;
     c.openGroup[r.group] = (c.openGroup[r.group] || 0) + 1;
-    tgt(r.target).open++;
+    if (!r.conversation) tgt(r.target).open++;
     if (r.status === HS.PENDING_REVIEW) c.pendingReview++;
     if (r.status === HS.QUEUED || r.status === HS.APPROVED) c.queued++;
   }
@@ -464,14 +465,15 @@ async function expireQueue(settings, ts = now()) {
     if (r.status !== HS.POSTING) {
       const t = Object.hasOwn(targets, r.target) ? targets[r.target] : null;
       if (!t) why = "Removed from your targets";
-      else if ([FS.FOLLOWS, FS.FOLLOWED_BACK].includes(followStatus(t))) why = "Follows you now - no more comments to this account";
+      // (an answer to their reply in a conversation is still sent after they follow you)
+      else if (!r.conversation && [FS.FOLLOWS, FS.FOLLOWED_BACK].includes(followStatus(t))) why = "Follows you now - no more comments to this account";
     }
     if (r.status === HS.PENDING_REVIEW && ts - r.createdAt > settings.review.pendingMaxAgeMin * MIN) why = "Expired while waiting for review";
     if (r.status === HS.APPROVED && ts - (r.approvedAt || r.createdAt) > settings.review.approvedMaxAgeMin * MIN) why = "Approved but expired before a posting slot";
-    const maxQueuedAge = r.catchUp ? catchUpMaxAgeMin(settings) : settings.watch.maxPostAgeMin + 25;
+    const maxQueuedAge = r.conversation ? ANSWER_WINDOW_MS / MIN : r.catchUp ? catchUpMaxAgeMin(settings) : settings.watch.maxPostAgeMin + 25;
     // A post without a known time is aged from when its comment was written, so it never waits for days either.
     const postTime = r.postCreatedAt || r.createdAt;
-    if (r.status === HS.QUEUED && postTime && ts - postTime > maxQueuedAge * MIN) why = r.catchUp ? "Too late to post (older than the catch-up window)" : "Too late to post (post is no longer fresh)";
+    if (r.status === HS.QUEUED && postTime && ts - postTime > maxQueuedAge * MIN) why = r.conversation ? "Too late to answer (their reply is more than 48 hours old)" : r.catchUp ? "Too late to post (older than the catch-up window)" : "Too late to post (post is no longer fresh)";
     if (r.status === HS.POSTING && ts - (r.attemptAt || r.updatedAt) > 10 * MIN) why = "Interrupted while posting - check the post manually";
     if (why) await H.patch(r.id, (cur) => (cur.status === r.status ? { status: r.status === HS.POSTING ? HS.FAILED : HS.SKIPPED, reason: why, maybePosted: r.status === HS.POSTING } : null));
   }
@@ -568,12 +570,13 @@ async function tickBody(settings, secrets, reason = "timer") {
   let waitFor = null;
   for (const item of due) {
     const target = Object.hasOwn(targetsNow, item.target) ? targetsNow[item.target] : null;
-    if (!target || !isActive(target, settings)) {
+    // An answer in a conversation goes to any target that is still on (also one that follows you now).
+    if (item.conversation ? !target || target.enabled === false : !target || !isActive(target, settings)) {
       const why = !target ? "Target removed" : target.enabled === false ? "Target turned off" : followStatus(target) === FS.CHECKING ? "Follow status unknown - not posted" : tooSelective(target, settings) ? selectiveReason(target) : "Follows you now - no more comments to this account";
       await H.patch(item.id, (r) => (r.status === item.status ? { status: HS.SKIPPED, reason: why } : null));
       continue;
     }
-    const gate = postGate(settings, state, { postedToday: counts.postedToday, accountsToday: counts.accountsToday, target: counts.targets[item.target] }, target, ts);
+    const gate = postGate(settings, state, { postedToday: counts.postedToday, accountsToday: counts.accountsToday, target: counts.targets[item.target] }, item.conversation ? null : target, ts);
     if (gate.ok) {
       // A post needs up to 2 page loads (the post, and a look at the thread when X's confirmation is unclear).
       const room = await pageRoom(settings, 2);
@@ -697,6 +700,12 @@ async function tickBody(settings, secrets, reason = "timer") {
         if (await stopIfAccountUnknown(settings)) return null;
       }
     }
+  }
+
+  // 2c) Conversations: answer one reply to your comments (lib/conversations.js; no X page is loaded here).
+  if (await stillRunning()) {
+    const ar = await answerConversations({ settings, secrets, mode, me });
+    if (ar === "stopped" || !(await stillRunning())) return null;
   }
 
   // 3) Background work when idle: queued profile refreshes, follow checks, learning checks, optional cleanup
@@ -835,6 +844,8 @@ function postFields(p, t) {
   return {
     target: p.author, targetName: p.authorName || t.name || "", group: t.group, tier: t.tier, catchUp: !!p.catchUp,
     postId: p.id, postUrl: p.url, postText: truncate(p.text, 1200), postLang: p.lang || "", postCreatedAt: p.createdAt || null,
+    // An answer in a conversation: the post is the author's reply to your earlier comment (convParentId, in convContext).
+    ...(p.conversation ? { conversation: true, convParentId: p.conversation.parentId || null, convDepth: Number(p.conversation.depth) || 1, convContext: { original: truncate(String(p.conversation.original || ""), 800), mine: truncate(String(p.conversation.mine || ""), 300) } } : {}),
     postMetrics: p.metrics || null, postHasMedia: !!p.hasMedia, postIsQuote: !!p.isQuote,
     // Context the reply was written from (kept for Regenerate): the quoted post and the post's images.
     postQuote: p.quoted && p.quoted.text ? { author: truncate(String(p.quoted.author || ""), 40), text: truncate(p.quoted.text, 600) } : null,
@@ -866,7 +877,8 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
   const preset0 = effectivePreset(target, settings);
 
   let t = target;
-  if (tabId != null) {
+  const conversation = post.conversation || null;
+  if (tabId != null && !conversation) {
     const c = await ensureContext(target, tabId, settings, post);
     if (c && c.stop) { if (await errorStop(settings, c.stop, c.detail)) return "stopped"; return "skipped"; }
     if ((c && c.aborted) || !(await stillRunning())) return "stopped"; // Pause/Stop during the profile visit
@@ -874,7 +886,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
     if (!isActive(t, settings)) { log("info", `Not commenting on @${t.handle}: ${tooSelective(t, settings) ? selectiveReason(t) : "follows you now"}`); return "skipped"; }
   }
   let arm = {};
-  if (settings.learning.enabled && settings.learning.abTesting) {
+  if (settings.learning.enabled && settings.learning.abTesting && !conversation) {
     const learnMeta = await load(K.learning, {});
     const since = Math.max(learnMeta.abResetAt || 0, now() - 120 * DAY);
     arm = chooseArm(t, settings, await H.since(since).catch(() => []), learnMeta.abResetAt || 0);
@@ -888,7 +900,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
   const g = await generate({
     settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey, previous,
     bestComments: await bestComments(), myHandle: me, compatFor: await compatLoader(), onCall: await onCallFactory(settings), feedback,
-    ownerEdits: await ownerEdits(settings),
+    ownerEdits: await ownerEdits(settings), conversation,
   });
   const base = H.newRecord({
     mode, ...postFields(post, t), tone: tone.key, toneText: truncate(tone.text, 300), preset: presetKey,
@@ -901,7 +913,7 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
     await stop(g.stop, (g.error && g.error.message) || "");
     return "stopped";
   }
-  if (g.skipped) { await H.put({ ...base, status: HS.SKIPPED, reason: g.skipped.text }); log("info", `Skipped @${post.author}: ${g.skipped.text}`); return "skipped"; }
+  if (g.skipped) { await H.put({ ...base, status: HS.SKIPPED, reason: g.skipped.text }); log("info", `Skipped @${post.author}: ${g.skipped.text}`); return conversation ? { skipped: g.skipped.text } : "skipped"; }
   if (!g.ok) { await H.put({ ...base, status: HS.FAILED, reason: "OpenAI: " + ((g.error && g.error.message) || "error") }); log("warn", `Generation failed for @${post.author}`, g.error && g.error.message); return "failed"; }
 
   const st = await getState();
@@ -910,14 +922,60 @@ export async function generateFor(post, target, { settings, secrets, mode, tabId
   if (mode === MODE.AUTO && liveMode === MODE.AUTO && post.createdAt && !(g.quality && g.quality.needsReview)) {
     const when = Math.max(now() + humanDelay(45 * 1000, 150 * 1000), st.nextCommentAt || 0, st.breakUntil || 0);
     await H.put({ ...base, comment: g.comment, originalComment: g.comment, status: HS.QUEUED, scheduledFor: when });
-    log("info", `Queued a comment for @${post.author} (posts in ~${fmtDuration(when - now())})`);
+    log("info", `Queued ${conversation ? "an answer to" : "a comment for"} @${post.author}${conversation ? "'s reply" : ""} (posts in ~${fmtDuration(when - now())})`);
   } else {
     await H.put({ ...base, comment: g.comment, originalComment: g.comment, status: HS.PENDING_REVIEW });
-    log("info", `New comment for @${post.author} is waiting for your review`);
+    log("info", `${conversation ? "An answer to" : "New comment for"} @${post.author}${conversation ? "'s reply" : ""} is waiting for your review`);
     if (settings.review.notifyNew) await notify("sx-review", "ScoreX: comment ready for review", `@${post.author}: ${truncate(post.text, 90)}\n\nReply: ${truncate(g.comment, 120)}`);
   }
   await refreshBadge();
   return "ok";
+}
+
+// ---------- conversations: answer replies to your comments ----------
+
+// One reply to your comments (sx.conversations, found on your mentions page) gets an answer per tick, with
+// settings.learning.conversations.autoReply on: the answer is written from the thread (the original post, your reply,
+// their answer) and goes the normal way - queued and posted in Full auto, to your review queue in Review mode - as a
+// history record with conversation: true whose post is their reply. The item is then done ("queued"), or done with the
+// reason when nothing is written ("skipped": hostile or nothing to answer, the conversation is long enough, the target
+// is gone). Daily limits and the monthly budget hold it back (it waits); the account's own comment limits do not.
+export async function answerConversations({ settings, secrets, mode, me }) {
+  const cv = settings.learning && settings.learning.conversations;
+  if (!cv || !cv.enabled || !cv.autoReply || !secrets.openaiKey) return null;
+  const item = pendingAnswers(await getConversations(), now())[0];
+  if (!item) return null;
+  const parent = await H.get(item.id);
+  const targets = await getTargets();
+  const t = Object.hasOwn(targets, item.target) ? targets[item.target] : null;
+  const depth = ((parent && Number(parent.convDepth)) || 0) + 1;
+  const skip = async (why) => { await markAuto(item.id, "skipped", why); log("info", `Not answering @${item.target}'s reply: ${why}`); return "skipped"; };
+  if (!parent || !t || t.enabled === false) return skip(!parent ? "your comment is no longer in the history" : "the account is no longer one of your targets");
+  if ((await getBlacklist())[item.target]) return skip("the account is blacklisted");
+  // A long back-and-forth is left to you (the item stays under Needs you with this note).
+  if (depth > cv.maxTurns) { const why = `ScoreX already answered ${cv.maxTurns} time${cv.maxTurns === 1 ? "" : "s"} in this conversation - this one is yours`; await markAuto(item.id, "skipped", why, false); log("info", `Not answering @${item.target}'s reply: ${why}`); return "skipped"; }
+  if (!String(item.text || "").trim()) return skip("their reply has no text");
+  if ((await H.byPostId(item.authorReplyId)).length) { await markAuto(item.id, "queued", "already answered"); return "skipped"; }
+  const state = await getState();
+  const counts = await computeCounts(settings, now());
+  if (!generateGate(settings, state, counts, null, now()).ok) return null; // daily limit: it waits (48 h at most)
+  const post = {
+    id: item.authorReplyId, url: item.authorReplyUrl, author: item.target, authorName: t.name || "", text: item.text, lang: item.lang || "",
+    createdAt: item.at, metrics: null, hasMedia: false, isQuote: false, quoted: null, images: [],
+    conversation: { parentId: parent.id, depth, original: parent.conversation ? (parent.convContext && parent.convContext.original) || "" : parent.postText || "", mine: parent.comment || "" },
+  };
+  const r = await generateFor(post, t, { settings, secrets, mode, tabId: null, me });
+  if (r === "stopped") return "stopped";
+  if (r === "ok") { await markAuto(item.id, "queued", mode === MODE.AUTO ? "answer queued" : "answer waiting for your review"); return "ok"; }
+  if (r && r.skipped) { await markAuto(item.id, "skipped", r.skipped); return "skipped"; }
+  // Generation failed (OpenAI error): tried again on a later check, at most 3 times.
+  const tries = (item.autoTries || 0) + 1;
+  if (tries >= 3) return skip("the answer could not be written (OpenAI error)");
+  await updateConversationTries(item.id, tries);
+  return "failed";
+}
+async function updateConversationTries(id, autoTries) {
+  await update(K.conversations, { items: [], checkedAt: null }, (c) => ({ ...c, items: (c.items || []).map((x) => (x && x.id === id ? { ...x, autoTries } : x)) }));
 }
 
 // ---------- posting ----------
@@ -1194,6 +1252,7 @@ async function reviewActionCore({ id, action, text }) {
     const previous = [rec.comment, ...(await recentComments(rec.id))].filter(Boolean);
     const g = await generate({
       settings, apiKey: secrets.openaiKey, target: t, post, tone, presetKey: rec.preset || effectivePreset(t, settings), previous,
+      conversation: rec.conversation ? rec.convContext || {} : null,
       bestComments: await bestComments(), myHandle: settings.account.handle, compatFor: await compatLoader(), onCall: await onCallFactory(settings),
       feedback: "The owner asked for a different reply. Use a different angle and opening than: " + truncate(rec.comment, 200),
       ownerEdits: await ownerEdits(settings),

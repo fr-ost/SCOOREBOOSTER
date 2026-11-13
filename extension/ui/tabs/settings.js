@@ -380,7 +380,10 @@ export default {
       sub("Replies to you",
         h("div", { class: "form-row" },
           f({ path: "learning.conversations.enabled", type: "toggle", label: "Check my mentions for replies from accounts I comment on", id: "convEnabled", hint: "They show under Needs you on Today and in the popup." }),
-          f({ path: "learning.conversations.everyMin", type: "number", label: "Check every (min)", min: 15, max: 240, id: "convEvery" }))));
+          f({ path: "learning.conversations.everyMin", type: "number", label: "Check every (min)", min: 15, max: 240, id: "convEvery" })),
+        f({ path: "learning.conversations.autoReply", type: "toggle", label: "Answer those replies automatically", id: "convAutoReply", hint: "ScoreX writes an answer to each reply from the thread (the post, your comment, their reply). Full auto posts it on its own; Review mode puts it in your review queue. Insults and replies that need no answer are left alone. Answers count toward your daily comment limit." }),
+        h("div", { class: "form-row" },
+          f({ path: "learning.conversations.maxTurns", type: "number", label: "Answers per conversation", min: 1, max: 5, id: "convMaxTurns", hint: "After this many, the conversation is left to you (1-5)." }))));
 
     // ------------------------------------------------ cleanup
     const cleanupToggle = toggleEl("Unfollow accounts that don't follow back", ctx.settings.cleanup.enabled, async (v, input) => {

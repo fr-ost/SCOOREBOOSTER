@@ -177,7 +177,8 @@ export async function postReply(rec, ctx) {
   // item is not recorded as posted (it was not).
   if (st.myReplies && st.myReplies.length) return { ok: false, skip: true, reason: "already_replied_by_you" };
   if (st.canReply === false) return { ok: false, skip: true, reason: RESTRICTED_REASON };
-  if (st.focalIndex > 0) return { ok: false, skip: true, reason: "reply_in_thread_not_original_post" };
+  // (rec.conversation: the post IS a reply in a thread - the author's answer to your comment - and that is intended)
+  if (st.focalIndex > 0 && !rec.conversation) return { ok: false, skip: true, reason: "reply_in_thread_not_original_post" };
   // Nothing is liked, typed or submitted unless this page is logged in as your account.
   const av = accountVerdict(st.page, want);
   if (av && av.stop) return { ok: false, stop: av.stop, detail: av.detail };

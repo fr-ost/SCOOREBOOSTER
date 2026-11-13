@@ -209,6 +209,8 @@ export default {
           fd ? h("span", { class: "rc-day", title: `Day ${fd.day} of ${fd.of} before ScoreX gives up on @${rec.target}` }, `day ${fd.day}/${fd.of}`, dayMeter(t, s)) : null,
           h("span", null, `${plural(comments, "comment")} so far`),
           ps != null ? h("span", { class: "rc-score", title: `${providerName(pid)} score of @${rec.target}` }, providerKey(pid), `${providerName(pid)} ${fmtNum(ps)}`) : null) : null,
+        // An answer in a conversation: the "post" is their reply to your earlier comment.
+        rec.conversation ? h("div", { class: "rc-conv small muted" }, badge("conversation", "green", "Their reply to your comment: ScoreX wrote an answer to it"), " You wrote: ", h("span", { class: "rc-conv-mine" }, truncate(String((rec.convContext && rec.convContext.mine) || ""), 140))) : null,
         h("div", { class: "post-text" }, rec.postText || h("span", { class: "muted" }, "(no text)")),
         h("div", { class: "rc-meta" },
           rec.postUrl ? link(rec.postUrl, h("span", null, "Open post ", icon("external")), { cls: "post-link" }) : null,

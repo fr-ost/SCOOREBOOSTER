@@ -443,8 +443,16 @@ the **combined** rank blends both (50/50 by default).
   (20%). The Tone screen shows results and suggests the best tone and model once each combination has
   enough checked replies. A tone or preset set on a single target is never overridden by A/B tests.
 * **Conversation alerts** (on): when idle, at most every 40 minutes, ScoreX reads your mentions and spots
-  authors who answered one of your replies from the last 72 hours. They show up under **Today > Needs you**
-  (Open on X, Mark done) with a notification. ScoreX never answers for you.
+  authors who answered one of your replies from the last 72 hours, with a notification.
+* **Automatic answers to those replies** (on; Settings > General > Replies to you): ScoreX writes an answer to each
+  reply from the thread - the original post, your comment and their reply - short and on what they said. In **Full
+  auto** it is queued and posted under their reply on its own; in **Review mode** it waits in your review queue. It
+  shows in History with a **conversation** tag. What it will not do: reply to insults, mockery or bait (the model
+  is told to skip them, and nothing is posted), answer a bare "thanks" or emoji, claim it did or read something, or
+  go on forever - after **2 answers** in one conversation (changeable, 1-5) the next reply is left to you under
+  **Today > Needs you** with a note. Replies older than 48 hours are not answered. Answers count toward your daily
+  comment limit and follow all pacing rules, but not toward the account's own per-day comment limit. Turn the switch
+  off to get every reply under Needs you again (Open on X, Mark done).
 * **Learn from my edits** (on, Tone screen): when you change a reply in Review before approving it, your last
   few edits (draft -> what you posted) are shown to the model as style examples. They are data only, like the
   post text, and never become instructions. Small typo fixes are ignored.

@@ -294,6 +294,7 @@ export default {
     function resultsChips(r) {
       const res = r.results || {};
       const parts = [];
+      if (r.conversation) parts.push(badge("conversation", "green", "An answer to their reply to your comment"));
       if (r.follow === "followed") parts.push(badge("followed first", "green", "ScoreX followed this account right before liking and replying (its profile, reloaded, showed Following)"));
       else if (r.follow === "already") parts.push(badge("following", "grey", "Right before replying, the account's profile showed you already follow it"));
       if (r.liked) parts.push(badge("liked post", "grey", "ScoreX liked the post before replying"));

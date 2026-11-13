@@ -1,11 +1,14 @@
 // ScoreX - conversation alerts: while running, reads your X mentions every few minutes and flags replies from the
 // accounts you comment on (an author reply is the best moment for a follow-back - answer it yourself).
 // The engine calls conversationsStep from its idle step (under the job lease, in the worker tab); the dashboard
-// lists sx.conversations and marks items done with the conversationDone message. Nothing is ever posted from here.
+// lists sx.conversations and marks items done with the conversationDone message. Nothing is ever posted from here:
+// with settings.learning.conversations.autoReply the engine (answerConversations) writes an answer to each new item
+// through the normal generate -> queue / review -> post path, and marks the item done (auto: "queued" | "skipped").
 
 //
 // sx.conversations = { items: [{ id (history record id of your reply), target, comment (your reply), replyUrl,
-//   authorReplyUrl, authorReplyId, text (the author's answer: untrusted page text, plain, max 280 chars), at, done }],
+//   authorReplyUrl, authorReplyId, text (the author's answer: untrusted page text, plain, max 280 chars), lang, at,
+//   done, auto ("queued" | "skipped" | null), autoNote, autoAt }],
 //   seen: [author reply ids already handled], checkedAt }. One item per reply of yours (newest 200 kept); a newer
 //   answer on the same reply updates the item and opens it again.
 
@@ -64,7 +67,7 @@ export function matchMentions(tweets, records, { me = "", ts = now(), seen = new
   return out.sort((a, b) => (Number(a.tweet.createdAt) || 0) - (Number(b.tweet.createdAt) || 0));
 }
 
-async function recordMatches(tweets, records, me, ts) {
+async function recordMatches(tweets, records, me, ts, autoReply = false) {
   const cur = await load(K.conversations, EMPTY);
   const seen = new Set([...(cur.seen || []), ...(cur.items || []).map((x) => x && x.authorReplyId).filter(Boolean)]);
   const matches = matchMentions(tweets, records, { me, ts, seen });
@@ -78,7 +81,8 @@ async function recordMatches(tweets, records, me, ts) {
       seenIds.add(tweet.id);
       const item = {
         id: rec.id, target: rec.target, comment: cleanText(rec.comment), replyUrl: rec.replyUrl || "",
-        authorReplyUrl: tweet.url || "", authorReplyId: tweet.id, text: cleanText(tweet.text), at: Number(tweet.createdAt) || ts, done: false,
+        authorReplyUrl: tweet.url || "", authorReplyId: tweet.id, text: cleanText(tweet.text), lang: String(tweet.lang || "").slice(0, 12), at: Number(tweet.createdAt) || ts, done: false,
+        auto: null, autoNote: "", autoAt: null, // a new answer is open again, also for the automatic reply
       };
       const i = items.findIndex((x) => x.id === rec.id);
       if (i >= 0) items[i] = { ...items[i], ...item };
@@ -93,9 +97,24 @@ async function recordMatches(tweets, records, me, ts) {
     await notify("sx-conv", `@${rec.target} replied to your comment`, truncate(cleanText(tweet.text), 200) || "Open ScoreX to answer it.");
   } else if (matches.length > 1) {
     const names = [...new Set(matches.map((m) => "@" + m.rec.target))];
-    await notify("sx-conv", `${matches.length} replies to your comments`, `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""} replied - answer them yourself on X.`);
+    await notify("sx-conv", `${matches.length} replies to your comments`, `${names.slice(0, 3).join(", ")}${names.length > 3 ? ` and ${names.length - 3} more` : ""} replied${autoReply ? " - ScoreX is writing the answers." : " - answer them yourself on X."}`);
   }
   return matches.length;
+}
+
+// ---------- automatic answers (the engine's answerConversations) ----------
+export const ANSWER_WINDOW_MS = 48 * HOUR; // an answer older than this is not replied to any more
+// Items ScoreX has not answered or skipped yet (oldest first): open, not handled automatically, recent enough.
+export function pendingAnswers(conv, ts = now()) {
+  return ((conv && conv.items) || []).filter((x) => x && !x.done && !x.auto && x.authorReplyId && x.authorReplyUrl && x.at && ts - x.at < ANSWER_WINDOW_MS).sort((a, b) => (a.at || 0) - (b.at || 0));
+}
+// The automatic answer's outcome on an item: "queued" (an answer was written: it is in the queue / review, the item is
+// done) or "skipped" (nothing to answer, a hostile reply, a limit: done, with the reason in autoNote).
+export async function markAuto(id, auto, note = "", done = true) {
+  await update(K.conversations, EMPTY, (cur) => ({
+    ...cur,
+    items: (cur.items || []).map((x) => (x && x.id === id ? { ...x, auto, autoNote: truncate(String(note || ""), 200), autoAt: now(), done: !!done } : x)),
+  }));
 }
 
 // One read of your mentions page (called by the engine when idle, in the worker tab, at most every everyMin minutes
@@ -129,7 +148,7 @@ export async function conversationsStep({ tabId, settings, me, shouldStop }) {
     if (!r.ok) { log("warn", `Conversation alerts: could not read your mentions (${r.error || "unknown"})`); return { did: "mentions", ok: false, found: 0 }; }
     tweets = r.tweets || [];
   }
-  const found = await recordMatches(tweets, records, handle, ts); // also stamps checkedAt
+  const found = await recordMatches(tweets, records, handle, ts, !!cv.autoReply); // also stamps checkedAt
   return { did: "mentions", ok: true, found };
 }
 

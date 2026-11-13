@@ -220,7 +220,9 @@ export const DEFAULT_SETTINGS = {
     autoTierUp: true,
     engagementCheckAfterHours: 24,
     maxChecksPerRun: 3,
-    conversations: { enabled: true, everyMin: 40 }, // read your mentions for replies from the accounts you comment on
+    // Read your mentions for replies from the accounts you comment on. autoReply: ScoreX writes an answer to each of
+    // them (posted on its own in Full auto, to your review queue in Review mode), at most maxTurns per conversation.
+    conversations: { enabled: true, everyMin: 40, autoReply: true, maxTurns: 2 },
   },
 
   cleanup: {
@@ -477,7 +479,7 @@ export function sanitizeSettings(raw) {
   l.coldCooldownDays = clamp(num(l.coldCooldownDays, 10), 1, 90);
   l.maxChecksPerRun = clamp(Math.round(num(l.maxChecksPerRun, 3)), 0, 10);
   const cv = l.conversations && typeof l.conversations === "object" ? l.conversations : {};
-  l.conversations = { enabled: cv.enabled !== false, everyMin: clamp(num(cv.everyMin, 40), 15, 240) };
+  l.conversations = { enabled: cv.enabled !== false, everyMin: clamp(num(cv.everyMin, 40), 15, 240), autoReply: cv.autoReply !== false, maxTurns: clamp(Math.round(num(cv.maxTurns, 2)), 1, 5) };
 
   {
     const tg = s.targeting || {};

@@ -504,6 +504,15 @@ export default {
           dismiss ? h("button", { type: "button", class: "btn btn-xs btn-ghost btn-icon need-x", title: "Hide for a day", "aria-label": "Hide for a day", onClick: () => hideNeed(key) }, icon("x")) : null));
     }
     const go = (href, label) => h("a", { href, class: "btn btn-xs" }, label);
+    // What happens to a reply to your comment: ScoreX answers it on its own (Settings > General > conversations), or
+    // why it is left to you.
+    function convNote(it, s, t) {
+      const cv = (s.learning && s.learning.conversations) || {};
+      if (it.auto === "skipped" && it.autoNote) return `Not answered automatically: ${it.autoNote}.`;
+      if (cv.autoReply && !it.auto && it.at && t - it.at < 48 * 3600e3) return effectiveModeOf(s) === MODE.AUTO ? "ScoreX is writing an answer and will post it on its own." : "ScoreX is writing an answer for your review.";
+      return "Answer it yourself: replies from you count more than any automation.";
+    }
+    const effectiveModeOf = (s) => (ctx.status && ctx.status.effectiveMode) || s.mode;
     function needs() {
       const s = ctx.settings, st = ctx.status || {}, t = now();
       const rows = [];
@@ -515,7 +524,7 @@ export default {
           const url = safeX(it.authorReplyUrl) || safeX(it.replyUrl);
           rows.push({ key: "conv:" + it.id, ico: "reply", kind: "good", dismiss: false,
             title: [`@${it.target} replied`, it.text ? ": " : "", it.text ? h("span", { class: "need-quote" }, truncate(String(it.text), 140)) : null],
-            text: ["Answer it yourself: replies from you count more than any automation.", it.at ? ` · ${fmtAgo(it.at)}` : ""],
+            text: [convNote(it, s, t), it.at ? ` · ${fmtAgo(it.at)}` : ""],
             actions: [url ? h("a", { href: url, target: "_blank", rel: "noopener noreferrer", class: "btn btn-xs" }, "Open on X") : null,
               btn("Mark done", (e) => busy(e.currentTarget, async () => {
                 const r = await ctx.send("conversationDone", { id: it.id }, { label: "Mark done" });

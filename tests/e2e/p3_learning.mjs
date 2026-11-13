@@ -13,7 +13,7 @@ const patchTargets = (patches) => H.patchTargets(patches);
 try {
   M.addUser("bigbob", { name: "Big Bob", followers: 40000 });
   // Tier presets pinned to High quality / Balanced (the A/B data below uses Balanced arms; the default is Human).
-  await setup(H, { genRev: 1, presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" }, learning: { enabled: true, abTesting: true, explore: 0, abTones: ["insightful", "witty"], abPresets: [], minSamples: 4, coldAfterComments: 3, engagementCheckAfterHours: 24, maxChecksPerRun: 3 } });
+  await setup(H, { genRev: 1, presetMatrix: { A1: "balanced", A2: "cheap", B1: "high", B2: "balanced" }, learning: { enabled: true, abTesting: true, explore: 0, abTones: ["insightful", "witty"], abPresets: [], minSamples: 4, coldAfterComments: 3, engagementCheckAfterHours: 24, maxChecksPerRun: 3, conversations: { autoReply: false } } });
   await H.msg("targetsUpsert", { rows: ["bigbob"], defaults: { tier: 2 } });
   await H.msg("start");
   const tb = await H.untilChecked(["bigbob"]);
@@ -69,6 +69,22 @@ try {
   assert(cd.ok && (await H.store("sx.conversations")).items.find((x) => x.id === rec.id).done === true, "Mark done");
   cd = await H.msg("conversationDone", { id: rec.id, done: false });
   assert(cd.ok && (await H.store("sx.conversations")).items.find((x) => x.id === rec.id).done === false, "Mark done can be undone");
+
+  // ---- automatic answers: with the switch on, ScoreX writes an answer to bigbob's reply; approved, it is posted under that reply ----
+  await H.settings({ learning: { conversations: { autoReply: true } } });
+  await H.runNow();
+  const ans = await H.waitFor(async () => (await H.history()).find((x) => x.conversation && x.convParentId === rec.id), "answer to the reply written", 150000);
+  const itemA = (await H.store("sx.conversations")).items.find((x) => x.id === rec.id);
+  assert(ans.status === "pending_review" && ans.target === "bigbob" && ans.postText === "Exactly this, and the data agrees." && ans.postUrl === item.authorReplyUrl && ans.comment && itemA.done === true && itemA.auto === "queued",
+    "Review mode: an answer to the author's reply waits for review, and the reply is no longer under Needs you (" + ans.comment + ")");
+  assert(M.replies.length === repliesBefore, "nothing is posted before you approve it");
+  assert((await H.msg("reviewAction", { id: ans.id, action: "approve" })).ok, "approved the answer");
+  await H.patchState({ nextCommentAt: 0, lastCommentAt: Date.now() - 15 * 60000 });
+  await H.runNow();
+  await H.waitFor(async () => (await H.history()).find((x) => x.id === ans.id && x.status === "posted"), "answer posted", 150000);
+  const theirId = item.authorReplyUrl.split("/").pop();
+  assert(M.replies.some((r) => r.inReplyTo === theirId) && M.replies.length === repliesBefore + 1, "the answer is posted under the author's reply (in the thread), once");
+  await H.settings({ learning: { conversations: { autoReply: false } } });
 
   // ---- cooldown for a target that never responds ----
   M.addUser("quiet", { followers: 9000 });
