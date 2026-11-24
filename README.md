@@ -16,10 +16,14 @@
 <img src="https://img.shields.io/badge/tests-Node_22+-713F12?style=for-the-badge&logo=nodedotjs&logoColor=FACC15" alt="Tests on Node 22+">
 <img src="https://img.shields.io/badge/version-1.0.1-064E3B?style=for-the-badge&labelColor=713F12" alt="Version 1.0.1">
 <img src="https://img.shields.io/badge/Chrome-116+-047857?style=for-the-badge&logo=googlechrome&logoColor=FACC15" alt="Chrome 116 or newer">
+<a href="https://scorex.uniquelabs.org"><img src="https://img.shields.io/badge/scorex.uniquelabs.org-064E3B?style=for-the-badge" alt="Website: scorex.uniquelabs.org"></a>
+<a href="https://chromewebstore.google.com/detail/pckgdccdipdllagmieedopalgdoheklo"><img src="https://img.shields.io/badge/Chrome_Web_Store-047857?style=for-the-badge&logo=googlechrome&logoColor=FACC15" alt="Chrome Web Store listing"></a>
 
 </div>
 
 > A Chrome extension (Manifest V3) that writes short, thoughtful replies to posts on X with OpenAI and posts them **from your own logged-in browser tab**, with a review queue, real cost tracking and strict safety limits for a main account. It does **not** use the X API: it works through the x.com page like you would (content scripts in a pinned X tab).
+
+The store name is `ScoreX: Boost your Influencer Score on Twitter`, version **1.0.1**. The public site is [scorex.uniquelabs.org](https://scorex.uniquelabs.org), and that site links to the [Chrome Web Store listing](https://chromewebstore.google.com/detail/pckgdccdipdllagmieedopalgdoheklo). This repository's install path is **Load unpacked** (or a team zip of the `extension` folder): that is how you develop ScoreX and how a license admin ships it. Chrome 116 or newer. The reply client is the OpenAI Responses API (`https://api.openai.com/v1/responses`).
 
 > 🟡 **Yellow card — read this first. No guarantees.**
 >
@@ -40,6 +44,7 @@ Jump the board. Every row below is the full manual, restyled as a scoreboard.
 
 | Pos | Board | What is posted there |
 | :---: | --- | --- |
+| 00 | [Jumbotron](#jumbotron) | Store screenshots. The numbers on screen are sample data. |
 | 01 | [Kickoff](#kickoff) | Load the unpacked `extension` folder and activate a key |
 | 02 | [Lineup](#lineup) | Key, handle, watch mode, targets, tone, budget, Start |
 | 03 | [Play clock](#play-clock) | What one check does, from watch page to confirm |
@@ -51,7 +56,23 @@ Jump the board. Every row below is the full manual, restyled as a scoreboard.
 | 09 | [Pitch change](#selectors) | `selectors.js` and the live X test |
 | 10 | [Injury report](#limits) | What ScoreX will not do |
 | 11 | [Locker](#privacy) | What leaves the browser |
-| 12 | [Training ground](#dev) | Tree, `npm test`, e2e, `SX_CYCLES`, `SX_PORT` |
+| 12 | [Training ground](#dev) | Tree, tests, license-server variables, site generator |
+
+<a id="jumbotron"></a>
+
+## 00 · Jumbotron — store screenshots
+
+Store screenshots from `docs/store/`. The numbers on screen are sample data.
+
+| Today | Review | Targets |
+| --- | --- | --- |
+| <img src="docs/store/screenshot-3-today-1280x800.png" alt="Today screen: engine status, daily rhythm, weekly follow-backs, cost and the review queue. Sample data." width="100%"> | <img src="docs/store/screenshot-1-review-1280x800.png" alt="Review queue: each draft next to the post, with edit, skip, regenerate and approve. Sample data." width="100%"> | <img src="docs/store/screenshot-2-targets-1280x800.png" alt="Targets: tiers, follow status and per-account controls. Sample data." width="100%"> |
+| **Today** | **Review** | **Targets** |
+
+| Scores | History | Marquee |
+| --- | --- | --- |
+| <img src="docs/store/screenshot-4-scores-1280x800.png" alt="Scores: connected score sites, history and providers. Sample data." width="100%"> | <img src="docs/store/screenshot-5-history-1280x800.png" alt="History: posted replies, outcomes and cost. Sample data." width="100%"> | <img src="docs/store/marquee-1400x560.png" alt="ScoreX store marquee." width="100%"> |
+| **Scores** | **History** | **Marquee** |
 
 <a id="kickoff"></a>
 
@@ -76,13 +97,24 @@ ScoreX is locked until a license key from your license server is activated. The 
 | Step | Call | Env / file |
 | :---: | --- | --- |
 | 1 | Deploy `license-server/` to Vercel, add Upstash Redis (Storage tab) and an `ADMIN_SECRET` environment variable, then redeploy. | `ADMIN_SECRET` |
-| 2 | Put your project's URL in `extension/lib/license.js` (`LICENSE_SERVER = "https://YOUR-PROJECT.vercel.app"`), then zip the `extension` folder for your team. | `LICENSE_SERVER` |
+| 2 | Put your project's URL in `extension/lib/license.js` (`LICENSE_SERVER = "https://YOUR-PROJECT.vercel.app"`), then zip the `extension` folder for your team. The copy in this repository is `https://scorex-license.vercel.app`. | `LICENSE_SERVER` |
 | 3 | Open your Vercel URL, log in with `ADMIN_SECRET`, create one key per team member and send it to them. | admin page |
 
 * **One key, one browser**: the first install that activates a key owns it. The same key on another browser, or a forwarded zip without a key, does not work. The admin page shows each key's status and last check. **Reset** frees a key for a new computer. **Revoke** stops it at that browser's next check (within 6 hours; a running ScoreX pauses).
 * ScoreX checks the key every 6 hours. If the server can't be reached, it keeps working for 3 days after the last good check, then locks until it can check again. Settings > General > License shows the status, with *Check now* and *Remove from this browser*.
 * Sent to the license server: the key, a random install ID and the ScoreX version. The key is kept when you use *Reset everything* and is never part of a backup.
 * Honest limit: ScoreX is JavaScript that runs on the user's machine. Someone who edits its code can remove the check, and copying a whole Chrome profile copies the activation. The keys stop casual sharing (a forwarded zip or key), not a determined developer.
+
+API keys for OpenAI, TwitterScore, Sorsa and Moni are pasted in the dashboard and stored in the extension's IndexedDB. They are not environment variables, and they are never logged or exported. `LICENSE_SERVER` in `extension/lib/license.js` is a source constant, not an environment variable. This repository sets it to `https://scorex-license.vercel.app`. Change it to your own Vercel URL before you zip the extension for a team.
+
+| Variable | Required | What it is |
+| --- | --- | --- |
+| `ADMIN_SECRET` | Yes | Admin password for the key page and `POST /api/admin`. At least 12 characters. |
+| `KV_REST_API_URL` | Yes, one pair | Upstash Redis REST URL. Vercel Storage usually sets this. |
+| `KV_REST_API_TOKEN` | Yes, one pair | Upstash Redis REST token. |
+| `UPSTASH_REDIS_REST_URL` | Alternative name | Used when `KV_REST_API_URL` is unset. |
+| `UPSTASH_REDIS_REST_TOKEN` | Alternative name | Used when `KV_REST_API_TOKEN` is unset. |
+| `PORT` | Local only | Port for `node license-server/dev.mjs`. Defaults to `3000`. |
 
 <a id="lineup"></a>
 
@@ -466,43 +498,70 @@ Everything stays in your browser (`chrome.storage.local` and IndexedDB). With "L
 
 ## 12 · Training ground — development
 
+| Pos | Piece | Where it shows up |
+| :---: | --- | --- |
+| 01 | Plain JavaScript, Manifest V3, no build step | `extension/`. Load that folder. Minimum Chrome 116. |
+| 02 | HTML and CSS dashboard | `extension/ui/`. Light and dark themes. |
+| 03 | OpenAI Responses API | Reply text, the editor check, and token usage for cost. |
+| 04 | Vercel functions, no npm packages | `license-server/`. |
+| 05 | Upstash Redis | License-key store. Vercel Storage adds the REST variables. |
+| 06 | Node.js 22+ and `node:test` | `npm test`. No install. |
+| 07 | Playwright + Chromium | `tests/e2e/`, against local HTTPS mocks of x.com, OpenAI and the score sites. |
+| 08 | Python 3 | `tools/build_site.py` generates the blog and the extra site pages. The home page and privacy page are hand-written. |
+
 ```
-extension/          the unpacked extension (load this folder)
-  manifest.json
-  background/sw.js  service worker: events + message router
-  lib/              engine, watcher, poster, generator, safety, costs, history, learning, cleanup, ...
-  content/          x.com content scripts (selectors.js = all selectors)
-  ui/               dashboard (options page) + popup
-tests/unit/         node:test unit tests (no dependencies)
-tests/e2e/          Playwright tests against a local mock of x.com and the OpenAI API
-docs/ARCHITECTURE.md
+extension/                 the unpacked extension (load this folder)
+  manifest.json            Manifest V3, version 1.0.1, minimum Chrome 116
+  background/sw.js         service worker: events + message router
+  lib/                     engine, watcher, poster, generator, safety, costs,
+                           history, learning, cleanup, license, providers
+  content/                 x.com content scripts (selectors.js = all selectors)
+  ui/                      dashboard (options page) + popup
+license-server/            Vercel functions + Upstash Redis, no npm packages
+website/                   static site served by the root vercel.json
+tests/unit/                node:test unit tests (no dependencies)
+tests/e2e/                 Playwright tests against local mocks
+docs/ARCHITECTURE.md       module map and storage ownership
+docs/store/                Chrome Web Store screenshots and marquee
+tools/                     Python site generator (blog, FAQ, about, contact)
 ```
+
+Deeper module notes live in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). The site's own deploy notes are in [website/README.md](website/README.md). The license server's setup is in [license-server/README.md](license-server/README.md).
 
 | Call | What it runs |
 | --- | --- |
 | `npm test` | Unit tests. Node 22+, no install needed. |
+| `npm run test:license-server` | License server tests. Node 18+, from `license-server/`. |
 | `npm i -D playwright && npx playwright install chromium` | Playwright with Chromium, once, before e2e. |
+| `npm run test:e2e` | Phase 1, phase 2, phase 3, scores, UI smoke, and `license.mjs`. |
 | `node tests/e2e/p1_core.mjs` | Phase 1 core. |
 | `node tests/e2e/p2_auto.mjs` | Phase 2 full auto. |
 | `node tests/e2e/p3_learning.mjs` | Phase 3 learning. |
 | `node tests/e2e/scores.mjs` | Score providers. |
 | `node tests/e2e/ui_smoke.mjs` | UI smoke. |
-| `node tests/e2e/soak.mjs` | Long run. `SX_CYCLES=n` sets its length. |
+| `node tests/e2e/license.mjs` | License gate. |
+| `node tests/e2e/soak.mjs` | Long run. `SX_CYCLES` sets its length. `npm run test:soak` runs the same file. |
+| `python3 tools/build_site.py` | Regenerates site pages other than `website/index.html` and `website/privacy.html`. Article sources are `tools/blog_posts_a.py` and `tools/blog_posts_b.py`. Run from the repository root, then commit the pages. |
 
 End-to-end tests map x.com, api.openai.com and the score sites to local HTTPS mocks, so no real account or key is used. `SX_PORT` gives each run its own port when several run at once.
 
 | Name | Where it is set | What it does |
 | --- | --- | --- |
-| `ADMIN_SECRET` | Vercel, on the license server | Logs you into the admin page that mints keys |
-| `LICENSE_SERVER` | `extension/lib/license.js` | Project URL the extension calls, `https://YOUR-PROJECT.vercel.app` |
-| `SX_CYCLES` | shell, for `soak.mjs` | How long the soak run is |
-| `SX_PORT` | shell, for e2e | Port for that run when several run at once |
+| `SX_PORT` | shell, for e2e | Port for the local HTTPS mocks. Default `8443`. |
+| `SX_CYCLES` | shell, for `soak.mjs` | Length of the soak run. Default `30`. |
+| `SX_SEED` | shell, for `soak.mjs` | Soak seed. Default `1337`. |
+| `PLAYWRIGHT` | shell | Module name or path passed to `require`. Default `playwright`. |
+| `EXT` | shell, for e2e | Path to the extension folder under test. Default `extension/`. |
+
+License-server variables (`ADMIN_SECRET`, `KV_REST_API_URL`, `KV_REST_API_TOKEN`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `PORT`) are on the [license bench](#license). `LICENSE_SERVER` is the source constant in `extension/lib/license.js`, set in this repository to `https://scorex-license.vercel.app`.
 
 <details>
 <summary>Tape room — same commands, one block</summary>
 
 * Unit tests: `npm test` (Node 22+, no install needed).
-* End-to-end: needs Playwright with Chromium (`npm i -D playwright && npx playwright install chromium`), then `node tests/e2e/p1_core.mjs`, `node tests/e2e/p2_auto.mjs`, `node tests/e2e/p3_learning.mjs`, `node tests/e2e/scores.mjs`, `node tests/e2e/ui_smoke.mjs` and the long run `node tests/e2e/soak.mjs` (`SX_CYCLES=n` sets its length). They map x.com, api.openai.com and the score sites to local HTTPS mocks, so no real account or key is used. `SX_PORT` gives each run its own port when several run at once.
+* License server tests: `npm run test:license-server` (Node 18+, from `license-server/`).
+* End-to-end: install Playwright with Chromium (`npm i -D playwright && npx playwright install chromium`), then `npm run test:e2e`, or run a file on its own: `node tests/e2e/p1_core.mjs`, `node tests/e2e/p2_auto.mjs`, `node tests/e2e/p3_learning.mjs`, `node tests/e2e/scores.mjs`, `node tests/e2e/ui_smoke.mjs`, `node tests/e2e/license.mjs`, and `node tests/e2e/soak.mjs` (`SX_CYCLES` sets its length; `npm run test:soak` runs the same file). They map x.com, api.openai.com and the score sites to local HTTPS mocks, so no real account or key is used. `SX_PORT` gives each run its own port when several run at once.
+* Site pages other than `website/index.html` and `website/privacy.html` are generated by `python3 tools/build_site.py` from the repository root, then committed. Article sources are `tools/blog_posts_a.py` and `tools/blog_posts_b.py`.
 
 </details>
 
@@ -510,9 +569,17 @@ End-to-end tests map x.com, api.openai.com and the score sites to local HTTPS mo
 
 ## Credits
 
-A product of [Unique Labs](https://www.uniquelabs.org). Developed by [Shahriar Ahmed](https://github.com/fr-ost), Co-Founder and COO.
+Built by **[Shahriar Ahmed](https://github.com/fr-ost)**, Co-Founder & COO of **[Unique Labs](https://www.uniquelabs.org)**.
 
-The reply generator is the UniqueFarm algorithm, ported with its owner's permission. That credit stays with the algorithm; it is a separate line from Unique Labs.
+| Line | Link |
+| --- | --- |
+| GitHub | [fr-ost](https://github.com/fr-ost) |
+| Site | [shahriarahmed.net](https://shahriarahmed.net) |
+| X | [@0x_nation](https://x.com/0x_nation) |
+| Unique Labs | [uniquelabs.org](https://www.uniquelabs.org) |
+| ScoreX | [scorex.uniquelabs.org](https://scorex.uniquelabs.org) |
+
+The reply generator is the UniqueFarm algorithm, ported with its owner's permission. ScoreX is one of the practical tools in that set, next to [UnfollowX Pro](https://unfollowx.com), [GROWX](https://growxapp.org) and the other projects on the [profile README](https://github.com/fr-ost/fr-ost).
 
 <div align="center">
 
